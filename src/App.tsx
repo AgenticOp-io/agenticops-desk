@@ -3,7 +3,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { CodePane } from "./CodePane";
 import { extractCodeBlocks } from "./codeBlocks";
 import { defaultPrefs, moveKey, type UiPrefs } from "./prefs";
-import type { ClaudeEvent, CursorChat, CursorProject, RunPhase } from "./vite-env";
+import type { ApprovalRequest, ClaudeEvent, CursorChat, CursorProject, RunPhase } from "./vite-env";
 
 type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string };
 type DragPayload = { kind: "project" | "chat"; key?: string; id?: string };
@@ -31,12 +31,20 @@ type RunProgress = { status: string; steps: string[]; phase?: RunPhase };
 
 function phaseWord(progress?: RunProgress) {
   if (!progress) return "Starting";
+  if (progress.phase === "approval") return "Needs permission";
   if (progress.phase === "thinking") return "Thinking";
   if (progress.phase === "writing") return "Writing";
   if (progress.phase === "pushing") return progress.status.startsWith("Pushing to main") ? "Pushing to main" : "Pushing";
   if (progress.phase === "starting") return "Starting";
   const text = progress.status.replace(/…$/, "").trim();
   return text || "Working";
+}
+
+function phaseRank(progress?: RunProgress) {
+  if (progress?.phase === "approval") return 4;
+  if (progress?.phase === "pushing") return 3;
+  if (progress?.phase === "writing") return 2;
+  return progress ? 1 : 0;
 }
 
 function baseName(p: string) {
@@ -125,6 +133,84 @@ function FileNode({
   );
 }
 
+function PermissionDialog({
+  card,
+  waiting,
+  chatTitle,
+  onAnswer,
+}: {
+  card: ApprovalRequest & { chatId: string };
+  waiting: number;
+  chatTitle?: string;
+  onAnswer: (decision: { allow: boolean; always?: boolean; answers?: Record<string, string> }) => void;
+}) {
+  const [picks, setPicks] = useState<Record<string, string>>({});
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    setPicks({});
+    setSent(false);
+  }, [card.requestId]);
+  const questions = card.questions ?? [];
+  const ready = questions.every((q) => Boolean(picks[q.question]?.trim()));
+  const choose = (question: string, label: string, multi?: boolean) => {
+    setPicks((cur) => {
+      if (!multi) return { ...cur, [question]: label };
+      const selected = new Set((cur[question] ?? "").split(", ").filter(Boolean));
+      if (selected.has(label)) selected.delete(label);
+      else selected.add(label);
+      return { ...cur, [question]: [...selected].join(", ") };
+    });
+  };
+  return (
+    <div className="modal">
+      <div className="permit" role="dialog" aria-labelledby="permit-title">
+        <h2 id="permit-title">{card.summary}</h2>
+        <p className="reason">
+          {chatTitle ? `${chatTitle} · ` : ""}
+          {card.toolName}
+          {waiting > 1 ? ` · 1 of ${waiting}` : ""}
+        </p>
+        {card.reason && <p className="reason">{card.reason}</p>}
+        {card.detail && <pre>{card.detail}</pre>}
+        {questions.map((q) => (
+          <div className="permit-q" key={q.question}>
+            <strong>{q.header ? `${q.header}: ` : ""}{q.question}</strong>
+            {q.options.map((opt) => {
+              const on = (picks[q.question] ?? "").split(", ").includes(opt.label);
+              return (
+                <button
+                  key={opt.label}
+                  type="button"
+                  className={`permit-opt ${on ? "on" : ""}`}
+                  onClick={() => choose(q.question, opt.label, q.multiSelect)}
+                >
+                  <span>
+                    {opt.label}
+                    {opt.description && <small>{opt.description}</small>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+        <div className="permit-actions">
+          <button className="btn danger" disabled={sent} onClick={() => { setSent(true); onAnswer({ allow: false }); }}>
+            Deny
+          </button>
+          {card.canAlways && (
+            <button className="btn" disabled={sent || !ready} onClick={() => { setSent(true); onAnswer({ allow: true, always: true, answers: picks }); }}>
+              Allow always
+            </button>
+          )}
+          <button className="btn primary" disabled={sent || !ready} onClick={() => { setSent(true); onAnswer({ allow: true, answers: picks }); }}>
+            Allow
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const [workspace, setWorkspace] = useState("");
   const [roots, setRoots] = useState<Entry[]>([]);
@@ -153,6 +239,7 @@ export function App() {
   const [quickQuery, setQuickQuery] = useState("");
   const [quickHits, setQuickHits] = useState<Array<{ name: string; path: string; rel: string }>>([]);
   const [quickIndex, setQuickIndex] = useState(0);
+  const [pendingApprovals, setPendingApprovals] = useState<Array<ApprovalRequest & { chatId: string }>>([]);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const quickRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -332,6 +419,18 @@ export function App() {
         }));
         if (activeChatRef.current?.id === chatId) setStatus(ev.text);
       }
+      if (ev.kind === "approval" && ev.approval) {
+        const card = { ...ev.approval, chatId };
+        setPendingApprovals((list) => [...list.filter((a) => a.requestId !== card.requestId), card]);
+        setProgressByChat((p) => ({
+          ...p,
+          [chatId]: { status: card.summary, steps: p[chatId]?.steps ?? [], phase: "approval" },
+        }));
+        if (activeChatRef.current?.id === chatId) setStatus(card.summary);
+      }
+      if (ev.kind === "approval_done") {
+        setPendingApprovals((list) => list.filter((a) => a.requestId !== ev.id));
+      }
       if (ev.kind === "tool" && ev.text) {
         setProgressByChat((p) => {
           const cur = p[chatId] ?? { status: ev.text ?? "", steps: [] };
@@ -365,6 +464,7 @@ export function App() {
         if (activeChatRef.current?.id === chatId) setStatus(ev.text);
       }
       if (ev.kind === "done") {
+        setPendingApprovals((list) => list.filter((a) => a.chatId !== chatId));
         setProgressByChat((p) => ({
           ...p,
           [chatId]: { status: ev.text ?? "Done.", steps: p[chatId]?.steps ?? [] },
@@ -756,9 +856,7 @@ export function App() {
               const hiddenCount = liveChats.length - visibleChats.length;
               const projectRun = runningChats
                 .map((c) => progressByChat[c.id])
-                .find((p) => p?.phase === "pushing")
-                ?? runningChats.map((c) => progressByChat[c.id]).find((p) => p?.phase === "writing")
-                ?? runningChats.map((c) => progressByChat[c.id]).find(Boolean);
+                .sort((a, b) => phaseRank(b) - phaseRank(a))[0];
               return (
                 <div
                   key={g.key}
@@ -1113,6 +1211,18 @@ export function App() {
             </button>
           ))}
         </div>
+      )}
+
+      {pendingApprovals[0] && (
+        <PermissionDialog
+          card={pendingApprovals[0]}
+          waiting={pendingApprovals.length}
+          chatTitle={chats.find((c) => c.id === pendingApprovals[0].chatId)?.title}
+          onAnswer={(decision) => {
+            const card = pendingApprovals[0];
+            void window.desk.answerApproval({ chatId: card.chatId, requestId: card.requestId, ...decision });
+          }}
+        />
       )}
 
       {showSettings && (

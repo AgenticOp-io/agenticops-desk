@@ -1,14 +1,33 @@
 /// <reference types="vite/client" />
 
-export type RunPhase = "starting" | "thinking" | "tool" | "writing" | "pushing";
+export type RunPhase = "starting" | "thinking" | "tool" | "writing" | "pushing" | "approval";
+
+export type ApprovalQuestion = {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: Array<{ label: string; description?: string }>;
+};
+
+export type ApprovalRequest = {
+  requestId: string;
+  toolName: string;
+  summary: string;
+  detail: string;
+  reason?: string;
+  questions?: ApprovalQuestion[];
+  canAlways?: boolean;
+};
 
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done";
+  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done";
   text?: string;
   sessionId?: string;
   running?: boolean;
   phase?: RunPhase;
   chatId?: string;
+  id?: string;
+  approval?: ApprovalRequest;
 };
 
 export type CursorProject = {
@@ -73,6 +92,14 @@ declare global {
         workspace?: string;
       }) => Promise<boolean>;
       stopClaude: (chatId?: string) => Promise<boolean>;
+      answerApproval: (payload: {
+        chatId: string;
+        requestId: string;
+        allow: boolean;
+        always?: boolean;
+        answers?: Record<string, string>;
+        message?: string;
+      }) => Promise<boolean>;
       getSettings: () => Promise<import("./prefs").UiPrefs>;
       saveSettings: (prefs: Partial<import("./prefs").UiPrefs>) => Promise<import("./prefs").UiPrefs>;
       onClaudeEvent: (cb: (event: ClaudeEvent) => void) => () => void;

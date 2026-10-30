@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  answerApproval,
   findClaudeCli,
   pendingRuns,
   probeClaude,
@@ -352,3 +353,18 @@ ipcMain.handle("claude:stop", (_e, chatId?: string) => {
   stopClaude(win, chatId);
   return true;
 });
+
+ipcMain.handle(
+  "claude:approve",
+  (
+    _e,
+    payload: {
+      chatId: string;
+      requestId: string;
+      allow: boolean;
+      always?: boolean;
+      answers?: Record<string, string>;
+      message?: string;
+    },
+  ) => answerApproval(win, payload.chatId, payload.requestId, payload),
+);

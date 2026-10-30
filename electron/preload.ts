@@ -1,11 +1,27 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done";
+  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done";
   text?: string;
   sessionId?: string;
   running?: boolean;
+  phase?: "starting" | "thinking" | "tool" | "writing" | "pushing" | "approval";
   chatId?: string;
+  id?: string;
+  approval?: {
+    requestId: string;
+    toolName: string;
+    summary: string;
+    detail: string;
+    reason?: string;
+    questions?: Array<{
+      question: string;
+      header?: string;
+      multiSelect?: boolean;
+      options: Array<{ label: string; description?: string }>;
+    }>;
+    canAlways?: boolean;
+  };
 };
 
 export type CursorProject = {
@@ -80,6 +96,14 @@ contextBridge.exposeInMainWorld("desk", {
     workspace?: string;
   }) => ipcRenderer.invoke("claude:run", payload) as Promise<boolean>,
   stopClaude: (chatId?: string) => ipcRenderer.invoke("claude:stop", chatId) as Promise<boolean>,
+  answerApproval: (payload: {
+    chatId: string;
+    requestId: string;
+    allow: boolean;
+    always?: boolean;
+    answers?: Record<string, string>;
+    message?: string;
+  }) => ipcRenderer.invoke("claude:approve", payload) as Promise<boolean>,
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (prefs: unknown) => ipcRenderer.invoke("settings:set", prefs),
   onClaudeEvent: (cb: (event: ClaudeEvent) => void) => {

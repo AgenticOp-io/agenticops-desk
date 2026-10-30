@@ -128,6 +128,7 @@ button { cursor: pointer; }
 .run-progress.phase-thinking { background: #1c1708; color: #fde68a; }
 .run-progress.phase-writing { background: #10182a; color: #bfdbfe; }
 .run-progress.phase-pushing { background: #241018; color: #fbcfe8; }
+.run-progress.phase-approval { background: #2a2110; color: #fde68a; }
 .run-progress-status { font-weight: 600; }
 .run-progress-steps {
   margin-top: 4px;
@@ -300,6 +301,8 @@ button { cursor: pointer; }
 .list-item.running.phase-writing .list-sub { color: #93c5fd; }
 .list-item.running.phase-pushing { border-left-color: #f472b6; }
 .list-item.running.phase-pushing .list-sub { color: #f9a8d4; }
+.list-item.running.phase-approval { border-left-color: #fbbf24; }
+.list-item.running.phase-approval .list-sub { color: #fbbf24; }
 .phase {
   flex-shrink: 0;
   font-size: 11px;
@@ -310,6 +313,7 @@ button { cursor: pointer; }
 .phase-thinking { color: #fbbf24; }
 .phase-writing { color: #93c5fd; }
 .phase-pushing { color: #f9a8d4; }
+.phase-approval { color: #fbbf24; }
 .list-title {
   font-size: var(--item-font);
   line-height: 1.35;
@@ -657,3 +661,45 @@ button { cursor: pointer; }
 .settings-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
 .settings-hidden { margin-top: 12px; }
 .settings-label { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+
+.permit {
+  width: min(560px, 92vw);
+  background: #252526;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px 18px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+.permit h2 { margin: 0 0 6px; font-size: 16px; }
+.permit .reason { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+.permit pre {
+  margin: 0 0 12px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #1e1e1e;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.permit-q { margin: 0 0 12px; }
+.permit-q strong { display: block; font-size: 13px; margin-bottom: 6px; }
+.permit-opt {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+.permit-opt.on { border-color: var(--accent); background: #243044; }
+.permit-opt small { display: block; color: var(--muted); font-size: 12px; }
+.permit-actions { display: flex; gap: 8px; justify-content: flex-end; }

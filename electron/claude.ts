@@ -1,3 +1,4 @@
+import { query, type PermissionResult, type PermissionUpdate, type Query, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -18,6 +19,7 @@ export type ApprovalRequest = {
   detail: string;
   reason?: string;
   questions?: ApprovalQuestion[];
+  canAlways?: boolean;
 };
 
 export type ApprovalDecision = {
@@ -50,12 +52,20 @@ export type ClaudeEvent = {
 };
 
 // What the CLI is doing right now, so the UI can tell thinking apart from tool work and writing.
-export type RunPhase = "starting" | "thinking" | "tool" | "writing" | "pushing";
+export type RunPhase = "starting" | "thinking" | "tool" | "writing" | "pushing" | "approval";
 
-type PendingApproval = { toolName: string; input: Record<string, unknown>; suggestions?: unknown[] };
+type PendingApproval = {
+  toolName: string;
+  input: Record<string, unknown>;
+  suggestions?: PermissionUpdate[];
+  settled?: boolean;
+  resolve: (result: PermissionResult) => void;
+};
 
 type Session = {
   child: ChildProcess | null;
+  abort?: AbortController;
+  query?: Query;
   claudeSession?: string;
   workspace?: string;
   stopping?: boolean;
@@ -72,6 +82,8 @@ type Session = {
   finished?: boolean;
   summary?: string;
   approvals: Map<string, PendingApproval>;
+  // Shell decisions already shown in the dialog, so a later canUseTool for the same call is not asked twice.
+  decisions: Map<string, PermissionResult>;
   stderr?: string;
   // A background run that saves memories from this chat; never shown in the chat itself.
   reflector?: ChildProcess;
@@ -135,6 +147,7 @@ function sessionFor(chatId: string): Session {
       claudeSession: stored?.claudeSession,
       workspace: stored?.workspace,
       approvals: new Map(),
+      decisions: new Map(),
     };
     sessions.set(chatId, session);
   }
@@ -143,14 +156,6 @@ function sessionFor(chatId: string): Session {
 
 function send(win: BrowserWindow | null, event: ClaudeEvent) {
   if (win && !win.isDestroyed()) win.webContents.send("claude:event", event);
-}
-
-// The CLI reads and writes one JSON object per line on stdin/stdout (the Agent SDK's control protocol).
-function writeLine(session: Session, msg: unknown) {
-  const stdin = session.child?.stdin;
-  if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
-  stdin.write(`${JSON.stringify(msg)}\n`, "utf8");
-  return true;
 }
 
 function approvalSummary(toolName: string, input: Record<string, unknown>): string {
@@ -179,46 +184,67 @@ function approvalDetail(toolName: string, input: Record<string, unknown>): strin
   return JSON.stringify(input, null, 2).slice(0, 6000);
 }
 
-function handleControlRequest(
+function settleApproval(session: Session, requestId: string, result: PermissionResult): boolean {
+  const pending = session.approvals.get(requestId);
+  if (!pending || pending.settled) return false;
+  pending.settled = true;
+  session.approvals.delete(requestId);
+  pending.resolve(result);
+  return true;
+}
+
+function askPermission(
   win: BrowserWindow | null,
   chatId: string,
   session: Session,
-  requestId: string,
-  request: Record<string, unknown>,
-) {
-  if (request.subtype !== "can_use_tool") {
-    // Nothing else the CLI asks needs our input; answer so it never waits on us.
-    writeLine(session, {
-      type: "control_response",
-      response: { subtype: "error", request_id: requestId, error: `Unsupported request ${String(request.subtype)}` },
-    });
-    return;
-  }
-  const toolName = String(request.tool_name ?? "tool");
-  const input = (request.input && typeof request.input === "object" ? request.input : {}) as Record<string, unknown>;
-  const suggestions = Array.isArray(request.permission_suggestions) ? request.permission_suggestions : undefined;
-  session.approvals.set(requestId, { toolName, input, suggestions });
+  toolName: string,
+  input: Record<string, unknown>,
+  options: {
+    signal: AbortSignal;
+    suggestions?: PermissionUpdate[];
+    decisionReason?: string;
+    title?: string;
+    description?: string;
+    suppressAlwaysAllowRule?: boolean;
+    requestId: string;
+  },
+): Promise<PermissionResult> {
+  const requestId = options.requestId;
+  const questions =
+    toolName === "AskUserQuestion" && Array.isArray(input.questions) ? (input.questions as ApprovalQuestion[]) : undefined;
   const description = typeof input.description === "string" ? input.description : undefined;
-  const reason = typeof request.decision_reason === "string" ? request.decision_reason : description;
-  const questions = toolName === "AskUserQuestion" && Array.isArray(input.questions)
-    ? (input.questions as ApprovalQuestion[])
-    : undefined;
-  send(win, {
-    kind: "approval",
-    chatId,
-    sessionId: session.claudeSession,
-    running: true,
-    approval: {
-      requestId,
+  return new Promise((resolve) => {
+    session.approvals.set(requestId, {
       toolName,
-      summary: approvalSummary(toolName, input),
-      detail: questions ? "" : approvalDetail(toolName, input),
-      reason,
-      questions,
-    },
+      input,
+      suggestions: options.suggestions,
+      resolve,
+    });
+    send(win, {
+      kind: "approval",
+      chatId,
+      sessionId: session.claudeSession,
+      running: true,
+      phase: "approval",
+      approval: {
+        requestId,
+        toolName,
+        summary: options.title || approvalSummary(toolName, input),
+        detail: questions ? "" : approvalDetail(toolName, input),
+        reason: options.decisionReason || options.description || description,
+        questions,
+        canAlways: !questions && !options.suppressAlwaysAllowRule && Boolean(options.suggestions?.length),
+      },
+    });
+    sendPhase(win, chatId, session, "approval", `Needs permission: ${toolLabel(toolName, input)}`);
+    if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
+    const deny = () => {
+      if (!settleApproval(session, requestId, { behavior: "deny", message: "Stopped before approval." })) return;
+      send(win, { kind: "approval_done", id: requestId, chatId, running: true });
+    };
+    if (options.signal.aborted) deny();
+    else options.signal.addEventListener("abort", deny, { once: true });
   });
-  sendPhase(win, chatId, session, "tool", `Waiting for approval: ${toolLabel(toolName, input)}`);
-  if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
 }
 
 export function answerApproval(
@@ -230,26 +256,28 @@ export function answerApproval(
   const session = sessions.get(chatId);
   const pending = session?.approvals.get(requestId);
   if (!session || !pending) return false;
-  session.approvals.delete(requestId);
-  let response: Record<string, unknown>;
-  if (decision.allow) {
-    const updatedInput = decision.answers ? { ...pending.input, answers: decision.answers } : pending.input;
-    response = { behavior: "allow", updatedInput };
-    if (decision.always && pending.suggestions?.length) response.updatedPermissions = pending.suggestions;
-  } else {
-    response = { behavior: "deny", message: decision.message || "The user denied this in ClaudeDesk." };
-  }
-  writeLine(session, {
-    type: "control_response",
-    response: { subtype: "success", request_id: requestId, response },
-  });
+  const result: PermissionResult = decision.allow
+    ? {
+        behavior: "allow",
+        updatedInput: decision.answers ? { ...pending.input, answers: decision.answers } : pending.input,
+        ...(decision.always && pending.suggestions?.length ? { updatedPermissions: pending.suggestions } : {}),
+      }
+    : { behavior: "deny", message: decision.message || "The user denied this in ClaudeDesk." };
+  if (!settleApproval(session, requestId, result)) return false;
   send(win, { kind: "approval_done", id: requestId, chatId, running: true });
   if (win && !win.isDestroyed() && ![...sessions.values()].some((s) => s.approvals.size)) win.flashFrame(false);
+  if (session.abort) sendPhase(win, chatId, session, "thinking", "Thinking…");
   return true;
 }
 
 function dropApprovals(win: BrowserWindow | null, chatId: string, session: Session) {
-  for (const id of session.approvals.keys()) send(win, { kind: "approval_done", id, chatId });
+  for (const [id, pending] of session.approvals) {
+    if (!pending.settled) {
+      pending.settled = true;
+      pending.resolve({ behavior: "deny", message: "Stopped before approval." });
+    }
+    send(win, { kind: "approval_done", id, chatId });
+  }
   session.approvals.clear();
 }
 
@@ -285,19 +313,6 @@ export function findClaudeCli(): string {
   return "claude.cmd";
 }
 
-function findNode(): string | null {
-  const candidates = [
-    path.join(process.env.ProgramFiles ?? "", "nodejs", "node.exe"),
-    path.join(process.env["ProgramFiles(x86)"] ?? "", "nodejs", "node.exe"),
-    path.join(process.env.LOCALAPPDATA ?? "", "Programs", "nodejs", "node.exe"),
-    process.env.NVM_SYMLINK ? path.join(process.env.NVM_SYMLINK, "node.exe") : "",
-  ].filter(Boolean);
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
-  }
-  return existsSync("node.exe") ? "node.exe" : null;
-}
-
 function findClaudeJs(): string | null {
   const roots = [
     process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code") : "",
@@ -312,33 +327,15 @@ function findClaudeJs(): string | null {
   return null;
 }
 
-function quoteArg(s: string) {
-  if (!/[ \t"]/.test(s)) return s;
-  return `"${s.replace(/"/g, '\\"')}"`;
-}
-
-function spawnHidden(cmd: string, args: string[], cwd: string) {
+function spawnHidden(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal) {
   return spawn(cmd, args, {
     cwd,
     shell: false,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
-    windowsVerbatimArguments: cmd.toLowerCase().includes("cmd.exe"),
+    env,
+    signal,
   });
-}
-
-function spawnClaude(claudeArgs: string[], cwd: string) {
-  const cli = findClaudeCli();
-  if (cli.toLowerCase().endsWith(".exe") && existsSync(cli)) {
-    return spawnHidden(cli, claudeArgs, cwd);
-  }
-  const js = findClaudeJs();
-  const node = findNode();
-  if (js && node) return spawnHidden(node, [js, ...claudeArgs], cwd);
-  const comspec = process.env.ComSpec || "cmd.exe";
-  const inner = [quoteArg(cli), ...claudeArgs.map(quoteArg)].join(" ");
-  return spawnHidden(comspec, ["/d", "/s", "/c", inner], cwd);
 }
 
 // child.kill() only ends the direct child; with a cmd.exe or node wrapper the CLI would keep running.
@@ -428,16 +425,16 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       });
     }
     const sessionId = session.claudeSession;
-    if (type === "control_request") {
-      const requestId = String(msg.request_id ?? "");
-      const request = (msg.request && typeof msg.request === "object" ? msg.request : {}) as Record<string, unknown>;
-      if (requestId) handleControlRequest(win, chatId, session, requestId, request);
-      return;
-    }
+    if (type === "control_request") return;
     if (type === "system") {
       const subtype = String(msg.subtype ?? "");
       if (subtype === "init") {
-        send(win, { kind: "status", text: "Claude Code started (hidden)", sessionId, chatId, running: true });
+        send(win, { kind: "status", text: "Claude Code started", sessionId, chatId, running: true, phase: "thinking" });
+      } else if (subtype === "permission_denied") {
+        const message = typeof msg.message === "string" ? msg.message : "Permission denied";
+        if (!/denied this in ClaudeDesk|Stopped before approval/i.test(message)) {
+          send(win, { kind: "error", text: message, sessionId, chatId, running: true });
+        }
       }
       return;
     }
@@ -538,7 +535,7 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       return;
     }
     if (type === "user") {
-      sendPhase(win, chatId, session, "thinking", "Thinking…");
+      if (!session.approvals.size) sendPhase(win, chatId, session, "thinking", "Thinking…");
       return;
     }
     if (type === "result") {
@@ -554,16 +551,29 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
   }
 }
 
+function endRun(session: Session) {
+  const child = session.child;
+  const running = session.query;
+  session.child = null;
+  session.query = undefined;
+  session.abort?.abort();
+  session.abort = undefined;
+  try {
+    running?.close();
+  } catch {
+    /* already closed */
+  }
+  if (child) killTree(child);
+}
+
 export function stopClaude(win: BrowserWindow | null, chatId?: string) {
   if (chatId) {
     const session = sessions.get(chatId);
-    if (!session?.child) return;
-    const child = session.child;
+    if (!session?.child && !session?.query && !session?.abort) return;
     session.stopping = true;
-    session.child = null;
-    killTree(child);
-    patchStored(chatId, (s) => delete s.pending);
     dropApprovals(win, chatId, session);
+    endRun(session);
+    patchStored(chatId, (s) => delete s.pending);
     send(win, { kind: "status", running: false, text: "Stopped.", chatId });
     return;
   }
@@ -574,16 +584,20 @@ export function stopClaude(win: BrowserWindow | null, chatId?: string) {
 export function shutdownClaude() {
   shuttingDown = true;
   for (const session of sessions.values()) {
-    const child = session.child;
-    if (!child) continue;
-    session.child = null;
-    killTree(child);
+    session.stopping = true;
+    for (const pending of session.approvals.values()) {
+      if (pending.settled) continue;
+      pending.settled = true;
+      pending.resolve({ behavior: "deny", message: "ClaudeDesk is closing." });
+    }
+    session.approvals.clear();
+    endRun(session);
   }
 }
 
 export function pendingRuns(): Array<{ chatId: string; workspace?: string }> {
   return Object.entries(loadStore())
-    .filter(([id, s]) => s.pending && !sessions.get(id)?.child)
+    .filter(([id, s]) => s.pending && !sessions.get(id)?.query && !sessions.get(id)?.abort)
     .map(([chatId, s]) => ({ chatId, workspace: s.workspace }));
 }
 
@@ -623,6 +637,58 @@ function withHistory(prompt: string, history?: HistoryMsg[]): string {
   ].join("\n\n");
 }
 
+const PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "auto", "dontAsk"]);
+
+function chosenPermissionMode(raw?: string) {
+  if (raw && PERMISSION_MODES.has(raw)) return raw as "default" | "acceptEdits" | "plan" | "auto" | "dontAsk";
+  return "default" as const;
+}
+
+function gitBashPath(): string | undefined {
+  if (process.platform !== "win32") return undefined;
+  const candidates = [
+    process.env.CLAUDE_CODE_GIT_BASH_PATH ?? "",
+    path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+    path.join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Git", "bin", "bash.exe"),
+  ].filter(Boolean);
+  return candidates.find((p) => existsSync(p));
+}
+
+// The Microsoft Store execution alias is a 0-byte stub. Claude's PowerShell parser launches
+// it with a long EncodedCommand and Windows answers "The command line is too long."
+// The real pwsh.exe inside WindowsApps accepts that command line.
+function realStorePwsh(): string | undefined {
+  const alias = path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe");
+  if (!existsSync(alias)) return undefined;
+  let out = "";
+  try {
+    out = execFileSync("fsutil", ["reparsepoint", "query", alias], { encoding: "utf8", windowsHide: true });
+  } catch {
+    return undefined;
+  }
+  const bytes: number[] = [];
+  for (const line of out.split(/\r?\n/)) {
+    const hexes = line.match(/^[0-9a-f]{4}:\s+((?:[0-9a-f]{2}\s+){1,16})/i)?.[1];
+    if (!hexes) continue;
+    for (const hex of hexes.trim().split(/\s+/)) bytes.push(Number.parseInt(hex, 16));
+  }
+  const text = Buffer.from(bytes).toString("utf16le");
+  const found = text.match(/[A-Z]:\\Program Files\\WindowsApps\\Microsoft\.PowerShell_[^\u0000]+?\\pwsh\.exe/i);
+  return found && existsSync(found[0]) ? found[0] : undefined;
+}
+
+function storePwshAliasOnly(): boolean {
+  if (process.platform !== "win32") return false;
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const real = [
+    path.join(programFiles, "PowerShell", "7", "pwsh.exe"),
+    path.join(programFiles, "PowerShell", "7-preview", "pwsh.exe"),
+    path.join(os.homedir(), ".dotnet", "tools", "pwsh.exe"),
+  ];
+  if (real.some((p) => existsSync(p))) return false;
+  return existsSync(path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe"));
+}
+
 export function runClaude(opts: {
   win: BrowserWindow | null;
   chatId: string;
@@ -634,7 +700,7 @@ export function runClaude(opts: {
 }) {
   const chatId = opts.chatId;
   const session = sessionFor(chatId);
-  if (session.child) stopClaude(opts.win, chatId);
+  if (session.child || session.query || session.abort) stopClaude(opts.win, chatId);
 
   const resuming = Boolean(opts.resume && session.claudeSession);
   const prompt = resuming ? opts.prompt : withHistory(opts.prompt, opts.history);
@@ -649,95 +715,154 @@ export function runClaude(opts: {
   session.streamedThinking = false;
   session.block = undefined;
   session.announcedTools = new Set();
+  session.decisions = new Map();
   session.stderr = "";
 
-  const args = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--include-partial-messages",
-    "--verbose",
-    "--permission-mode",
-    opts.permissionMode ?? "acceptEdits",
-  ];
-  if (resuming) args.push("-r", session.claudeSession!);
+  const mode = chosenPermissionMode(opts.permissionMode);
   if (!resuming) session.claudeSession = undefined;
+  const bash = gitBashPath();
+  const pwsh = realStorePwsh();
+  const skipStorePwsh = !pwsh && storePwshAliasOnly() && Boolean(bash);
 
   patchStored(chatId, (s) => {
     s.workspace = cwd;
     if (!resuming) delete s.claudeSession;
-    s.pending = { prompt: opts.prompt, permissionMode: opts.permissionMode, startedAt: Date.now(), started: false };
+    s.pending = { prompt: opts.prompt, permissionMode: mode, startedAt: Date.now(), started: false };
   });
 
   send(opts.win, {
     kind: "status",
     running: true,
     phase: "starting",
-    text: resuming ? "Starting…" : "Starting…",
+    text: "Starting…",
     sessionId: session.claudeSession,
     chatId,
   });
 
-  const child = spawnClaude(args, cwd);
-  session.child = child;
-  // The prompt goes over stdin: no cmd.exe quoting, newlines survive, no command-line length limit.
-  child.stdin?.on("error", () => {});
-  child.stdin?.end(prompt, "utf8");
-
-  let buf = "";
-  const onChunk = (chunk: Buffer) => {
-    buf += chunk.toString("utf8");
-    const lines = buf.split(/\r?\n/);
-    buf = lines.pop() ?? "";
-    for (const line of lines) parseStreamLine(line, opts.win, chatId, session);
+  const abort = new AbortController();
+  session.abort = abort;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+    CLAUDE_AGENT_SDK_CLIENT_APP: "ClaudeDesk",
+    ...(bash ? { CLAUDE_CODE_GIT_BASH_PATH: bash } : {}),
+    ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
+  const q = query({
+    prompt,
+    options: {
+      cwd,
+      abortController: abort,
+      resume: resuming ? session.claudeSession : undefined,
+      permissionMode: mode,
+      permissionPrompts: "host",
+      includePartialMessages: true,
+      systemPrompt: { type: "preset", preset: "claude_code" },
+      tools: { type: "preset", preset: "claude_code" },
+      ...(skipStorePwsh ? { disallowedTools: ["PowerShell"] } : {}),
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash|PowerShell",
+            timeout: 3600,
+            hooks: [
+              async (input, _toolUseId, { signal }) => {
+                if (input.hook_event_name !== "PreToolUse") return {};
+                const toolInput =
+                  input.tool_input && typeof input.tool_input === "object"
+                    ? (input.tool_input as Record<string, unknown>)
+                    : {};
+                const requestId = input.tool_use_id || _toolUseId || `shell-${Date.now()}`;
+                const result = await askPermission(opts.win, chatId, session, input.tool_name, toolInput, {
+                  signal,
+                  requestId,
+                });
+                session.decisions.set(requestId, result);
+                if (result.behavior === "deny") {
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: "PreToolUse" as const,
+                      permissionDecision: "deny" as const,
+                      permissionDecisionReason: result.message,
+                    },
+                  };
+                }
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: "PreToolUse" as const,
+                    permissionDecision: "allow" as const,
+                    ...(result.updatedInput ? { updatedInput: result.updatedInput } : {}),
+                  },
+                };
+              },
+            ],
+          },
+        ],
+      },
+      env,
+      stderr: (data) => {
+        session.stderr = `${session.stderr ?? ""}${data}`.slice(-4000);
+      },
+      spawnClaudeCodeProcess: (spec) => {
+        const child = spawnHidden(spec.command, spec.args, spec.cwd ?? cwd, spec.env as NodeJS.ProcessEnv, spec.signal);
+        child.stdin?.on("error", () => {});
+        if (session.abort === abort) session.child = child;
+        return child as unknown as SpawnedProcess;
+      },
+      canUseTool: (toolName, input, toolOpts) => {
+        const prior = session.decisions.get(toolOpts.toolUseID) ?? session.decisions.get(toolOpts.requestId);
+        if (prior) return Promise.resolve(prior);
+        return askPermission(opts.win, chatId, session, toolName, input, toolOpts);
+      },
+    },
+  });
+  session.query = q;
 
-  child.stdout?.on("data", onChunk);
-  child.stderr?.on("data", (chunk: Buffer) => {
-    const text = chunk.toString("utf8");
-    session.stderr = `${session.stderr ?? ""}${text}`.slice(-4000);
-    if (text.trim()) send(opts.win, { kind: "error", text, chatId, running: true });
-  });
-  child.on("error", (err) => {
-    if (session.child !== child) return;
-    send(opts.win, {
-      kind: "error",
-      text: `Could not start Claude Code CLI. Install with: npm i -g @anthropic-ai/claude-code\n${err.message}`,
-      running: false,
-      chatId,
-    });
-    session.child = null;
-    patchStored(chatId, (s) => delete s.pending);
-  });
-  child.on("close", (code) => {
-    // A newer run may already own this chat (or the user stopped this one); don't clobber it.
-    if (session.child !== child) {
-      if (session.stopping && !session.child) {
-        session.stopping = false;
-        send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
+  void (async () => {
+    let failed = "";
+    try {
+      for await (const msg of q) {
+        if (session.query !== q) return;
+        parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
       }
-      return;
-    }
-    if (buf.trim()) parseStreamLine(buf, opts.win, chatId, session);
-    session.child = null;
-    if (shuttingDown) return;
-    if (resuming && code !== 0 && /no conversation found/i.test(session.stderr ?? "")) {
-      session.claudeSession = undefined;
-      patchStored(chatId, (s) => delete s.claudeSession);
+    } catch (err) {
+      if (session.query !== q) return;
+      failed = err instanceof Error ? err.message : String(err);
+      if (resuming && /no conversation found/i.test(`${failed}\n${session.stderr ?? ""}`)) {
+        session.claudeSession = undefined;
+        patchStored(chatId, (s) => delete s.claudeSession);
+        failed = "The previous Claude Code session no longer exists. Send again to start a new one.";
+      } else if (!session.stopping && !shuttingDown) {
+        const tail = (session.stderr ?? "").trim().slice(-500);
+        if (tail && !failed.includes(tail)) failed = `${failed}\n${tail}`;
+      } else {
+        failed = "";
+      }
+    } finally {
+      if (session.query !== q) {
+        if (session.stopping && !session.query) {
+          session.stopping = false;
+          send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
+        }
+        return;
+      }
+      session.query = undefined;
+      session.abort = undefined;
+      session.child = null;
+      if (shuttingDown) return;
+      dropApprovals(opts.win, chatId, session);
+      if (failed) {
+        send(opts.win, { kind: "error", text: failed, chatId, running: false });
+      }
+      patchStored(chatId, (s) => delete s.pending);
       send(opts.win, {
-        kind: "error",
-        text: "The previous Claude Code session no longer exists. Send again to start a new one.",
-        chatId,
+        kind: "done",
         running: false,
+        sessionId: session.claudeSession,
+        chatId,
+        text: failed ? "Stopped." : "Done.",
       });
     }
-    patchStored(chatId, (s) => delete s.pending);
-    send(opts.win, {
-      kind: "done",
-      running: false,
-      sessionId: session.claudeSession,
-      chatId,
-      text: code === 0 ? "Done." : `CLI exited ${code ?? "unknown"}`,
-    });
-  });
+  })();
 }
