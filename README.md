@@ -2,7 +2,10 @@
 
 **Windows desktop frontend for Claude Code**: projects and chats in a sidebar, many agents running at once, permission prompts in the app, and memory that carries over between chats.
 
-It does not reimplement Claude. Each chat drives the official Claude Code CLI through [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk), in the chat's project folder, and streams the reply back.
+Each chat runs on one of two engines, picked in the composer's model menu:
+
+- **Claude Code** (default): the official Claude Code agent, bundled with ClaudeDesk through [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). Uses your Claude sign-in and subscription. No separate CLI install is needed.
+- **Direct**: ClaudeDesk's own agent loop calling a model API with your key: the Claude API, OpenAI, OpenRouter, Google Gemini, or local models through Ollama. Billed per token by that provider. It has file, search and PowerShell tools, and uses the same approvals, change review and memory.
 
 ## Status
 
@@ -16,8 +19,9 @@ It does not reimplement Claude. Each chat drives the official Claude Code CLI th
 ## Requirements
 
 - Windows 10/11, Node.js 20+
-- Claude Code CLI, signed in: `npm i -g @anthropic-ai/claude-code`, then `claude auth login`
-- Git for Windows (for the Bash tool); PowerShell 7 is optional
+- A Claude account: sign in from **Settings → Claude Code → Sign in** (no CLI install needed)
+- For Direct chats, an API key per provider in **Settings → Direct AI providers** (Ollama needs none)
+- Git for Windows (for Claude Code's Bash tool); PowerShell 7 is optional
 
 ## Run
 
@@ -34,7 +38,9 @@ npm run dev
 | Path | Role |
 |------|------|
 | `electron/main.ts` | Window, IPC, workspace watcher |
-| `electron/claude.ts` | Agent SDK runs, streaming, approvals, resume after restart |
+| `electron/claude.ts` | Claude Code engine: agent SDK runs, streaming, approvals, resume after restart |
+| `electron/direct.ts` | Direct engine: own tool loop for the Claude API and OpenAI-compatible providers |
+| `electron/providers.ts` | Provider presets and API keys (encrypted with Windows' safeStorage) |
 | `electron/allows.ts` | Folder trust and the commands that still ask |
 | `electron/memory.ts` | Memory folders and system-prompt addendum |
 | `electron/library.ts` | Projects, chats and saved threads (`%APPDATA%\ClaudeDesk`) |

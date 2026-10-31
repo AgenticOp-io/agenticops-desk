@@ -21,7 +21,18 @@ export type ApprovalRequest = {
 };
 
 export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
-export type ModelOption = { value: string; displayName: string; description?: string };
+export type ModelOption = { value: string; displayName: string; description?: string; group?: string };
+export type ProviderStatus = {
+  id: string;
+  label: string;
+  hasKey: boolean;
+  needsKey: boolean;
+  keyHint: string;
+  baseUrl: string;
+  editableModels: boolean;
+  models: string[];
+  ready: boolean;
+};
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
 
 export type ClaudeEvent = {
@@ -89,7 +100,10 @@ declare global {
       touchChat: (chatId: string, projectPath?: string | null) => Promise<void>;
       upsertChat: (chat: CursorChat) => Promise<void>;
       saveThread: (chatId: string, messages: unknown[]) => Promise<void>;
-      probeClaude: () => Promise<{ found: boolean; path: string }>;
+      probeClaude: () => Promise<{ found: boolean; path: string; bundled: boolean }>;
+      signIn: () => Promise<boolean>;
+      listProviders: () => Promise<ProviderStatus[]>;
+      setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
       authStatus: () => Promise<{ ok: boolean; raw: string }>;
       runClaude: (payload: {
         prompt: string;

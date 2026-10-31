@@ -80,7 +80,7 @@ contextBridge.exposeInMainWorld("desk", {
   saveThread: (chatId: string, messages: unknown[]) =>
     ipcRenderer.invoke("thread:save", chatId, messages) as Promise<void>,
   probeClaude: () =>
-    ipcRenderer.invoke("claude:probe") as Promise<{ found: boolean; path: string }>,
+    ipcRenderer.invoke("claude:probe") as Promise<{ found: boolean; path: string; bundled: boolean }>,
   authStatus: () =>
     ipcRenderer.invoke("claude:auth") as Promise<{ ok: boolean; raw: string }>,
   runClaude: (payload: {
@@ -94,7 +94,13 @@ contextBridge.exposeInMainWorld("desk", {
     images?: Array<{ mediaType: string; data: string; name?: string }>;
   }) => ipcRenderer.invoke("claude:run", payload) as Promise<boolean>,
   listModels: () =>
-    ipcRenderer.invoke("claude:models") as Promise<Array<{ value: string; displayName: string; description?: string }>>,
+    ipcRenderer.invoke("claude:models") as Promise<
+      Array<{ value: string; displayName: string; description?: string; group?: string }>
+    >,
+  signIn: () => ipcRenderer.invoke("claude:login") as Promise<boolean>,
+  listProviders: () => ipcRenderer.invoke("providers:list"),
+  setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
+    ipcRenderer.invoke("providers:set", id, patch),
   changedFiles: (chatId: string) => ipcRenderer.invoke("claude:changes", chatId) as Promise<string[]>,
   changeBase: (chatId: string, filePath: string) =>
     ipcRenderer.invoke("claude:changeBase", chatId, filePath) as Promise<string | null>,

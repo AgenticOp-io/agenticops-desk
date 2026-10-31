@@ -4,6 +4,7 @@ import { ChangesBar } from "./ChangesBar";
 import { CodePane, type DiffView } from "./CodePane";
 import { Composer, type ComposerHandle } from "./Composer";
 import { Explorer } from "./Explorer";
+import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, RunPhase, UsageInfo } from "./vite-env";
@@ -176,7 +177,7 @@ export function App() {
   const [runningByChat, setRunningByChat] = useState<Record<string, boolean>>({});
   const [progressByChat, setProgressByChat] = useState<Record<string, RunProgress>>({});
   const [snippetId, setSnippetId] = useState<string | null>(null);
-  const [cli, setCli] = useState<{ found: boolean; path: string } | null>(null);
+  const [cli, setCli] = useState<{ found: boolean; path: string; bundled?: boolean } | null>(null);
   const [authOk, setAuthOk] = useState<boolean | null>(null);
   const [status, setStatus] = useState("Ready");
   const [treeKey, setTreeKey] = useState(0);
@@ -360,7 +361,7 @@ export function App() {
         setCli(await window.desk.probeClaude());
         const auth = await window.desk.authStatus();
         setAuthOk(auth.ok);
-        setStatus(auth.ok ? "Claude Code signed in" : "Run claude auth login");
+        setStatus(auth.ok ? "Claude Code signed in" : "Not signed in to Claude. Open Settings to sign in.");
       } catch {
         setAuthOk(false);
       }
@@ -742,10 +743,10 @@ export function App() {
   };
 
   const cliLabel = useMemo(() => {
-    if (!cli) return "Detecting Claude CLI…";
-    if (!cli.found) return "Claude CLI not found";
+    if (!cli) return "Detecting Claude Code…";
+    if (!cli.found) return "Claude Code not found";
     const auth = authOk === null ? "" : authOk ? " · signed in" : " · not signed in";
-    return `CLI ${auth}`;
+    return `Claude Code${cli.bundled ? " (built in)" : ""}${auth}`;
   }, [cli, authOk]);
 
   const q = filter.trim().toLowerCase();
@@ -1388,6 +1389,36 @@ export function App() {
               />
               <em>{prefs.itemFont}px</em>
             </label>
+            <div className="settings-label">Claude Code</div>
+            <div className="signin-row">
+              <span>
+                {cli?.bundled ? "Built in" : cli?.found ? "Installed CLI" : "Not found"}
+                {" · "}
+                {authOk === null ? "checking sign-in…" : authOk ? "signed in" : "not signed in"}
+              </span>
+              <span className="grow" />
+              <button
+                className="btn"
+                onClick={() => {
+                  void window.desk.signIn();
+                  setStatus("Finish signing in in the window that opened, then come back here.");
+                }}
+              >
+                {authOk ? "Sign in again" : "Sign in"}
+              </button>
+              <button
+                className="btn"
+                onClick={() =>
+                  void window.desk.authStatus().then((a) => {
+                    setAuthOk(a.ok);
+                    setStatus(a.ok ? "Claude Code signed in" : "Not signed in yet");
+                  })
+                }
+              >
+                Check
+              </button>
+            </div>
+            <ProvidersSettings onChanged={() => void window.desk.listModels().then(setModels)} />
             <p className="settings-hint">
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
               Drag items to reorder. Each folder shows two chats; use the chevron or more link for the rest.

@@ -1,11 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runDirect } from "./direct";
+import { parseDirectModel, providerStatus, setProvider } from "./providers";
 import {
   answerApproval,
+  bundledClaude,
   changeBase,
   changedFiles,
   findClaudeCli,
@@ -302,8 +305,25 @@ ipcMain.handle("fs:write", async (_e, filePath: string, contents: string) => {
 
 ipcMain.handle("claude:probe", () => probeClaude());
 
+// Opens a console window running Claude Code's own sign-in, which finishes in the browser.
+ipcMain.handle("claude:login", () => {
+  const exe = bundledClaude() ?? findClaudeCli();
+  const child = spawn(process.env.ComSpec || "cmd.exe", ["/d", "/c", "start", "Claude sign-in", exe, "auth", "login"], {
+    detached: true,
+    windowsHide: false,
+    stdio: "ignore",
+  });
+  child.unref();
+  return true;
+});
+
+ipcMain.handle("providers:list", () => providerStatus());
+ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
+  setProvider(id, patch),
+);
+
 ipcMain.handle("claude:auth", async () => {
-  const cli = findClaudeCli();
+  const cli = bundledClaude() ?? findClaudeCli();
   const cmd = cli.toLowerCase().endsWith(".exe") ? cli : process.env.ComSpec || "cmd.exe";
   const args = cli.toLowerCase().endsWith(".exe") ? ["auth", "status"] : ["/d", "/s", "/c", `"${cli}" auth status`];
   return await new Promise<{ ok: boolean; raw: string }>((resolve) => {
@@ -344,6 +364,26 @@ ipcMain.handle(
     },
   ) => {
     const cwd = payload.workspace && existsSync(payload.workspace) ? payload.workspace : workspace;
+    const images = Array.isArray(payload.images)
+      ? payload.images
+          .filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i?.mediaType) && typeof i.data === "string")
+          .slice(0, 10)
+      : undefined;
+    const direct = typeof payload.model === "string" ? parseDirectModel(payload.model) : null;
+    if (direct) {
+      runDirect({
+        win,
+        chatId: payload.chatId,
+        workspace: cwd,
+        prompt: payload.prompt,
+        provider: direct.provider,
+        model: direct.model,
+        permissionMode: payload.permissionMode,
+        history: payload.history,
+        images,
+      });
+      return true;
+    }
     runClaude({
       win,
       chatId: payload.chatId,
@@ -353,11 +393,7 @@ ipcMain.handle(
       permissionMode: payload.permissionMode,
       history: payload.history,
       model: typeof payload.model === "string" && /^[\w.\-[\]]{1,80}$/.test(payload.model) ? payload.model : undefined,
-      images: Array.isArray(payload.images)
-        ? payload.images
-            .filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i?.mediaType) && typeof i.data === "string")
-            .slice(0, 10)
-        : undefined,
+      images,
     });
     return true;
   },

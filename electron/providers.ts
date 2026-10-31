@@ -1,0 +1,184 @@
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { app, safeStorage } from "electron";
+
+// AI providers the Direct engine can call without Claude Code. Keys are encrypted with Windows'
+// credential protection (safeStorage) and never leave the main process.
+
+export type ProviderId = "anthropic" | "openai" | "openrouter" | "gemini" | "ollama";
+
+type Preset = {
+  label: string;
+  kind: "anthropic" | "openai-compatible";
+  baseUrl?: string;
+  needsKey: boolean;
+  // Fixed list for Claude; the others list whatever models the user types in.
+  models?: Array<{ id: string; name: string }>;
+  keyHint: string;
+};
+
+export const PRESETS: Record<ProviderId, Preset> = {
+  anthropic: {
+    label: "Claude API",
+    kind: "anthropic",
+    needsKey: true,
+    models: [
+      { id: "claude-opus-5-5", name: "Opus 5.5" },
+      { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+      { id: "claude-haiku-5-5", name: "Haiku 5.5" },
+      { id: "claude-fable-5-1", name: "Fable 5.1" },
+    ],
+    keyHint: "API key from platform.claude.com (sk-ant-…). Billed per token, separate from a Claude subscription.",
+  },
+  openai: {
+    label: "OpenAI",
+    kind: "openai-compatible",
+    baseUrl: "https://api.openai.com/v1",
+    needsKey: true,
+    keyHint: "API key from platform.openai.com.",
+  },
+  openrouter: {
+    label: "OpenRouter",
+    kind: "openai-compatible",
+    baseUrl: "https://openrouter.ai/api/v1",
+    needsKey: true,
+    keyHint: "API key from openrouter.ai. Model names look like vendor/model.",
+  },
+  gemini: {
+    label: "Google Gemini",
+    kind: "openai-compatible",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    needsKey: true,
+    keyHint: "API key from aistudio.google.com.",
+  },
+  ollama: {
+    label: "Ollama (local)",
+    kind: "openai-compatible",
+    baseUrl: "http://localhost:11434/v1",
+    needsKey: false,
+    keyHint: "No key needed. Run Ollama locally and list the models you have pulled.",
+  },
+};
+
+type Stored = Partial<Record<ProviderId, { key?: string; models?: string[]; baseUrl?: string }>>;
+
+export type ProviderStatus = {
+  id: ProviderId;
+  label: string;
+  hasKey: boolean;
+  needsKey: boolean;
+  keyHint: string;
+  baseUrl: string;
+  editableModels: boolean;
+  models: string[];
+  ready: boolean;
+};
+
+let cache: Stored | null = null;
+
+function file() {
+  return path.join(app.getPath("userData"), "providers.json");
+}
+
+function load(): Stored {
+  if (cache) return cache;
+  try {
+    const raw = JSON.parse(readFileSync(file(), "utf8"));
+    cache = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Stored) : {};
+  } catch {
+    cache = {};
+  }
+  return cache!;
+}
+
+function save() {
+  const target = file();
+  const tmp = `${target}.${process.pid}.tmp`;
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(tmp, JSON.stringify(load(), null, 2), "utf8");
+  renameSync(tmp, target);
+}
+
+function isProvider(id: string): id is ProviderId {
+  return Object.prototype.hasOwnProperty.call(PRESETS, id);
+}
+
+export function providerKey(id: ProviderId): string {
+  const enc = load()[id]?.key;
+  if (!enc) return "";
+  try {
+    return safeStorage.decryptString(Buffer.from(enc, "base64"));
+  } catch {
+    return "";
+  }
+}
+
+export function providerBaseUrl(id: ProviderId): string {
+  return load()[id]?.baseUrl || PRESETS[id].baseUrl || "";
+}
+
+function modelsOf(id: ProviderId): string[] {
+  const preset = PRESETS[id];
+  return preset.models ? preset.models.map((m) => m.id) : load()[id]?.models ?? [];
+}
+
+export function providerStatus(): ProviderStatus[] {
+  return (Object.keys(PRESETS) as ProviderId[]).map((id) => {
+    const preset = PRESETS[id];
+    const hasKey = Boolean(load()[id]?.key);
+    const models = modelsOf(id);
+    return {
+      id,
+      label: preset.label,
+      hasKey,
+      needsKey: preset.needsKey,
+      keyHint: preset.keyHint,
+      baseUrl: providerBaseUrl(id),
+      editableModels: !preset.models,
+      models,
+      ready: (hasKey || !preset.needsKey) && models.length > 0,
+    };
+  });
+}
+
+export function setProvider(id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) {
+  if (!isProvider(id)) throw new Error(`Unknown provider ${id}`);
+  const all = load();
+  const cur = { ...(all[id] ?? {}) };
+  if (patch.key === null || patch.key === "") delete cur.key;
+  else if (typeof patch.key === "string") {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows could not encrypt the key, so it was not saved.");
+    cur.key = safeStorage.encryptString(patch.key.trim()).toString("base64");
+  }
+  if (Array.isArray(patch.models)) {
+    cur.models = patch.models.map((m) => m.trim()).filter(Boolean).slice(0, 30);
+  }
+  if (typeof patch.baseUrl === "string") {
+    const url = patch.baseUrl.trim();
+    if (url && !/^https?:\/\//i.test(url)) throw new Error("The address must start with http:// or https://");
+    if (url) cur.baseUrl = url;
+    else delete cur.baseUrl;
+  }
+  all[id] = cur;
+  save();
+  return providerStatus();
+}
+
+// Model picker entries for the Direct engine: value "direct:<provider>:<model>".
+export function directModelOptions() {
+  return providerStatus()
+    .filter((p) => p.ready)
+    .flatMap((p) =>
+      p.models.map((m) => ({
+        value: `direct:${p.id}:${m}`,
+        displayName: PRESETS[p.id].models?.find((x) => x.id === m)?.name ?? m,
+        group: `Direct · ${p.label}`,
+      })),
+    );
+}
+
+export function parseDirectModel(value: string): { provider: ProviderId; model: string } | null {
+  const m = /^direct:([a-z]+):(.+)$/.exec(value);
+  if (!m || !isProvider(m[1])) return null;
+  return { provider: m[1], model: m[2] };
+}

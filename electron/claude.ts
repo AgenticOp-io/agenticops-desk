@@ -1,11 +1,13 @@
 import { query, type ModelInfo, type PermissionResult, type PermissionUpdate, type Query, type SDKUserMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { prepareMemory } from "./memory";
+import { directModelOptions } from "./providers";
 
 export type ApprovalQuestion = {
   question: string;
@@ -61,7 +63,7 @@ export type ClaudeEvent = {
 };
 
 export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
-export type ModelOption = { value: string; displayName: string; description?: string };
+export type ModelOption = { value: string; displayName: string; description?: string; group?: string };
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
 
 // What the CLI is doing right now, so the UI can tell thinking apart from tool work and writing.
@@ -158,7 +160,7 @@ function patchStored(chatId: string, fn: (s: StoredSession) => void) {
   persistStore();
 }
 
-function sessionFor(chatId: string): Session {
+export function sessionFor(chatId: string): Session {
   let session = sessions.get(chatId);
   if (!session) {
     const stored = loadStore()[chatId];
@@ -175,7 +177,7 @@ function sessionFor(chatId: string): Session {
   return session;
 }
 
-function send(win: BrowserWindow | null, event: ClaudeEvent) {
+export function send(win: BrowserWindow | null, event: ClaudeEvent) {
   if (win && !win.isDestroyed()) win.webContents.send("claude:event", event);
 }
 
@@ -214,7 +216,7 @@ function settleApproval(session: Session, requestId: string, result: PermissionR
   return true;
 }
 
-function askPermission(
+export function askPermission(
   win: BrowserWindow | null,
   chatId: string,
   session: Session,
@@ -300,7 +302,7 @@ export function answerApproval(
   return true;
 }
 
-function dropApprovals(win: BrowserWindow | null, chatId: string, session: Session) {
+export function dropApprovals(win: BrowserWindow | null, chatId: string, session: Session) {
   for (const [id, pending] of session.approvals) {
     if (!pending.settled) {
       pending.settled = true;
@@ -327,6 +329,24 @@ function toolLabel(name: string, input: unknown): string {
     return `${name} ${clipped}`;
   }
   return name;
+}
+
+// The agent SDK ships Claude Code as a native binary for this platform, so no separate CLI install is needed.
+// In a packaged build the binary is unpacked next to app.asar, because Windows cannot run an exe inside an archive.
+let bundledPath: string | null | undefined;
+export function bundledClaude(): string | null {
+  if (bundledPath !== undefined) return bundledPath;
+  bundledPath = null;
+  try {
+    const req = createRequire(import.meta.url);
+    const pkg = req.resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`);
+    const exe = path.join(path.dirname(pkg), process.platform === "win32" ? "claude.exe" : "claude");
+    const unpacked = exe.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+    bundledPath = existsSync(unpacked) ? unpacked : existsSync(exe) ? exe : null;
+  } catch {
+    bundledPath = null;
+  }
+  return bundledPath;
 }
 
 export function findClaudeCli(): string {
@@ -382,10 +402,21 @@ function killTree(child: ChildProcess) {
   child.kill();
 }
 
-export function probeClaude(): { found: boolean; path: string } {
+export function probeClaude(): { found: boolean; path: string; bundled: boolean } {
+  const bundled = bundledClaude();
+  if (bundled) return { found: true, path: bundled, bundled: true };
   const p = findClaudeCli();
   const js = findClaudeJs();
-  return { found: existsSync(p) || Boolean(js) || p === "claude.cmd", path: js ?? p };
+  return { found: existsSync(p) || Boolean(js), path: js ?? p, bundled: false };
+}
+
+// Forget the Claude Code session for a chat, so the next Claude Code message starts fresh with the transcript.
+export function clearClaudeSession(chatId: string, session: Session) {
+  session.claudeSession = undefined;
+  patchStored(chatId, (s) => {
+    delete s.claudeSession;
+    delete s.pending;
+  });
 }
 
 function commandText(input: unknown): string {
@@ -409,7 +440,7 @@ function describePartial(partial: string): { phase: RunPhase; text: string } | n
   return pushActivity(partial);
 }
 
-function sendPhase(
+export function sendPhase(
   win: BrowserWindow | null,
   chatId: string,
   session: Session,
@@ -610,7 +641,7 @@ function runUsage(msg: Record<string, unknown>, session: Session): UsageInfo | n
 const SNAPSHOT_LIMIT = 5_000_000;
 
 // Called before Claude's file tools run: remember what the file looked like the first time this chat touches it.
-function snapshotFile(win: BrowserWindow | null, chatId: string, session: Session, cwd: string, input: unknown) {
+export function snapshotFile(win: BrowserWindow | null, chatId: string, session: Session, cwd: string, input: unknown) {
   const rec = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const raw = rec.file_path ?? rec.notebook_path;
   if (typeof raw !== "string" || !raw) return;
@@ -639,13 +670,13 @@ function readOrNull(file: string): string | null {
 }
 
 // Drop files that ended up unchanged (a denied edit, or an edit Claude reverted itself).
-function pruneChanges(session: Session) {
+export function pruneChanges(session: Session) {
   for (const [key, entry] of session.changes) {
     if (readOrNull(entry.path) === entry.before) session.changes.delete(key);
   }
 }
 
-function sendChanges(win: BrowserWindow | null, chatId: string, session: Session) {
+export function sendChanges(win: BrowserWindow | null, chatId: string, session: Session) {
   send(win, { kind: "changes", chatId, files: [...session.changes.values()].map((c) => c.path) });
 }
 
@@ -702,7 +733,8 @@ const FALLBACK_MODELS: ModelOption[] = [
 ];
 
 export function listModels(): ModelOption[] {
-  return modelCache ?? FALLBACK_MODELS;
+  const claudeCode = (modelCache ?? FALLBACK_MODELS).map((m) => ({ ...m, group: "Claude Code" }));
+  return [...claudeCode, ...directModelOptions()];
 }
 
 function toOptions(list: ModelInfo[]): ModelOption[] {
@@ -798,7 +830,7 @@ export type HistoryMsg = { role: string; text: string };
 const HISTORY_LIMIT = 60_000;
 
 // With no CLI session to resume (a Cursor chat, or one the CLI lost), hand Claude the visible transcript.
-function withHistory(prompt: string, history?: HistoryMsg[]): string {
+export function withHistory(prompt: string, history?: HistoryMsg[]): string {
   const turns = (history ?? [])
     .filter((m) => (m.role === "user" || m.role === "assistant") && m.text.trim())
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text.trim()}`);
@@ -835,7 +867,7 @@ function gitBashPath(): string | undefined {
 // The Microsoft Store execution alias is a 0-byte stub. Claude's PowerShell parser launches
 // it with a long EncodedCommand and Windows answers "The command line is too long."
 // The real pwsh.exe inside WindowsApps accepts that command line.
-function realStorePwsh(): string | undefined {
+export function realStorePwsh(): string | undefined {
   const alias = path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe");
   if (!existsSync(alias)) return undefined;
   let out = "";
@@ -936,6 +968,7 @@ export function runClaude(opts: {
     options: {
       cwd,
       ...(opts.model ? { model: opts.model } : {}),
+      ...(bundledClaude() ? { pathToClaudeCodeExecutable: bundledClaude()! } : {}),
       abortController: abort,
       resume: resuming ? session.claudeSession : undefined,
       permissionMode: mode,
@@ -1019,7 +1052,7 @@ export function runClaude(opts: {
         const options = toOptions(list);
         if (!options.length) return;
         modelCache = options;
-        send(opts.win, { kind: "models", chatId, models: options });
+        send(opts.win, { kind: "models", chatId, models: listModels() });
       })
       .catch(() => {});
   }

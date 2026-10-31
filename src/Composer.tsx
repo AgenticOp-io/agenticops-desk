@@ -251,11 +251,17 @@ export const Composer = forwardRef<
           onChange={(e) => props.onModel(e.target.value)}
           title="Model for this chat's next message"
         >
-          <option value="">Default model</option>
-          {props.models.map((m) => (
-            <option key={m.value} value={m.value} title={m.description}>
-              {m.displayName}
-            </option>
+          <option value="">Claude Code · default model</option>
+          {[...new Set(props.models.map((m) => m.group ?? "Claude Code"))].map((group) => (
+            <optgroup key={group} label={group}>
+              {props.models
+                .filter((m) => (m.group ?? "Claude Code") === group)
+                .map((m) => (
+                  <option key={m.value} value={m.value} title={m.description}>
+                    {m.displayName}
+                  </option>
+                ))}
+            </optgroup>
           ))}
         </select>
         <button type="button" className="pill" title="Attach images" onClick={() => fileRef.current?.click()}>
@@ -282,7 +288,9 @@ export const Composer = forwardRef<
             <span className="usage-meter">
               <span style={{ width: `${ctxPct}%` }} className={ctxPct > 80 ? "hot" : ""} />
             </span>
-            {compact(props.usage.contextTokens)} / {compact(props.usage.contextWindow)} · ${props.usage.costUsd.toFixed(2)}
+            {props.usage.contextWindow
+              ? `${compact(props.usage.contextTokens)} / ${compact(props.usage.contextWindow)} · $${props.usage.costUsd.toFixed(2)}`
+              : `${compact(props.usage.contextTokens)} tokens`}
           </span>
         )}
       </div>
