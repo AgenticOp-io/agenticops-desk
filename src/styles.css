@@ -324,39 +324,134 @@ button { cursor: pointer; }
 }
 .list-sub { font-size: calc(var(--item-font) * 0.85); color: var(--muted); }
 
+/* Cursor layout: editor in the middle, agent chat docked on the right. */
+.agent.with-code { flex-direction: row; }
+.agent.with-code .chat {
+  flex: 0 0 var(--chat-width, 460px);
+  width: var(--chat-width, 460px);
+}
+.split {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.15s;
+}
+.split:hover, body.resizing .split { background: var(--accent); }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
+
 .code-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 38%;
-  min-height: 160px;
-  max-height: 55%;
-  border-bottom: 1px solid var(--border);
-  background: #141414;
+  background: #1e1e1e;
 }
-.code-pane-head {
-  min-height: 36px;
+.editor-tabs {
+  display: flex;
+  height: 35px;
+  flex-shrink: 0;
+  background: #181818;
+  border-bottom: 1px solid #2b2b2b;
+}
+.editor-tab-strip {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.editor-tab-strip::-webkit-scrollbar { height: 3px; }
+.editor-tab-strip::-webkit-scrollbar-thumb { background: #4a4a4a; }
+.editor-tab {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
-}
-.code-pane-title { font-weight: 600; color: var(--text); letter-spacing: 0.04em; }
-.code-view {
-  flex: 1;
-  margin: 0;
-  overflow: auto;
-  padding: 12px 14px;
-  font-family: var(--font-mono);
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
   font-size: 13px;
-  line-height: 1.5;
-  white-space: pre;
-  user-select: text;
-  cursor: text;
-  outline: none;
-  tab-size: 2;
+  color: #8b8b8b;
+  background: #181818;
+  border-right: 1px solid #252525;
+  border-top: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+}
+.editor-tab:hover { color: #cccccc; }
+.editor-tab.active {
+  color: #ffffff;
+  background: #1e1e1e;
+  border-top-color: var(--accent);
+  margin-bottom: -1px;
+}
+.editor-tab.snippet { font-style: italic; padding-right: 12px; }
+.editor-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-tab-close {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  visibility: hidden;
+}
+.editor-tab-close .dot { display: none; font-size: 10px; }
+.editor-tab:hover .editor-tab-close,
+.editor-tab.active .editor-tab-close,
+.editor-tab.dirty .editor-tab-close { visibility: visible; }
+.editor-tab.dirty .editor-tab-close .dot { display: inline; }
+.editor-tab.dirty .editor-tab-close .x { display: none; }
+.editor-tab.dirty .editor-tab-close:hover .dot { display: none; }
+.editor-tab.dirty .editor-tab-close:hover .x { display: inline; }
+.editor-tab-close:hover { background: #333; }
+.editor-hide {
+  flex-shrink: 0;
+  width: 35px;
+  border: 0;
+  background: transparent;
+  color: #8b8b8b;
+  font-size: 18px;
+}
+.editor-hide:hover { color: #fff; background: #2a2a2a; }
+.editor-crumbs {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0 14px;
+  font-size: 12px;
+  color: #8b8b8b;
+  background: #1e1e1e;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.editor-crumbs span + span::before { content: "›"; margin: 0 6px; color: #5a5a5a; }
+.editor-crumbs .last { color: #cccccc; }
+.editor-crumbs .readonly {
+  margin-left: 10px;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: #2d2d2d;
+  font-size: 11px;
+}
+.editor-crumbs .readonly::before { content: none !important; }
+.editor-body { flex: 1; min-height: 0; position: relative; }
+.editor-empty {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  text-align: center;
+  color: #6b6b6b;
+  font-size: 13px;
 }
 .md-pre { position: relative; }
 .md-pre .copy-code,

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import { ChatMarkdown } from "./ChatMarkdown";
 import { CodePane } from "./CodePane";
 import { extractCodeBlocks } from "./codeBlocks";
-import { defaultPrefs, moveKey, type UiPrefs } from "./prefs";
+import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, ClaudeEvent, CursorChat, CursorProject, RunPhase } from "./vite-env";
 
 type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string };
@@ -572,7 +572,44 @@ export function App() {
     await openFilePath(entry.path);
   };
 
+  const saveTab = async (filePath: string) => {
+    const tab = tabsRef.current.find((t) => t.path === filePath);
+    if (!tab) return;
+    const contents = tab.contents;
+    await window.desk.writeFile(filePath, contents);
+    // Only clear the dot if nothing was typed while the save was in flight.
+    setTabs((all) => all.map((t) => (t.path === filePath && t.contents === contents ? { ...t, dirty: false } : t)));
+    setStatus(`Saved ${baseName(filePath)}`);
+  };
+
+  const [chatWidth, setChatWidth] = useState(() => {
+    const saved = Number(localStorage.getItem("claudedesk.chatWidth"));
+    return saved >= 320 && saved <= 1200 ? saved : 460;
+  });
+
+  const startChatResize = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = chatWidth;
+    let latest = startW;
+    const move = (ev: MouseEvent) => {
+      latest = clamp(startW - (ev.clientX - startX), 320, Math.max(320, window.innerWidth - 700));
+      setChatWidth(latest);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing");
+      localStorage.setItem("claudedesk.chatWidth", String(latest));
+    };
+    document.body.classList.add("resizing");
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
   const closeTab = (filePath: string) => {
+    const tab = tabsRef.current.find((t) => t.path === filePath);
+    if (tab?.dirty && !window.confirm(`${tab.name} has unsaved changes. Close it anyway?`)) return;
     setTabs((all) => {
       const next = all.filter((t) => t.path !== filePath);
       if (activePath === filePath) setActivePath(next.at(-1)?.path ?? null);
@@ -1038,22 +1075,31 @@ export function App() {
           )}
         </aside>
 
-        <section className="agent">
+        <section
+          className={`agent ${prefs.showCode ? "with-code" : ""}`}
+          style={{ "--chat-width": `${chatWidth}px` } as CSSProperties}
+        >
           {prefs.showCode && (
             <CodePane
               files={tabs}
               activePath={activePath}
               snippets={snippets}
               snippetId={snippetId}
+              workspace={workspace}
               onSelectFile={(p) => {
                 setSnippetId(null);
                 setActivePath(p);
               }}
               onSelectSnippet={setSnippetId}
               onCloseFile={closeTab}
+              onChangeFile={(p, contents) =>
+                setTabs((all) => all.map((t) => (t.path === p ? { ...t, contents, dirty: true } : t)))
+              }
+              onSaveFile={(p) => void saveTab(p)}
               onHide={() => patchPrefs({ showCode: false })}
             />
           )}
+          {prefs.showCode && <div className="split" onMouseDown={startChatResize} title="Drag to resize" />}
 
           <div className="chat">
             <div className="pane-head chat-head">
