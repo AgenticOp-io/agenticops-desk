@@ -8,8 +8,8 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "node scripts/patch-vite-electron.mjs && vite",
-    "build": "tsc --noEmit && vite build && electron-builder --win portable",
-    "pack": "tsc --noEmit && vite build && electron-builder --win portable",
+    "build": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --win portable",
+    "pack": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --win portable",
     "preview": "vite preview",
     "postinstall": "node scripts/patch-vite-electron.mjs"
   },

@@ -20,4 +20,7 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Build
+        # Monaco makes the bundle large; Node's default heap runs out on the runner.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npx vite build
