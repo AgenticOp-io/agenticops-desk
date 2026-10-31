@@ -251,6 +251,8 @@ export function App() {
   const threadsRef = useRef(threads);
   const prefsReady = useRef(false);
   const persistIds = useRef(new Set<string>());
+  // The thread array last sent to disk per chat, so the debounced save skips chats that did not change.
+  const savedThreads = useRef(new Map<string, Msg[]>());
   tabsRef.current = tabs;
   workspaceRef.current = workspace;
   activeRef.current = activePath;
@@ -505,10 +507,16 @@ export function App() {
   }, [msgs, running]);
 
   useEffect(() => {
-    const ids = [...persistIds.current].filter((id) => id in threads);
+    const ids = [...persistIds.current].filter(
+      (id) => id in threads && savedThreads.current.get(id) !== threads[id],
+    );
     if (!ids.length) return;
     const timer = window.setTimeout(() => {
-      for (const id of ids) void window.desk.saveThread(id, threads[id] ?? []);
+      for (const id of ids) {
+        const msgs = threads[id] ?? [];
+        savedThreads.current.set(id, msgs);
+        void window.desk.saveThread(id, msgs);
+      }
     }, 500);
     return () => window.clearTimeout(timer);
   }, [threads]);

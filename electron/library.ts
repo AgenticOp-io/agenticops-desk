@@ -138,20 +138,19 @@ function hydrate(lib: Library): Library {
   return lib;
 }
 
+// Only call inside withLibrary. readJson sets a corrupt file aside before we start over from empty.
 async function load(): Promise<Library> {
-  let lib: Library;
-  try {
-    const raw = JSON.parse(await fs.readFile(libraryFile(), "utf8")) as Partial<Library>;
-    lib = {
-      removed: Array.isArray(raw.removed) ? raw.removed : [],
-      added: Array.isArray(raw.added) ? raw.added : [],
-      lastUsed: raw.lastUsed && typeof raw.lastUsed === "object" ? raw.lastUsed : {},
-      chatLastUsed: raw.chatLastUsed && typeof raw.chatLastUsed === "object" ? raw.chatLastUsed : {},
-      chats: Array.isArray(raw.chats) ? (raw.chats as CursorChat[]) : [],
-    };
-  } catch {
-    lib = empty();
-  }
+  const raw = (await readJson(libraryFile())) as Partial<Library> | undefined;
+  const lib: Library =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? {
+          removed: Array.isArray(raw.removed) ? raw.removed : [],
+          added: Array.isArray(raw.added) ? raw.added : [],
+          lastUsed: raw.lastUsed && typeof raw.lastUsed === "object" ? raw.lastUsed : {},
+          chatLastUsed: raw.chatLastUsed && typeof raw.chatLastUsed === "object" ? raw.chatLastUsed : {},
+          chats: Array.isArray(raw.chats) ? (raw.chats as CursorChat[]) : [],
+        }
+      : empty();
   const beforeAdded = lib.added.length;
   const beforeChats = lib.chats.length;
   hydrate(lib);
@@ -165,153 +164,155 @@ async function save(lib: Library) {
   await writeJsonAtomic(libraryFile(), lib);
 }
 
-export async function touchProject(dir: string) {
-  if (!dir) return;
-  const lib = await load();
-  lib.lastUsed[keyOf(dir)] = Date.now();
-  await save(lib);
-}
-
-export async function touchChat(chatId: string, projectPath?: string | null) {
-  if (!chatId) return;
-  const lib = await load();
-  lib.chatLastUsed[chatId] = Date.now();
-  if (projectPath) lib.lastUsed[keyOf(projectPath)] = Date.now();
-  const row = lib.chats.find((c) => c.id === chatId);
-  if (row) {
-    row.lastUsedAt = Date.now();
-    row.updatedAt = Date.now();
-  }
-  await save(lib);
-}
-
-export async function chatLastUsedMap() {
-  return (await load()).chatLastUsed;
-}
-
-export async function addProject(dir: string) {
-  const resolved = path.normalize(dir);
-  const lib = await load();
-  const k = keyOf(resolved);
-  lib.removed = lib.removed.filter((x) => x !== k);
-  const existing = lib.added.find((a) => keyOf(a.path) === k);
-  if (!existing) {
-    lib.added.push({
-      path: resolved,
-      name: path.basename(resolved),
-      slug: slugFromPath(resolved),
-      addedAt: Date.now(),
-    });
-  }
-  lib.lastUsed[k] = Date.now();
-  await save(lib);
-  return resolved;
-}
-
-export async function rememberProjects(projects: CursorProject[]) {
-  if (!projects.length) return;
-  const lib = await load();
-  let changed = false;
-  for (const p of projects) {
-    if (!p.path) continue;
-    const k = keyOf(p.path);
-    if (lib.removed.includes(k)) continue;
-    if (!lib.added.some((a) => keyOf(a.path) === k)) {
-      lib.added.push({
-        path: p.path,
-        name: p.name,
-        slug: p.slug,
-        addedAt: Date.now(),
-      });
-      changed = true;
-    }
-  }
-  if (changed) await save(lib);
-}
-
-export async function rememberChats(chats: CursorChat[]) {
-  if (!chats.length) return;
-  const lib = await load();
-  const byId = new Map(lib.chats.map((c) => [c.id, c]));
-  let changed = false;
-  for (const c of chats) {
-    const prev = byId.get(c.id);
-    if (!prev) {
-      byId.set(c.id, { ...c });
-      changed = true;
-      continue;
-    }
-    if (
-      prev.title !== c.title ||
-      prev.updatedAt !== c.updatedAt ||
-      prev.projectPath !== c.projectPath ||
-      prev.size !== c.size
-    ) {
-      byId.set(c.id, { ...prev, ...c, lastUsedAt: c.lastUsedAt ?? prev.lastUsedAt });
-      changed = true;
-    }
-  }
-  if (changed) {
-    lib.chats = [...byId.values()];
+export function touchProject(dir: string) {
+  if (!dir) return Promise.resolve();
+  return withLibrary(async (lib) => {
+    lib.lastUsed[keyOf(dir)] = Date.now();
     await save(lib);
-  }
+  });
 }
 
-export async function upsertChat(chat: CursorChat) {
-  const lib = await load();
-  const i = lib.chats.findIndex((c) => c.id === chat.id);
-  if (i >= 0) lib.chats[i] = { ...lib.chats[i], ...chat };
-  else lib.chats.push(chat);
-  lib.chatLastUsed[chat.id] = chat.lastUsedAt ?? Date.now();
-  if (chat.projectPath) {
-    lib.lastUsed[keyOf(chat.projectPath)] = Date.now();
-    const k = keyOf(chat.projectPath);
-    if (!lib.removed.includes(k) && !lib.added.some((a) => keyOf(a.path) === k)) {
+export function touchChat(chatId: string, projectPath?: string | null) {
+  if (!chatId) return Promise.resolve();
+  return withLibrary(async (lib) => {
+    lib.chatLastUsed[chatId] = Date.now();
+    if (projectPath) lib.lastUsed[keyOf(projectPath)] = Date.now();
+    const row = lib.chats.find((c) => c.id === chatId);
+    if (row) {
+      row.lastUsedAt = Date.now();
+      row.updatedAt = Date.now();
+    }
+    await save(lib);
+  });
+}
+
+export function chatLastUsedMap() {
+  return withLibrary((lib) => lib.chatLastUsed);
+}
+
+export function addProject(dir: string) {
+  const resolved = path.normalize(dir);
+  return withLibrary(async (lib) => {
+    const k = keyOf(resolved);
+    lib.removed = lib.removed.filter((x) => x !== k);
+    const existing = lib.added.find((a) => keyOf(a.path) === k);
+    if (!existing) {
       lib.added.push({
-        path: chat.projectPath,
-        name: chat.projectName,
-        slug: chat.slug,
+        path: resolved,
+        name: path.basename(resolved),
+        slug: slugFromPath(resolved),
         addedAt: Date.now(),
       });
     }
-  }
-  await save(lib);
+    lib.lastUsed[k] = Date.now();
+    await save(lib);
+    return resolved;
+  });
 }
 
-export async function rememberedChats(): Promise<CursorChat[]> {
-  return (await load()).chats;
+export function rememberProjects(projects: CursorProject[]) {
+  if (!projects.length) return Promise.resolve();
+  return withLibrary(async (lib) => {
+    let changed = false;
+    for (const p of projects) {
+      if (!p.path) continue;
+      const k = keyOf(p.path);
+      if (lib.removed.includes(k)) continue;
+      if (!lib.added.some((a) => keyOf(a.path) === k)) {
+        lib.added.push({
+          path: p.path,
+          name: p.name,
+          slug: p.slug,
+          addedAt: Date.now(),
+        });
+        changed = true;
+      }
+    }
+    if (changed) await save(lib);
+  });
 }
 
-export async function lastUsedProjects() {
-  return (await load()).lastUsed;
+export function rememberChats(chats: CursorChat[]) {
+  if (!chats.length) return Promise.resolve();
+  return withLibrary(async (lib) => {
+    const byId = new Map(lib.chats.map((c) => [c.id, c]));
+    let changed = false;
+    for (const c of chats) {
+      const prev = byId.get(c.id);
+      if (!prev) {
+        byId.set(c.id, { ...c });
+        changed = true;
+        continue;
+      }
+      if (
+        prev.title !== c.title ||
+        prev.updatedAt !== c.updatedAt ||
+        prev.projectPath !== c.projectPath ||
+        prev.size !== c.size
+      ) {
+        byId.set(c.id, { ...prev, ...c, lastUsedAt: c.lastUsedAt ?? prev.lastUsedAt });
+        changed = true;
+      }
+    }
+    if (changed) {
+      lib.chats = [...byId.values()];
+      await save(lib);
+    }
+  });
 }
 
-export async function saveThread(chatId: string, messages: unknown[]) {
-  if (!chatId) return;
-  const file = threadFile(chatId);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(messages), "utf8");
+export function upsertChat(chat: CursorChat) {
+  return withLibrary(async (lib) => {
+    const i = lib.chats.findIndex((c) => c.id === chat.id);
+    if (i >= 0) lib.chats[i] = { ...lib.chats[i], ...chat };
+    else lib.chats.push(chat);
+    lib.chatLastUsed[chat.id] = chat.lastUsedAt ?? Date.now();
+    if (chat.projectPath) {
+      lib.lastUsed[keyOf(chat.projectPath)] = Date.now();
+      const k = keyOf(chat.projectPath);
+      if (!lib.removed.includes(k) && !lib.added.some((a) => keyOf(a.path) === k)) {
+        lib.added.push({
+          path: chat.projectPath,
+          name: chat.projectName,
+          slug: chat.slug,
+          addedAt: Date.now(),
+        });
+      }
+    }
+    await save(lib);
+  });
+}
+
+export function rememberedChats(): Promise<CursorChat[]> {
+  return withLibrary((lib) => lib.chats);
+}
+
+export function lastUsedProjects() {
+  return withLibrary((lib) => lib.lastUsed);
+}
+
+// One queue per chat and a temp-file rename, so overlapping saves never leave half a thread on disk.
+export function saveThread(chatId: string, messages: unknown[]) {
+  if (!chatId) return Promise.resolve();
+  return serialized(`thread:${chatId}`, () => writeJsonAtomic(threadFile(chatId), messages, false));
 }
 
 export async function loadThread(chatId: string): Promise<unknown[] | null> {
-  try {
-    const raw = JSON.parse(await fs.readFile(threadFile(chatId), "utf8"));
-    return Array.isArray(raw) ? raw : null;
-  } catch {
-    return null;
-  }
+  const raw = await serialized(`thread:${chatId}`, () => readJson(threadFile(chatId)));
+  return Array.isArray(raw) ? raw : null;
 }
 
-export async function removeProject(dir: string) {
-  const lib = await load();
-  const k = keyOf(dir);
-  if (!lib.removed.includes(k)) lib.removed.push(k);
-  lib.added = lib.added.filter((a) => keyOf(a.path) !== k);
-  await save(lib);
+export function removeProject(dir: string) {
+  return withLibrary(async (lib) => {
+    const k = keyOf(dir);
+    if (!lib.removed.includes(k)) lib.removed.push(k);
+    lib.added = lib.added.filter((a) => keyOf(a.path) !== k);
+    await save(lib);
+  });
 }
 
 export async function listLibraryProjects(): Promise<ProjectRecord[]> {
-  const lib = await load();
+  const lib = await withLibrary((l) => l);
   const removed = new Set(lib.removed.map((x) => x.toLowerCase()));
   let discovered: CursorProject[] = [];
   try {
