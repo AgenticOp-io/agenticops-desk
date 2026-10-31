@@ -24,6 +24,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 - Re-implement the CLI or call the Anthropic API directly; go through the agent SDK
 - Let folder trust answer `AskUserQuestion` or `ExitPlanMode`; the user must read those
 - Point the shell at the 0-byte WindowsApps `pwsh.exe` alias
+- Write chats, transcripts, or briefings into a project folder; they belong in `%APPDATA%\ClaudeDesk` or the prompt, never in a repo
 - Commit or push unless the user asks
 
 ## Dev instance gotcha

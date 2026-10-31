@@ -679,26 +679,14 @@ function clip(text: string, n: number) {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
 
-export function catchupPrompt(fileName: string) {
-  return `Read .claudedesk/${fileName} in this folder. It is a briefing of prior Cursor agent work. Catch up: recap what was done, the current state, and anything unfinished. Do not redo completed work. Then wait for my next instruction.`;
-}
+const BRIEFING_LIMIT = 60_000;
 
-export async function writeCatchupBriefing(
+// The briefing goes straight into the prompt. Nothing is written to the project folder, so chats never end up in a repo.
+export async function catchupBriefing(
   workspaceDir: string,
   chat?: { slug: string; id: string } | null,
-): Promise<{ file: string; title: string; fileName: string }> {
-  const dir = path.join(workspaceDir, ".claudedesk");
-  await fs.mkdir(dir, { recursive: true });
-  const parts: string[] = [
-    `# Catch-up briefing`,
-    ``,
-    `Workspace: ${workspaceDir}`,
-    `Written: ${new Date().toISOString()}`,
-    ``,
-    `The user is moving this work from Cursor into Claude Code. Treat the notes below as already-done context.`,
-    ``,
-  ];
-
+): Promise<{ title: string; prompt: string }> {
+  const parts: string[] = [];
   let title = "folder progress";
   if (chat?.slug && chat.id) {
     const detail = await readCursorChat(chat.slug, chat.id);
@@ -723,8 +711,15 @@ export async function writeCatchupBriefing(
     parts.push(``);
   }
 
-  const fileName = chat?.id ? `catchup-${chat.id}.md` : "catchup.md";
-  const file = path.join(dir, fileName);
-  await fs.writeFile(file, parts.join("\n"), "utf8");
-  return { file, title, fileName };
+  let briefing = parts.join("\n");
+  // Keep the end of a long chat: that is where the current state is.
+  if (briefing.length > BRIEFING_LIMIT) briefing = `…${briefing.slice(-BRIEFING_LIMIT)}`;
+  const prompt = [
+    `The user is moving work from Cursor into Claude Code in ${workspaceDir}. Below is a briefing of the prior Cursor agent work; treat it as already-done context.`,
+    `<briefing>`,
+    briefing,
+    `</briefing>`,
+    `Catch up: recap what was done, the current state, and anything unfinished. Do not redo completed work. Then wait for my next instruction.`,
+  ].join("\n\n");
+  return { title, prompt };
 }

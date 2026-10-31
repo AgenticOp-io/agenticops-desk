@@ -15,11 +15,10 @@ import {
   stopClaude,
 } from "./claude";
 import {
-  catchupPrompt,
+  catchupBriefing,
   listCursorChats,
   readCursorChat,
   searchWorkspaceFiles,
-  writeCatchupBriefing,
 } from "./cursor";
 import {
   addProject,
@@ -242,15 +241,15 @@ ipcMain.handle(
   ) => {
     const chat = payload?.slug && payload.id ? { slug: payload.slug, id: payload.id } : null;
     const cwd = payload?.workspace && existsSync(payload.workspace) ? payload.workspace : workspace;
-    const briefing = await writeCatchupBriefing(cwd, chat);
+    const briefing = await catchupBriefing(cwd, chat);
     const chatId = payload?.id ?? `folder-${Date.now()}`;
     runClaude({
       win,
       chatId,
       workspace: cwd,
-      prompt: catchupPrompt(briefing.fileName),
+      prompt: briefing.prompt,
     });
-    return { ...briefing, chatId };
+    return { title: briefing.title, chatId };
   },
 );
 ipcMain.handle("fs:search", (_e, query: string) => searchWorkspaceFiles(workspace, query));

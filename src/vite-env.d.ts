@@ -75,9 +75,7 @@ declare global {
       listCursorChats: (projectPath?: string) => Promise<CursorChat[]>;
       readCursorChat: (slug: string, id: string) => Promise<CursorChatDetail | null>;
       catchClaudeUp: (chat?: { slug?: string; id?: string; workspace?: string } | null) => Promise<{
-        file: string;
         title: string;
-        fileName: string;
         chatId: string;
       }>;
       touchChat: (chatId: string, projectPath?: string | null) => Promise<void>;

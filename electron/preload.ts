@@ -73,12 +73,7 @@ contextBridge.exposeInMainWorld("desk", {
   readCursorChat: (slug: string, id: string) =>
     ipcRenderer.invoke("cursor:chat", slug, id) as Promise<CursorChatDetail | null>,
   catchClaudeUp: (chat?: { slug?: string; id?: string; workspace?: string } | null) =>
-    ipcRenderer.invoke("cursor:catchup", chat) as Promise<{
-      file: string;
-      title: string;
-      fileName: string;
-      chatId: string;
-    }>,
+    ipcRenderer.invoke("cursor:catchup", chat) as Promise<{ title: string; chatId: string }>,
   touchChat: (chatId: string, projectPath?: string | null) =>
     ipcRenderer.invoke("cursor:touch", chatId, projectPath) as Promise<void>,
   upsertChat: (chat: CursorChat) => ipcRenderer.invoke("cursor:upsert", chat) as Promise<void>,
