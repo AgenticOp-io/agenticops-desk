@@ -101,6 +101,7 @@ declare global {
       upsertChat: (chat: CursorChat) => Promise<void>;
       saveThread: (chatId: string, messages: unknown[]) => Promise<void>;
       probeClaude: () => Promise<{ found: boolean; path: string; bundled: boolean }>;
+      onSetup: (cb: (text: string) => void) => () => void;
       signIn: () => Promise<boolean>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;

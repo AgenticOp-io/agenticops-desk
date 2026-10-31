@@ -30,6 +30,11 @@ import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./provid
 
 type Neutral = { name: string; description: string; properties: Record<string, unknown>; required: string[] };
 
+const WIN = process.platform === "win32";
+// The shell tool runs PowerShell on Windows and the user's shell elsewhere; approvals use the matching tool name.
+const SHELL_NAME = WIN ? "PowerShell" : "Bash";
+const OS_NAME = WIN ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux";
+
 const TOOLS: Neutral[] = [
   {
     name: "read_file",
@@ -78,7 +83,7 @@ const TOOLS: Neutral[] = [
   {
     name: "run_command",
     description:
-      "Run a PowerShell command in the project folder on Windows and return its output. Use for builds, tests, git and package managers.",
+      `Run a ${WIN ? "PowerShell" : "shell (bash)"} command in the project folder on ${OS_NAME} and return its output. Use for builds, tests, git and package managers.`,
     properties: {
       command: { type: "string" },
       timeout_seconds: { type: "integer", description: "Default 120, max 600" },
@@ -132,18 +137,25 @@ async function walk(dir: string, out: string[], max: number) {
   }
 }
 
-function shellExe(): string {
+function shellCommand(command: string): { exe: string; args: string[] } {
+  if (!WIN) {
+    const sh = process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : "/bin/bash";
+    return { exe: sh, args: ["-lc", command] };
+  }
   const store = realStorePwsh();
-  if (store) return store;
   const seven = path.join(process.env.ProgramFiles ?? "C:\\Program Files", "PowerShell", "7", "pwsh.exe");
-  return existsSync(seven) ? seven : "powershell.exe";
+  const exe = store ?? (existsSync(seven) ? seven : "powershell.exe");
+  return { exe, args: ["-NoProfile", "-NonInteractive", "-Command", command] };
 }
 
 function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn(shellExe(), ["-NoProfile", "-NonInteractive", "-Command", command], {
+    const { exe, args } = shellCommand(command);
+    const child = spawn(exe, args, {
       cwd: ctx.cwd,
       windowsHide: true,
+      // Its own process group on macOS and Linux, so stopping it also stops whatever it started.
+      detached: !WIN,
       env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
     });
     let out = "";
@@ -154,8 +166,10 @@ function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string
     child.stdout.on("data", add);
     child.stderr.on("data", add);
     const kill = () => {
+      if (!child.pid || child.exitCode !== null) return;
       try {
-        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+        if (WIN) spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }).on("error", () => child.kill());
+        else process.kill(-child.pid, "SIGKILL");
       } catch {
         child.kill();
       }
@@ -167,7 +181,7 @@ function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string
     ctx.signal.addEventListener("abort", kill, { once: true });
     child.on("error", (err) => {
       clearTimeout(timer);
-      resolve(`Could not start PowerShell: ${err.message}`);
+      resolve(`Could not start ${SHELL_NAME}: ${err.message}`);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -281,7 +295,7 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
     if (name === "run_command") {
       const command = str(input.command);
       if (!command) return { text: "command is required", error: true };
-      const denied = await allowed(ctx, "PowerShell", { command }, id);
+      const denied = await allowed(ctx, SHELL_NAME, { command }, id);
       if (denied) return { text: denied, error: true };
       const timeout = Math.min(600, Math.max(5, Number(input.timeout_seconds) || 120));
       return { text: await runShell(ctx, command, timeout) };
@@ -307,8 +321,8 @@ function toolLabel(name: string, input: Record<string, unknown>) {
 
 function systemPrompt(cwd: string, memory: string) {
   return [
-    `You are a coding agent working in the user's project at ${cwd} on Windows.`,
-    "Use the tools to read, search and edit files and to run PowerShell commands. Read a file before you edit it.",
+    `You are a coding agent working in the user's project at ${cwd} on ${OS_NAME}.`,
+    `Use the tools to read, search and edit files and to run ${WIN ? "PowerShell" : "shell"} commands. Read a file before you edit it.`,
     "Make focused changes that match the surrounding code. Run the project's tests or typecheck when they exist.",
     "When you finish, reply with a short summary of what you changed and anything left to do.",
     memory,

@@ -8,7 +8,6 @@ import { runDirect } from "./direct";
 import { parseDirectModel, providerStatus, setProvider } from "./providers";
 import {
   answerApproval,
-  bundledClaude,
   changeBase,
   changedFiles,
   findClaudeCli,
@@ -43,6 +42,7 @@ import {
   touchChat,
   upsertChat,
 } from "./library";
+import { ensureClaudeBinary } from "./claudeBinary";
 import { loadSettings, migrateSettingsIfNeeded, patchSettings, type UiPrefs } from "./settings";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -102,7 +102,30 @@ function createWindow() {
   }
 }
 
+// One ClaudeDesk per user: a second launch focuses the open window instead of sharing the same data files.
+// The lock lives in userData, so this runs after userData is set (a test copy with its own folder is separate).
+async function claimSingleInstance(): Promise<boolean> {
+  // After a dev hot restart the previous instance can still be exiting, so wait for it briefly.
+  const tries = process.env.VITE_DEV_SERVER_URL ? 25 : 1;
+  for (let i = 0; i < tries; i++) {
+    if (app.requestSingleInstanceLock()) return true;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
+app.on("second-instance", () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
 app.whenReady().then(async () => {
+  if (!(await claimSingleInstance())) {
+    app.quit();
+    return;
+  }
   await migrateLibraryIfNeeded();
   await migrateSettingsIfNeeded();
   const s = await loadSettings();
@@ -303,16 +326,44 @@ ipcMain.handle("fs:write", async (_e, filePath: string, contents: string) => {
   return true;
 });
 
-ipcMain.handle("claude:probe", () => probeClaude());
+ipcMain.handle("claude:probe", (e) =>
+  probeClaude((text) => {
+    if (!e.sender.isDestroyed()) e.sender.send("claude:setup", text);
+  }),
+);
 
-// Opens a console window running Claude Code's own sign-in, which finishes in the browser.
-ipcMain.handle("claude:login", () => {
-  const exe = bundledClaude() ?? findClaudeCli();
-  const child = spawn(process.env.ComSpec || "cmd.exe", ["/d", "/c", "start", "Claude sign-in", exe, "auth", "login"], {
-    detached: true,
-    windowsHide: false,
-    stdio: "ignore",
-  });
+function onPath(cmd: string) {
+  return (process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, cmd)));
+}
+
+// Opens a terminal running Claude Code's own sign-in, which finishes in the browser.
+ipcMain.handle("claude:login", async () => {
+  const exe = (await ensureClaudeBinary().catch(() => null)) ?? findClaudeCli();
+  let cmd: string;
+  let args: string[];
+  if (process.platform === "win32") {
+    cmd = process.env.ComSpec || "cmd.exe";
+    args = ["/d", "/c", "start", "Claude sign-in", exe, "auth", "login"];
+  } else if (process.platform === "darwin") {
+    const line = `'${exe.replace(/'/g, `'\\''`)}' auth login`;
+    cmd = "osascript";
+    args = ["-e", `tell application "Terminal" to do script ${JSON.stringify(line)}`, "-e", 'tell application "Terminal" to activate'];
+  } else {
+    const terms: Array<[string, string]> = [
+      ["x-terminal-emulator", "-e"],
+      ["gnome-terminal", "--"],
+      ["konsole", "-e"],
+      ["xfce4-terminal", "-x"],
+      ["kitty", "--"],
+      ["xterm", "-e"],
+    ];
+    const term = terms.find(([t]) => onPath(t));
+    if (!term) return false;
+    cmd = term[0];
+    args = [term[1], exe, "auth", "login"];
+  }
+  const child = spawn(cmd, args, { detached: true, windowsHide: false, stdio: "ignore" });
+  child.on("error", () => {});
   child.unref();
   return true;
 });
@@ -323,9 +374,11 @@ ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; m
 );
 
 ipcMain.handle("claude:auth", async () => {
-  const cli = bundledClaude() ?? findClaudeCli();
-  const cmd = cli.toLowerCase().endsWith(".exe") ? cli : process.env.ComSpec || "cmd.exe";
-  const args = cli.toLowerCase().endsWith(".exe") ? ["auth", "status"] : ["/d", "/s", "/c", `"${cli}" auth status`];
+  const cli = (await ensureClaudeBinary().catch(() => null)) ?? findClaudeCli();
+  // Only a Windows .cmd shim needs cmd.exe; real binaries (claude.exe, or claude on macOS/Linux) run directly.
+  const viaCmd = process.platform === "win32" && !cli.toLowerCase().endsWith(".exe");
+  const cmd = viaCmd ? process.env.ComSpec || "cmd.exe" : cli;
+  const args = viaCmd ? ["/d", "/s", "/c", `"${cli}" auth status`] : ["auth", "status"];
   return await new Promise<{ ok: boolean; raw: string }>((resolve) => {
     try {
       execFile(

@@ -1,11 +1,11 @@
 import { query, type ModelInfo, type PermissionResult, type PermissionUpdate, type Query, type SDKUserMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
+import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
 import { directModelOptions } from "./providers";
 
@@ -331,23 +331,8 @@ function toolLabel(name: string, input: unknown): string {
   return name;
 }
 
-// The agent SDK ships Claude Code as a native binary for this platform, so no separate CLI install is needed.
-// In a packaged build the binary is unpacked next to app.asar, because Windows cannot run an exe inside an archive.
-let bundledPath: string | null | undefined;
-export function bundledClaude(): string | null {
-  if (bundledPath !== undefined) return bundledPath;
-  bundledPath = null;
-  try {
-    const req = createRequire(import.meta.url);
-    const pkg = req.resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`);
-    const exe = path.join(path.dirname(pkg), process.platform === "win32" ? "claude.exe" : "claude");
-    const unpacked = exe.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-    bundledPath = existsSync(unpacked) ? unpacked : existsSync(exe) ? exe : null;
-  } catch {
-    bundledPath = null;
-  }
-  return bundledPath;
-}
+// Claude Code for this machine. A source checkout uses the copy in node_modules. A packaged
+// install downloads the matching build on first launch and checks it against npm's fingerprint.
 
 export function findClaudeCli(): string {
   const candidates = [
@@ -402,9 +387,13 @@ function killTree(child: ChildProcess) {
   child.kill();
 }
 
-export function probeClaude(): { found: boolean; path: string; bundled: boolean } {
-  const bundled = bundledClaude();
-  if (bundled) return { found: true, path: bundled, bundled: true };
+export async function probeClaude(onStatus?: (text: string) => void): Promise<{ found: boolean; path: string; bundled: boolean }> {
+  try {
+    const managed = await ensureClaudeBinary(onStatus);
+    if (managed) return { found: true, path: managed, bundled: true };
+  } catch (err) {
+    onStatus?.(err instanceof Error ? err.message : "Could not download Claude Code.");
+  }
   const p = findClaudeCli();
   const js = findClaudeJs();
   return { found: existsSync(p) || Boolean(js), path: js ?? p, bundled: false };
@@ -963,12 +952,35 @@ export function runClaude(opts: {
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
   const memory = prepareMemory(cwd);
-  const q = query({
+  void (async () => {
+    let failed = "";
+    let q: Query | undefined;
+    try {
+      let exe: string;
+      try {
+        exe = await ensureClaudeBinary((text) => {
+          send(opts.win, {
+            kind: "status",
+            running: true,
+            phase: "starting",
+            text,
+            sessionId: session.claudeSession,
+            chatId,
+          });
+        });
+      } catch (err) {
+        const js = findClaudeJs();
+        const external = findClaudeCli();
+        if (!js && !existsSync(external)) throw err;
+        exe = js ?? external;
+      }
+      if (session.abort !== abort) return;
+      q = query({
     prompt: opts.images?.length ? turnWithImages(prompt, opts.images) : prompt,
     options: {
       cwd,
       ...(opts.model ? { model: opts.model } : {}),
-      ...(bundledClaude() ? { pathToClaudeCodeExecutable: bundledClaude()! } : {}),
+      pathToClaudeCodeExecutable: exe,
       abortController: abort,
       resume: resuming ? session.claudeSession : undefined,
       permissionMode: mode,
@@ -1043,23 +1055,19 @@ export function runClaude(opts: {
         return askPermission(opts.win, chatId, session, toolName, input, toolOpts);
       },
     },
-  });
-  session.query = q;
-  if (!modelCache) {
-    void q
-      .supportedModels()
-      .then((list) => {
-        const options = toOptions(list);
-        if (!options.length) return;
-        modelCache = options;
-        send(opts.win, { kind: "models", chatId, models: listModels() });
-      })
-      .catch(() => {});
-  }
-
-  void (async () => {
-    let failed = "";
-    try {
+      });
+      session.query = q;
+      if (!modelCache) {
+        void q
+          .supportedModels()
+          .then((list) => {
+            const options = toOptions(list);
+            if (!options.length) return;
+            modelCache = options;
+            send(opts.win, { kind: "models", chatId, models: listModels() });
+          })
+          .catch(() => {});
+      }
       for await (const msg of q) {
         if (session.query !== q) return;
         parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
@@ -1078,9 +1086,14 @@ export function runClaude(opts: {
         failed = "";
       }
     } finally {
-      if (session.query !== q) {
+      if (!q || session.query !== q) {
         if (session.stopping && !session.query) {
           session.stopping = false;
+          send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
+        } else if (failed) {
+          session.abort = undefined;
+          send(opts.win, { kind: "error", text: failed, chatId, running: false });
+          patchStored(chatId, (s) => delete s.pending);
           send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
         }
         return;

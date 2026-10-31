@@ -126,6 +126,11 @@ contextBridge.exposeInMainWorld("desk", {
     ipcRenderer.on("claude:event", listener);
     return () => ipcRenderer.removeListener("claude:event", listener);
   },
+  onSetup: (cb: (text: string) => void) => {
+    const listener = (_: unknown, text: string) => cb(text);
+    ipcRenderer.on("claude:setup", listener);
+    return () => ipcRenderer.removeListener("claude:setup", listener);
+  },
   onWorkspaceChanged: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on("workspace:changed", listener);

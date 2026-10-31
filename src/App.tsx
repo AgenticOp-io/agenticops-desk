@@ -357,6 +357,7 @@ export function App() {
       } catch {
         setStatus("Could not load chats");
       }
+      const stopSetup = window.desk.onSetup((text) => setStatus(text));
       try {
         setCli(await window.desk.probeClaude());
         const auth = await window.desk.authStatus();
@@ -364,6 +365,8 @@ export function App() {
         setStatus(auth.ok ? "Claude Code signed in" : "Not signed in to Claude. Open Settings to sign in.");
       } catch {
         setAuthOk(false);
+      } finally {
+        stopSetup();
       }
     })();
   }, []);
@@ -746,7 +749,7 @@ export function App() {
     if (!cli) return "Detecting Claude Code…";
     if (!cli.found) return "Claude Code not found";
     const auth = authOk === null ? "" : authOk ? " · signed in" : " · not signed in";
-    return `Claude Code${cli.bundled ? " (built in)" : ""}${auth}`;
+    return `Claude Code${cli.bundled ? "" : " · installed CLI"}${auth}`;
   }, [cli, authOk]);
 
   const q = filter.trim().toLowerCase();
@@ -1392,7 +1395,7 @@ export function App() {
             <div className="settings-label">Claude Code</div>
             <div className="signin-row">
               <span>
-                {cli?.bundled ? "Built in" : cli?.found ? "Installed CLI" : "Not found"}
+                {cli?.bundled ? "Ready" : cli?.found ? "Installed CLI" : "Not found"}
                 {" · "}
                 {authOk === null ? "checking sign-in…" : authOk ? "signed in" : "not signed in"}
               </span>
@@ -1400,8 +1403,13 @@ export function App() {
               <button
                 className="btn"
                 onClick={() => {
-                  void window.desk.signIn();
-                  setStatus("Finish signing in in the window that opened, then come back here.");
+                  void window.desk.signIn().then((opened) =>
+                    setStatus(
+                      opened
+                        ? "Finish signing in in the window that opened, then come back here."
+                        : "No terminal app found. Run \"claude auth login\" in a terminal, then press Check.",
+                    ),
+                  );
                 }}
               >
                 {authOk ? "Sign in again" : "Sign in"}

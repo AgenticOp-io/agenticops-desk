@@ -1,0 +1,68 @@
+name: Release
+
+# Packages ClaudeDesk for Windows, macOS and Linux. The installers do not contain the
+# Claude Code binary; the app downloads the build for that computer on first launch.
+# One runner per operating system packages both chip types. Run it by hand, or push a
+# v* tag to also attach the files to a draft GitHub release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: windows, os: windows-latest, args: --win --x64 --arm64 }
+          - { label: linux, os: ubuntu-latest, args: --linux --x64 --arm64 }
+          - { label: mac, os: macos-latest, args: --mac --x64 --arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Bundle
+        # Monaco makes the bundle large; Node's default heap runs out on the runner.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npx vite build
+      - name: Package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder ${{ matrix.args }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeDesk-${{ matrix.label }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --title "ClaudeDesk ${GITHUB_REF_NAME}" --generate-notes
