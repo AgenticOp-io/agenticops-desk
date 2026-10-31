@@ -17,6 +17,7 @@ export type ApprovalRequest = {
   reason?: string;
   questions?: ApprovalQuestion[];
   canAlways?: boolean;
+  remember?: boolean;
 };
 
 export type ClaudeEvent = {
@@ -88,6 +89,7 @@ declare global {
         prompt: string;
         resume?: boolean;
         permissionMode?: string;
+        history?: Array<{ role: string; text: string }>;
         chatId: string;
         workspace?: string;
       }) => Promise<boolean>;

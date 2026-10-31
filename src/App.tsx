@@ -613,9 +613,14 @@ export function App() {
     setPrompt("");
     setProgressByChat((p) => ({ ...p, [chat.id]: { status: "Starting…", steps: [], phase: "starting" } }));
     markUsed(chat.id, chat.projectPath || workspace);
+    const history = nextMsgs
+      .slice(0, -1)
+      .filter((m) => (m.role === "user" || m.role === "assistant") && m.text.trim())
+      .map((m) => ({ role: m.role, text: m.text }));
     await window.desk.runClaude({
       prompt: text,
       resume,
+      history,
       chatId: chat.id,
       workspace: chat.projectPath || workspace,
     });
@@ -1071,7 +1076,7 @@ export function App() {
               {msgs.length === 0 && (
                 <div className="bubble system">
                   Click a project to open its last-used chat, or pick any past chat to read it.
-                  Catch Claude up and Send run on this chat only — other chats can keep running.
+                  Send continues this chat. Other chats can keep running.
                 </div>
               )}
               {msgs.map((m, i) => (
@@ -1095,7 +1100,7 @@ export function App() {
                   if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                   if (e.ctrlKey || e.metaKey) {
                     e.preventDefault();
-                    void send(false);
+                    void send();
                     return;
                   }
                   if (e.shiftKey) return;
@@ -1106,19 +1111,16 @@ export function App() {
                   const after = el.value.slice(el.selectionEnd);
                   if (before.endsWith("\n") && after.trim() === "") {
                     e.preventDefault();
-                    void send(false);
+                    void send();
                   }
                 }}
               />
               <div className="row">
-                <button className="btn primary" disabled={running} onClick={() => void catchUp()}>
+                <button className="btn" disabled={running} onClick={() => void catchUp()}>
                   {running ? "Running…" : "Catch Claude up"}
                 </button>
-                <button className="btn" disabled={running} onClick={() => void send(false)}>
+                <button className="btn primary" disabled={running} onClick={() => void send()}>
                   Send
-                </button>
-                <button className="btn" disabled={running} onClick={() => void send(true)}>
-                  Continue
                 </button>
                 <button
                   className="btn danger"

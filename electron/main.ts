@@ -332,6 +332,7 @@ ipcMain.handle(
       prompt: string;
       resume?: boolean;
       permissionMode?: string;
+      history?: Array<{ role: string; text: string }>;
       chatId: string;
       workspace?: string;
     },
@@ -344,6 +345,7 @@ ipcMain.handle(
       prompt: payload.prompt,
       resume: payload.resume,
       permissionMode: payload.permissionMode,
+      history: payload.history,
     });
     return true;
   },

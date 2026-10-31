@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow } from "electron";
+import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
+import { prepareMemory } from "./memory";
 
 export type ApprovalQuestion = {
   question: string;
@@ -20,6 +22,7 @@ export type ApprovalRequest = {
   reason?: string;
   questions?: ApprovalQuestion[];
   canAlways?: boolean;
+  remember?: boolean;
 };
 
 export type ApprovalDecision = {
@@ -58,6 +61,8 @@ type PendingApproval = {
   toolName: string;
   input: Record<string, unknown>;
   suggestions?: PermissionUpdate[];
+  gate: "trust" | "risk" | "question";
+  risks?: string[];
   settled?: boolean;
   resolve: (result: PermissionResult) => void;
 };
@@ -213,11 +218,18 @@ function askPermission(
   const questions =
     toolName === "AskUserQuestion" && Array.isArray(input.questions) ? (input.questions as ApprovalQuestion[]) : undefined;
   const description = typeof input.description === "string" ? input.description : undefined;
+  const gate = permissionGate(session.workspace, toolName, input);
+  if (!gate.ask) return Promise.resolve({ behavior: "allow", updatedInput: input });
+  const summary = gate.kind === "question" ? options.title || approvalSummary(toolName, input) : gate.summary;
+  const reason =
+    gate.kind === "question" ? options.decisionReason || options.description || description : gate.note;
   return new Promise((resolve) => {
     session.approvals.set(requestId, {
       toolName,
       input,
       suggestions: options.suggestions,
+      gate: gate.kind,
+      risks: gate.kind === "risk" ? gate.risks : undefined,
       resolve,
     });
     send(win, {
@@ -229,11 +241,11 @@ function askPermission(
       approval: {
         requestId,
         toolName,
-        summary: options.title || approvalSummary(toolName, input),
+        summary,
         detail: questions ? "" : approvalDetail(toolName, input),
-        reason: options.decisionReason || options.description || description,
+        reason,
         questions,
-        canAlways: !questions && !options.suppressAlwaysAllowRule && Boolean(options.suggestions?.length),
+        canAlways: gate.kind === "question" && !options.suppressAlwaysAllowRule && Boolean(options.suggestions?.length),
       },
     });
     sendPhase(win, chatId, session, "approval", `Needs permission: ${toolLabel(toolName, input)}`);
@@ -256,6 +268,8 @@ export function answerApproval(
   const session = sessions.get(chatId);
   const pending = session?.approvals.get(requestId);
   if (!session || !pending) return false;
+  if (decision.allow && pending.gate === "trust") trustWorkspace(session.workspace);
+  if (decision.allow && pending.gate === "risk") rememberRisks(session.workspace, pending.risks ?? []);
   const result: PermissionResult = decision.allow
     ? {
         behavior: "allow",
@@ -702,7 +716,8 @@ export function runClaude(opts: {
   const session = sessionFor(chatId);
   if (session.child || session.query || session.abort) stopClaude(opts.win, chatId);
 
-  const resuming = Boolean(opts.resume && session.claudeSession);
+  // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
+  const resuming = Boolean(session.claudeSession);
   const prompt = resuming ? opts.prompt : withHistory(opts.prompt, opts.history);
   // A CLI session lives under the folder it started in, so resume it there.
   const cwd =
@@ -749,6 +764,7 @@ export function runClaude(opts: {
     ...(bash ? { CLAUDE_CODE_GIT_BASH_PATH: bash } : {}),
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
+  const memory = prepareMemory(cwd);
   const q = query({
     prompt,
     options: {
@@ -758,7 +774,8 @@ export function runClaude(opts: {
       permissionMode: mode,
       permissionPrompts: "host",
       includePartialMessages: true,
-      systemPrompt: { type: "preset", preset: "claude_code" },
+      systemPrompt: { type: "preset", preset: "claude_code", append: memory.append, snapshot: false },
+      ...(memory.directories.length ? { additionalDirectories: memory.directories } : {}),
       tools: { type: "preset", preset: "claude_code" },
       ...(skipStorePwsh ? { disallowedTools: ["PowerShell"] } : {}),
       hooks: {

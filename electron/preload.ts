@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld("desk", {
     prompt: string;
     resume?: boolean;
     permissionMode?: string;
+    history?: Array<{ role: string; text: string }>;
     chatId: string;
     workspace?: string;
   }) => ipcRenderer.invoke("claude:run", payload) as Promise<boolean>,
