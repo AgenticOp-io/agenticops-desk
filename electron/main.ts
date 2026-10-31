@@ -6,10 +6,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerApproval,
+  changeBase,
+  changedFiles,
   findClaudeCli,
+  keepChanges,
+  listModels,
   pendingRuns,
   probeClaude,
   resumePendingRun,
+  revertChanges,
   runClaude,
   shutdownClaude,
   stopClaude,
@@ -334,6 +339,8 @@ ipcMain.handle(
       history?: Array<{ role: string; text: string }>;
       chatId: string;
       workspace?: string;
+      model?: string;
+      images?: Array<{ mediaType: string; data: string; name?: string }>;
     },
   ) => {
     const cwd = payload.workspace && existsSync(payload.workspace) ? payload.workspace : workspace;
@@ -345,10 +352,52 @@ ipcMain.handle(
       resume: payload.resume,
       permissionMode: payload.permissionMode,
       history: payload.history,
+      model: typeof payload.model === "string" && /^[\w.\-[\]]{1,80}$/.test(payload.model) ? payload.model : undefined,
+      images: Array.isArray(payload.images)
+        ? payload.images
+            .filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i?.mediaType) && typeof i.data === "string")
+            .slice(0, 10)
+        : undefined,
     });
     return true;
   },
 );
+
+ipcMain.handle("claude:models", () => listModels());
+ipcMain.handle("claude:changes", (_e, chatId: string) => changedFiles(chatId));
+ipcMain.handle("claude:changeBase", (_e, chatId: string, filePath: string) => changeBase(chatId, filePath));
+ipcMain.handle("claude:revert", (_e, chatId: string, paths?: string[]) => revertChanges(win, chatId, paths));
+ipcMain.handle("claude:keep", (_e, chatId: string, paths?: string[]) => keepChanges(win, chatId, paths));
+
+// Explorer actions only touch paths inside the open folder.
+function insideWorkspace(target: string) {
+  const rel = path.relative(workspace, path.resolve(target));
+  return Boolean(rel) && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+ipcMain.handle("fs:create", async (_e, target: string, isDir: boolean) => {
+  if (!insideWorkspace(target)) throw new Error("Only files inside the open folder can be created.");
+  if (existsSync(target)) throw new Error(`${path.basename(target)} already exists.`);
+  if (isDir) await fs.mkdir(target, { recursive: true });
+  else {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "", { encoding: "utf8", flag: "wx" });
+  }
+  return true;
+});
+
+ipcMain.handle("fs:rename", async (_e, from: string, to: string) => {
+  if (!insideWorkspace(from) || !insideWorkspace(to)) throw new Error("Only files inside the open folder can be renamed.");
+  if (existsSync(to) && from.toLowerCase() !== to.toLowerCase()) throw new Error(`${path.basename(to)} already exists.`);
+  await fs.rename(from, to);
+  return true;
+});
+
+ipcMain.handle("fs:delete", async (_e, target: string) => {
+  if (!insideWorkspace(target)) throw new Error("Only files inside the open folder can be deleted.");
+  await shell.trashItem(target);
+  return true;
+});
 
 ipcMain.handle("claude:stop", (_e, chatId?: string) => {
   stopClaude(win, chatId);

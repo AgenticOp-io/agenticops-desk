@@ -1,9 +1,9 @@
-import { query, type PermissionResult, type PermissionUpdate, type Query, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
+import { query, type ModelInfo, type PermissionResult, type PermissionUpdate, type Query, type SDKUserMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { prepareMemory } from "./memory";
 
@@ -42,7 +42,13 @@ export type ClaudeEvent = {
     | "approval"
     | "approval_done"
     | "error"
-    | "done";
+    | "done"
+    | "changes"
+    | "usage"
+    | "models";
+  files?: string[];
+  usage?: UsageInfo;
+  models?: ModelOption[];
   text?: string;
   detail?: string;
   id?: string;
@@ -53,6 +59,10 @@ export type ClaudeEvent = {
   phase?: RunPhase;
   chatId?: string;
 };
+
+export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type ModelOption = { value: string; displayName: string; description?: string };
+export type ImageAttachment = { mediaType: string; data: string; name?: string };
 
 // What the CLI is doing right now, so the UI can tell thinking apart from tool work and writing.
 export type RunPhase = "starting" | "thinking" | "tool" | "writing" | "pushing" | "approval";
@@ -92,6 +102,11 @@ type Session = {
   stderr?: string;
   // A background run that saves memories from this chat; never shown in the chat itself.
   reflector?: ChildProcess;
+  // Files Claude edited in this chat, keyed by lower-case path, with their contents before the first edit
+  // (null when Claude created the file). Cleared when the user keeps or undoes them.
+  changes: Map<string, { path: string; before: string | null }>;
+  // Prompt tokens on the latest main-agent turn, i.e. how full the context is.
+  lastContext?: number;
 };
 
 // What survives a restart: the CLI session to resume, and any run that was cut off mid-flight.
@@ -153,6 +168,7 @@ function sessionFor(chatId: string): Session {
       workspace: stored?.workspace,
       approvals: new Map(),
       decisions: new Map(),
+      changes: new Map(),
     };
     sessions.set(chatId, session);
   }
@@ -453,6 +469,11 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       return;
     }
     if (type === "assistant") {
+      const usage = (msg.message as { usage?: Record<string, number> } | undefined)?.usage;
+      if (usage && !msg.parent_tool_use_id) {
+        session.lastContext =
+          (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+      }
       const content = (msg.message as {
         content?: Array<{ type?: string; text?: string; name?: string; id?: string; input?: unknown }>;
       } | undefined)?.content;
@@ -558,11 +579,154 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       // The result repeats the final assistant text; only show it if nothing streamed.
       if (result && !err && !session.sawText) send(win, { kind: "line", text: result, sessionId, chatId, running: true });
       if (err && result) send(win, { kind: "error", text: result, sessionId, chatId, running: true });
+      const usage = runUsage(msg, session);
+      if (usage) send(win, { kind: "usage", usage, chatId, running: true });
       return;
     }
   } catch {
     send(win, { kind: "line", text: trimmed, chatId, running: true });
   }
+}
+
+type ModelUsageRow = { contextWindow?: number; costUSD?: number };
+
+function runUsage(msg: Record<string, unknown>, session: Session): UsageInfo | null {
+  const cost = typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0;
+  const rows = Object.entries((msg.modelUsage ?? {}) as Record<string, ModelUsageRow>);
+  if (!rows.length && !cost) return null;
+  // The model that cost the most is the one doing the work; helper calls use cheaper models.
+  const main = [...rows].sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0))[0];
+  const usage = (msg.usage ?? {}) as Record<string, number>;
+  const fallback =
+    (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  return {
+    costUsd: cost,
+    contextTokens: session.lastContext ?? fallback,
+    contextWindow: main?.[1].contextWindow ?? Math.max(0, ...rows.map(([, r]) => r.contextWindow ?? 0)),
+    model: main?.[0],
+  };
+}
+
+const SNAPSHOT_LIMIT = 5_000_000;
+
+// Called before Claude's file tools run: remember what the file looked like the first time this chat touches it.
+function snapshotFile(win: BrowserWindow | null, chatId: string, session: Session, cwd: string, input: unknown) {
+  const rec = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const raw = rec.file_path ?? rec.notebook_path;
+  if (typeof raw !== "string" || !raw) return;
+  const file = path.resolve(cwd, raw);
+  const key = file.toLowerCase();
+  if (session.changes.has(key)) return;
+  let before: string | null = null;
+  try {
+    if (existsSync(file)) {
+      if (statSync(file).size > SNAPSHOT_LIMIT) return;
+      before = readFileSync(file, "utf8");
+    }
+  } catch {
+    return;
+  }
+  session.changes.set(key, { path: file, before });
+  sendChanges(win, chatId, session);
+}
+
+function readOrNull(file: string): string | null {
+  try {
+    return existsSync(file) ? readFileSync(file, "utf8") : null;
+  } catch {
+    return null;
+  }
+}
+
+// Drop files that ended up unchanged (a denied edit, or an edit Claude reverted itself).
+function pruneChanges(session: Session) {
+  for (const [key, entry] of session.changes) {
+    if (readOrNull(entry.path) === entry.before) session.changes.delete(key);
+  }
+}
+
+function sendChanges(win: BrowserWindow | null, chatId: string, session: Session) {
+  send(win, { kind: "changes", chatId, files: [...session.changes.values()].map((c) => c.path) });
+}
+
+export function changedFiles(chatId: string): string[] {
+  const session = sessions.get(chatId);
+  if (!session) return [];
+  if (!session.query) pruneChanges(session);
+  return [...session.changes.values()].map((c) => c.path);
+}
+
+export function changeBase(chatId: string, filePath: string): string | null {
+  return sessions.get(chatId)?.changes.get(path.resolve(filePath).toLowerCase())?.before ?? null;
+}
+
+function pick(session: Session, paths?: string[]) {
+  const wanted = paths?.length ? new Set(paths.map((p) => path.resolve(p).toLowerCase())) : null;
+  return [...session.changes.entries()].filter(([key]) => !wanted || wanted.has(key));
+}
+
+export function keepChanges(win: BrowserWindow | null, chatId: string, paths?: string[]): string[] {
+  const session = sessions.get(chatId);
+  if (!session) return [];
+  for (const [key] of pick(session, paths)) session.changes.delete(key);
+  sendChanges(win, chatId, session);
+  return [...session.changes.values()].map((c) => c.path);
+}
+
+// Put files back the way they were before Claude touched them. Files Claude created go to the Recycle Bin.
+export async function revertChanges(win: BrowserWindow | null, chatId: string, paths?: string[]): Promise<string[]> {
+  const session = sessions.get(chatId);
+  if (!session) return [];
+  for (const [key, entry] of pick(session, paths)) {
+    try {
+      if (entry.before === null) {
+        if (existsSync(entry.path)) await shell.trashItem(entry.path);
+      } else {
+        mkdirSync(path.dirname(entry.path), { recursive: true });
+        writeFileSync(entry.path, entry.before, "utf8");
+      }
+      session.changes.delete(key);
+    } catch (err) {
+      console.error("ClaudeDesk could not undo", entry.path, err);
+    }
+  }
+  sendChanges(win, chatId, session);
+  return [...session.changes.values()].map((c) => c.path);
+}
+
+let modelCache: ModelOption[] | null = null;
+const FALLBACK_MODELS: ModelOption[] = [
+  { value: "opus", displayName: "Opus" },
+  { value: "sonnet", displayName: "Sonnet" },
+  { value: "haiku", displayName: "Haiku" },
+];
+
+export function listModels(): ModelOption[] {
+  return modelCache ?? FALLBACK_MODELS;
+}
+
+function toOptions(list: ModelInfo[]): ModelOption[] {
+  return list
+    .filter((m) => m.value && m.value !== "default")
+    .map((m) => ({ value: m.value, displayName: m.displayName || m.value, description: m.description }));
+}
+
+// One user turn with images. A string prompt cannot carry images, so the SDK gets a one-message stream.
+async function* turnWithImages(text: string, images: ImageAttachment[]): AsyncGenerator<SDKUserMessage> {
+  yield {
+    type: "user",
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content: [
+        ...images.map((img) => ({
+          type: "image" as const,
+          source: { type: "base64" as const, media_type: img.mediaType as "image/png", data: img.data },
+        })),
+        { type: "text" as const, text },
+      ],
+    },
+  } as SDKUserMessage;
 }
 
 function endRun(session: Session) {
@@ -711,6 +875,8 @@ export function runClaude(opts: {
   resume?: boolean;
   permissionMode?: string;
   history?: HistoryMsg[];
+  model?: string;
+  images?: ImageAttachment[];
 }) {
   const chatId = opts.chatId;
   const session = sessionFor(chatId);
@@ -766,9 +932,10 @@ export function runClaude(opts: {
   };
   const memory = prepareMemory(cwd);
   const q = query({
-    prompt,
+    prompt: opts.images?.length ? turnWithImages(prompt, opts.images) : prompt,
     options: {
       cwd,
+      ...(opts.model ? { model: opts.model } : {}),
       abortController: abort,
       resume: resuming ? session.claudeSession : undefined,
       permissionMode: mode,
@@ -815,6 +982,16 @@ export function runClaude(opts: {
               },
             ],
           },
+          {
+            // Record each file before Claude's first edit so the user can review the diff and undo it.
+            matcher: "Edit|Write|MultiEdit|NotebookEdit",
+            hooks: [
+              async (input) => {
+                if (input.hook_event_name === "PreToolUse") snapshotFile(opts.win, chatId, session, cwd, input.tool_input);
+                return {};
+              },
+            ],
+          },
         ],
       },
       env,
@@ -835,6 +1012,17 @@ export function runClaude(opts: {
     },
   });
   session.query = q;
+  if (!modelCache) {
+    void q
+      .supportedModels()
+      .then((list) => {
+        const options = toOptions(list);
+        if (!options.length) return;
+        modelCache = options;
+        send(opts.win, { kind: "models", chatId, models: options });
+      })
+      .catch(() => {});
+  }
 
   void (async () => {
     let failed = "";
@@ -869,6 +1057,8 @@ export function runClaude(opts: {
       session.child = null;
       if (shuttingDown) return;
       dropApprovals(opts.win, chatId, session);
+      pruneChanges(session);
+      sendChanges(opts.win, chatId, session);
       if (failed) {
         send(opts.win, { kind: "error", text: failed, chatId, running: false });
       }

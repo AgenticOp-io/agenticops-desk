@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { CodePane } from "./CodePane";
+import { ChangesBar } from "./ChangesBar";
+import { CodePane, type DiffView } from "./CodePane";
+import { Composer, type ComposerHandle } from "./Composer";
+import { Explorer } from "./Explorer";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
-import type { ApprovalRequest, ClaudeEvent, CursorChat, CursorProject, RunPhase } from "./vite-env";
+import type { ApprovalRequest, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, RunPhase, UsageInfo } from "./vite-env";
 
 type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string };
 type DragPayload = { kind: "project" | "chat"; key?: string; id?: string };
@@ -81,55 +84,6 @@ function Chevron({ open }: { open: boolean }) {
         />
       </svg>
     </span>
-  );
-}
-
-function FileNode({
-  entry,
-  depth,
-  active,
-  refreshKey,
-  onOpen,
-}: {
-  entry: Entry;
-  depth: number;
-  active: string | null;
-  refreshKey: number;
-  onOpen: (e: Entry) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [kids, setKids] = useState<Entry[] | null>(null);
-
-  useEffect(() => {
-    if (!entry.isDir || !open) return;
-    void window.desk.listDir(entry.path).then(setKids);
-  }, [entry.isDir, entry.path, open, refreshKey]);
-
-  return (
-    <>
-      <div
-        className={`tree-item ${active === entry.path ? "active" : ""}`}
-        style={{ ["--depth" as string]: depth }}
-        onClick={() => {
-          if (entry.isDir) setOpen((v) => !v);
-          else onOpen(entry);
-        }}
-      >
-        {entry.isDir ? <Chevron open={open} /> : <span className="file-dot">·</span>}
-        <span>{entry.name}</span>
-      </div>
-      {open &&
-        kids?.map((k) => (
-          <FileNode
-            key={k.path}
-            entry={k}
-            depth={depth + 1}
-            active={active}
-            refreshKey={refreshKey}
-            onOpen={onOpen}
-          />
-        ))}
-    </>
   );
 }
 
@@ -234,13 +188,21 @@ export function App() {
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
-  const [showFiles, setShowFiles] = useState(false);
+  const [sideView, setSideView] = useState<"chats" | "files">(() =>
+    localStorage.getItem("claudedesk.sideView") === "files" ? "files" : "chats",
+  );
+  const [mode, setMode] = useState(() => localStorage.getItem("claudedesk.mode") || "default");
+  const [model, setModel] = useState(() => localStorage.getItem("claudedesk.model") || "");
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [usageByChat, setUsageByChat] = useState<Record<string, UsageInfo>>({});
+  const [changesByChat, setChangesByChat] = useState<Record<string, string[]>>({});
+  const [diff, setDiff] = useState<DiffView | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   const [quickQuery, setQuickQuery] = useState("");
   const [quickHits, setQuickHits] = useState<Array<{ name: string; path: string; rel: string }>>([]);
   const [quickIndex, setQuickIndex] = useState(0);
   const [pendingApprovals, setPendingApprovals] = useState<Array<ApprovalRequest & { chatId: string }>>([]);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<ComposerHandle>(null);
   const quickRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
@@ -282,7 +244,9 @@ export function App() {
   const reloadOpenFile = async () => {
     const current = tabsRef.current.find((t) => t.path === activeRef.current);
     if (!current || current.dirty) return;
-    const text = await window.desk.readFile(current.path);
+    // The file may have been moved or deleted outside the editor; keep the tab as it was.
+    const text = await window.desk.readFile(current.path).catch(() => null);
+    if (text === null) return;
     setTabs((all) => all.map((t) => (t.path === current.path ? { ...t, contents: text } : t)));
   };
 
@@ -430,6 +394,13 @@ export function App() {
         }));
         if (activeChatRef.current?.id === chatId) setStatus(card.summary);
       }
+      if (ev.kind === "changes") {
+        setChangesByChat((c) => ({ ...c, [chatId]: ev.files ?? [] }));
+      }
+      if (ev.kind === "usage" && ev.usage) {
+        // Each run reports its own cost; add them up so the meter shows the chat's total since launch.
+        setUsageByChat((u) => ({ ...u, [chatId]: { ...ev.usage!, costUsd: (u[chatId]?.costUsd ?? 0) + ev.usage!.costUsd } }));
+      }
       if (ev.kind === "approval_done") {
         setPendingApprovals((list) => list.filter((a) => a.requestId !== ev.id));
       }
@@ -532,8 +503,36 @@ export function App() {
     return () => clearTimeout(t);
   }, [quickOpen, quickQuery]);
 
+  useEffect(() => localStorage.setItem("claudedesk.sideView", sideView), [sideView]);
+  useEffect(() => localStorage.setItem("claudedesk.mode", mode), [mode]);
+  useEffect(() => localStorage.setItem("claudedesk.model", model), [model]);
+
+  useEffect(() => {
+    void window.desk.listModels().then((list) => {
+      if (list.length) setModels(list);
+    });
+    return window.desk.onClaudeEvent((ev) => {
+      if (ev.kind === "models" && ev.models?.length) setModels(ev.models);
+    });
+  }, []);
+
+  // Changes live in the main process, so a chat opened later still shows what Claude changed in it.
+  const activeChatId = activeChat?.id;
+  useEffect(() => {
+    if (!activeChatId) return;
+    setDiff(null);
+    void window.desk.changedFiles(activeChatId).then((files) =>
+      setChangesByChat((c) => ({ ...c, [activeChatId]: files })),
+    );
+  }, [activeChatId]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        setSideView((v) => (v === "files" ? "chats" : "files"));
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         composerRef.current?.focus();
@@ -558,6 +557,7 @@ export function App() {
     const existing = tabsRef.current.find((t) => t.path === filePath);
     patchPrefs({ showCode: true });
     setSnippetId(null);
+    setDiff(null);
     if (existing) {
       setActivePath(filePath);
       return;
@@ -568,9 +568,6 @@ export function App() {
     setActivePath(filePath);
   };
 
-  const openEntry = async (entry: Entry) => {
-    await openFilePath(entry.path);
-  };
 
   const saveTab = async (filePath: string) => {
     const tab = tabsRef.current.find((t) => t.path === filePath);
@@ -640,10 +637,11 @@ export function App() {
     markUsed(id, workspace);
   };
 
-  const send = async (resume = false) => {
-    const text = prompt.trim();
+  const send = async (extra: { images: ImageAttachment[]; mentions: string[] } = { images: [], mentions: [] }) => {
+    const typed = prompt.trim();
     const chat = activeChat;
-    if (!text || !chat || runningByChat[chat.id]) return;
+    if ((!typed && !extra.images.length) || !chat || runningByChat[chat.id]) return;
+    const text = typed || "(see attached image)";
     persistIds.current.add(chat.id);
     const titled =
       chat.title === "New agent" || chat.title === "Untitled chat"
@@ -652,7 +650,10 @@ export function App() {
     setActiveChat(titled);
     setChats((all) => all.map((c) => (c.id === chat.id ? titled : c)));
     void window.desk.upsertChat(titled);
-    const nextMsgs = [...(threadsRef.current[chat.id] ?? []), { role: "user" as const, text }];
+    const shown = extra.images.length
+      ? `${text}\n\n*${extra.images.length} image${extra.images.length === 1 ? "" : "s"} attached*`
+      : text;
+    const nextMsgs = [...(threadsRef.current[chat.id] ?? []), { role: "user" as const, text: shown }];
     setThreads((t) => ({ ...t, [chat.id]: nextMsgs }));
     void window.desk.saveThread(chat.id, nextMsgs);
     setPrompt("");
@@ -662,13 +663,61 @@ export function App() {
       .slice(0, -1)
       .filter((m) => (m.role === "user" || m.role === "assistant") && m.text.trim())
       .map((m) => ({ role: m.role, text: m.text }));
+    // @-mentioned files go to Claude as absolute paths it can open with Read.
+    const promptText = extra.mentions.length
+      ? `${text}\n\nFiles the user referenced with @:\n${extra.mentions.map((p) => `- ${p}`).join("\n")}`
+      : text;
     await window.desk.runClaude({
-      prompt: text,
-      resume,
+      prompt: promptText,
       history,
       chatId: chat.id,
       workspace: chat.projectPath || workspace,
+      permissionMode: mode,
+      model: model || undefined,
+      images: extra.images.length ? extra.images : undefined,
     });
+  };
+
+  const activeChanges = activeChat ? changesByChat[activeChat.id] ?? [] : [];
+
+  const openReview = async (filePath: string) => {
+    const chat = activeChat;
+    if (!chat) return;
+    const before = await window.desk.changeBase(chat.id, filePath);
+    const after = await window.desk.readFile(filePath).catch(() => "");
+    patchPrefs({ showCode: true });
+    setDiff({ path: filePath, before: before ?? "", after, created: before === null });
+  };
+
+  const afterChangeAction = async (chatId: string, remaining: string[]) => {
+    setChangesByChat((c) => ({ ...c, [chatId]: remaining }));
+    const keep = new Set(remaining.map((p) => p.toLowerCase()));
+    if (diff && !keep.has(diff.path.toLowerCase())) {
+      const next = remaining[0];
+      if (next) void openReview(next);
+      else setDiff(null);
+    }
+    const ws = workspaceRef.current;
+    if (ws) void refreshTree(ws);
+    // Reload clean tabs so an undo shows up in the editor right away.
+    for (const t of tabsRef.current) {
+      if (t.dirty) continue;
+      const text = await window.desk.readFile(t.path).catch(() => null);
+      if (text !== null) setTabs((all) => all.map((x) => (x.path === t.path && !x.dirty ? { ...x, contents: text } : x)));
+    }
+  };
+
+  const keepChanges = async (paths?: string[]) => {
+    const chat = activeChat;
+    if (!chat) return;
+    await afterChangeAction(chat.id, await window.desk.keepChanges(chat.id, paths));
+  };
+
+  const undoChanges = async (paths?: string[]) => {
+    const chat = activeChat;
+    if (!chat) return;
+    await afterChangeAction(chat.id, await window.desk.revertChanges(chat.id, paths));
+    setStatus(paths?.length === 1 ? `Undid Claude's changes to ${baseName(paths[0])}` : "Undid Claude's changes");
   };
 
   const catchUp = async () => {
@@ -875,6 +924,60 @@ export function App() {
 
       <div className="workspace">
         <aside className="sidebar">
+          <div className="side-switch">
+            <button
+              type="button"
+              className={sideView === "chats" ? "on" : ""}
+              onClick={() => setSideView("chats")}
+            >
+              Chats
+            </button>
+            <button
+              type="button"
+              className={sideView === "files" ? "on" : ""}
+              onClick={() => setSideView("files")}
+              title="Ctrl+Shift+E"
+            >
+              Files
+            </button>
+          </div>
+          {sideView === "files" ? (
+            <Explorer
+              root={workspace}
+              roots={roots}
+              active={activePath}
+              changed={activeChanges}
+              refreshKey={treeKey}
+              onRefresh={() => void refreshTree(workspace)}
+              onOpen={(p) => void openFilePath(p)}
+              onMoved={(from, to) => {
+                const under = (p: string) => {
+                  const a = p.toLowerCase();
+                  const b = from.toLowerCase();
+                  return a === b || a.startsWith(`${b}\\`) || a.startsWith(`${b}/`);
+                };
+                setTabs((all) =>
+                  to === null
+                    ? all.filter((t) => !under(t.path))
+                    : all.map((t) => {
+                        if (!under(t.path)) return t;
+                        const moved = to + t.path.slice(from.length);
+                        return { ...t, path: moved, name: baseName(moved) };
+                      }),
+                );
+                setActivePath((cur) =>
+                  cur && under(cur) ? (to === null ? null : to + cur.slice(from.length)) : cur,
+                );
+              }}
+              onMention={(p) => {
+                const rel = workspace && p.toLowerCase().startsWith(workspace.toLowerCase())
+                  ? p.slice(workspace.length).replace(/^[\\/]+/, "")
+                  : p;
+                composerRef.current?.addMention(p, rel);
+              }}
+            />
+          ) : (
+          <>
           <div className="pane-head">
             Projects
             <span className="pane-actions">
@@ -1053,26 +1156,11 @@ export function App() {
               </div>
             )}
           </div>
+          </>
+          )}
           <button className="settings-item" onClick={() => setShowSettings(true)}>
             Settings
           </button>
-          <button className="files-toggle" onClick={() => setShowFiles((v) => !v)}>
-            {showFiles ? "Hide files" : "Files"}
-          </button>
-          {showFiles && (
-            <div className="tree files-tree">
-              {roots.map((e) => (
-                <FileNode
-                  key={e.path}
-                  entry={e}
-                  depth={0}
-                  active={activePath}
-                  refreshKey={treeKey}
-                  onOpen={(n) => void openEntry(n)}
-                />
-              ))}
-            </div>
-          )}
         </aside>
 
         <section
@@ -1086,11 +1174,19 @@ export function App() {
               snippets={snippets}
               snippetId={snippetId}
               workspace={workspace}
+              diff={diff}
+              onDiffKeep={(p) => void keepChanges([p])}
+              onDiffUndo={(p) => void undoChanges([p])}
+              onDiffClose={() => setDiff(null)}
               onSelectFile={(p) => {
+                setDiff(null);
                 setSnippetId(null);
                 setActivePath(p);
               }}
-              onSelectSnippet={setSnippetId}
+              onSelectSnippet={(id) => {
+                setDiff(null);
+                setSnippetId(id);
+              }}
               onCloseFile={closeTab}
               onChangeFile={(p, contents) =>
                 setTabs((all) => all.map((t) => (t.path === p ? { ...t, contents, dirty: true } : t)))
@@ -1144,49 +1240,29 @@ export function App() {
               ))}
               <div ref={bottomRef} />
             </div>
-            <div className="composer">
-              <textarea
-                ref={composerRef}
-                placeholder="Message Claude Code…"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-                  if (e.ctrlKey || e.metaKey) {
-                    e.preventDefault();
-                    void send();
-                    return;
-                  }
-                  if (e.shiftKey) return;
-                  // Enter on an empty trailing line (i.e. a second Enter in a row) sends;
-                  // otherwise let the textarea insert a newline.
-                  const el = e.currentTarget;
-                  const before = el.value.slice(0, el.selectionStart);
-                  const after = el.value.slice(el.selectionEnd);
-                  if (before.endsWith("\n") && after.trim() === "") {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-              />
-              <div className="row">
-                <button className="btn" disabled={running} onClick={() => void catchUp()}>
-                  {running ? "Running…" : "Catch Claude up"}
-                </button>
-                <button className="btn primary" disabled={running} onClick={() => void send()}>
-                  Send
-                </button>
-                <button
-                  className="btn danger"
-                  onClick={() => void window.desk.stopClaude(activeChat?.id)}
-                >
-                  Stop
-                </button>
-                <span className="grow" />
-                <span className="hint">Enter twice or Ctrl+Enter send · Ctrl+P files</span>
-              </div>
-            </div>
-          </div>
+            <ChangesBar
+              files={activeChanges}
+              workspace={activeChat?.projectPath || workspace}
+              reviewing={diff?.path ?? null}
+              onReview={(p) => void openReview(p)}
+              onKeep={(paths) => void keepChanges(paths)}
+              onUndo={(paths) => void undoChanges(paths)}
+            />
+            <Composer
+              ref={composerRef}
+              value={prompt}
+              onChange={setPrompt}
+              running={running}
+              mode={mode}
+              onMode={setMode}
+              model={model}
+              onModel={setModel}
+              models={models}
+              usage={activeChat ? usageByChat[activeChat.id] : undefined}
+              onSend={(extra) => void send(extra)}
+              onCatchUp={() => void catchUp()}
+              onStop={() => void window.desk.stopClaude(activeChat?.id)}
+            />          </div>
         </section>
       </div>
 

@@ -90,7 +90,20 @@ contextBridge.exposeInMainWorld("desk", {
     history?: Array<{ role: string; text: string }>;
     chatId: string;
     workspace?: string;
+    model?: string;
+    images?: Array<{ mediaType: string; data: string; name?: string }>;
   }) => ipcRenderer.invoke("claude:run", payload) as Promise<boolean>,
+  listModels: () =>
+    ipcRenderer.invoke("claude:models") as Promise<Array<{ value: string; displayName: string; description?: string }>>,
+  changedFiles: (chatId: string) => ipcRenderer.invoke("claude:changes", chatId) as Promise<string[]>,
+  changeBase: (chatId: string, filePath: string) =>
+    ipcRenderer.invoke("claude:changeBase", chatId, filePath) as Promise<string | null>,
+  revertChanges: (chatId: string, paths?: string[]) =>
+    ipcRenderer.invoke("claude:revert", chatId, paths) as Promise<string[]>,
+  keepChanges: (chatId: string, paths?: string[]) => ipcRenderer.invoke("claude:keep", chatId, paths) as Promise<string[]>,
+  createPath: (target: string, isDir: boolean) => ipcRenderer.invoke("fs:create", target, isDir) as Promise<boolean>,
+  renamePath: (from: string, to: string) => ipcRenderer.invoke("fs:rename", from, to) as Promise<boolean>,
+  deletePath: (target: string) => ipcRenderer.invoke("fs:delete", target) as Promise<boolean>,
   stopClaude: (chatId?: string) => ipcRenderer.invoke("claude:stop", chatId) as Promise<boolean>,
   answerApproval: (payload: {
     chatId: string;

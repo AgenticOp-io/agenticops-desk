@@ -20,8 +20,16 @@ export type ApprovalRequest = {
   remember?: boolean;
 };
 
+export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type ModelOption = { value: string; displayName: string; description?: string };
+export type ImageAttachment = { mediaType: string; data: string; name?: string };
+
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done";
+  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models";
+  // "changes": files Claude edited in this chat that the user has not kept or undone yet.
+  files?: string[];
+  usage?: UsageInfo;
+  models?: ModelOption[];
   text?: string;
   sessionId?: string;
   running?: boolean;
@@ -90,7 +98,18 @@ declare global {
         history?: Array<{ role: string; text: string }>;
         chatId: string;
         workspace?: string;
+        model?: string;
+        images?: ImageAttachment[];
       }) => Promise<boolean>;
+      listModels: () => Promise<ModelOption[]>;
+      changedFiles: (chatId: string) => Promise<string[]>;
+      // Contents before Claude's first edit in this chat; null when Claude created the file.
+      changeBase: (chatId: string, filePath: string) => Promise<string | null>;
+      revertChanges: (chatId: string, paths?: string[]) => Promise<string[]>;
+      keepChanges: (chatId: string, paths?: string[]) => Promise<string[]>;
+      createPath: (target: string, isDir: boolean) => Promise<boolean>;
+      renamePath: (from: string, to: string) => Promise<boolean>;
+      deletePath: (target: string) => Promise<boolean>;
       stopClaude: (chatId?: string) => Promise<boolean>;
       answerApproval: (payload: {
         chatId: string;

@@ -1,10 +1,11 @@
-import Editor, { type OnMount } from "@monaco-editor/react";
+import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import { useEffect, useMemo, useRef } from "react";
 import type { CodeSnippet } from "./codeBlocks";
 import { languageForFence, languageForPath } from "./monaco";
 
 type FileTab = { path: string; name: string; contents: string; dirty: boolean };
+export type DiffView = { path: string; before: string; after: string; created: boolean };
 
 // A Cursor-style editor group: tabs, breadcrumb, then Monaco. Files are editable and save with Ctrl+S;
 // code blocks from Claude's replies open as read-only tabs.
@@ -14,6 +15,10 @@ export function CodePane({
   snippets,
   snippetId,
   workspace,
+  diff,
+  onDiffKeep,
+  onDiffUndo,
+  onDiffClose,
   onSelectFile,
   onSelectSnippet,
   onCloseFile,
@@ -26,6 +31,10 @@ export function CodePane({
   snippets: CodeSnippet[];
   snippetId: string | null;
   workspace: string;
+  diff: DiffView | null;
+  onDiffKeep: (path: string) => void;
+  onDiffUndo: (path: string) => void;
+  onDiffClose: () => void;
   onSelectFile: (path: string) => void;
   onSelectSnippet: (id: string) => void;
   onCloseFile: (path: string) => void;
@@ -55,6 +64,18 @@ export function CodePane({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
   };
 
+  // The diff editor keeps its models on unmount (disposing them first throws), so release them here.
+  const diffKey = diff ? `${diff.path}\n${diff.before.length}\n${diff.after.length}` : "";
+  useEffect(() => {
+    return () => {
+      setTimeout(() => {
+        for (const m of monaco.editor.getModels()) {
+          if (m.uri.scheme === "review-before" || m.uri.scheme === "review-after") m.dispose();
+        }
+      }, 0);
+    };
+  }, [diffKey]);
+
   // Drop models for closed tabs so their memory is released.
   useEffect(() => {
     const open = new Set(files.map((f) => monaco.Uri.file(f.path).toString()));
@@ -65,21 +86,25 @@ export function CodePane({
 
   const crumbs = useMemo(() => {
     if (!shownFile) return shownSnippet ? ["Claude", shownSnippet.name] : [];
-    const rel =
-      workspace && shownFile.path.toLowerCase().startsWith(workspace.toLowerCase())
-        ? shownFile.path.slice(workspace.length).replace(/^[\\/]+/, "")
-        : shownFile.path;
-    return rel.split(/[\\/]/).filter(Boolean);
+    return crumbsFor(shownFile.path, workspace);
   }, [shownFile, shownSnippet, workspace]);
 
   return (
     <div className="code-pane">
       <div className="editor-tabs">
         <div className="editor-tab-strip">
+          {diff && (
+            <div className="editor-tab review active" title={diff.path}>
+              <span className="editor-tab-name">{diff.path.split(/[\\/]/).pop()} (changes)</span>
+              <button type="button" className="editor-tab-close" title="Close review" onClick={onDiffClose}>
+                <span className="x">×</span>
+              </button>
+            </div>
+          )}
           {files.map((f) => (
             <div
               key={f.path}
-              className={`editor-tab ${shownFile?.path === f.path ? "active" : ""} ${f.dirty ? "dirty" : ""}`}
+              className={`editor-tab ${!diff && shownFile?.path === f.path ? "active" : ""} ${f.dirty ? "dirty" : ""}`}
               title={f.path}
               onClick={() => onSelectFile(f.path)}
               onMouseDown={(e) => {
@@ -107,7 +132,7 @@ export function CodePane({
           {snippets.map((s) => (
             <div
               key={s.id}
-              className={`editor-tab snippet ${shownSnippet?.id === s.id ? "active" : ""}`}
+              className={`editor-tab snippet ${!diff && shownSnippet?.id === s.id ? "active" : ""}`}
               title="Code from Claude's reply (read-only)"
               onClick={() => onSelectSnippet(s.id)}
             >
@@ -119,7 +144,21 @@ export function CodePane({
           ×
         </button>
       </div>
-      {crumbs.length > 0 && (
+      {diff && (
+        <div className="review-bar">
+          <span>
+            {diff.created ? "New file from Claude" : "Changes by Claude"} · <strong>{crumbsFor(diff.path, workspace).join(" › ")}</strong>
+          </span>
+          <span className="grow" />
+          <button type="button" className="btn danger" onClick={() => onDiffUndo(diff.path)}>
+            {diff.created ? "Delete file" : "Undo changes"}
+          </button>
+          <button type="button" className="btn primary" onClick={() => onDiffKeep(diff.path)}>
+            Keep
+          </button>
+        </div>
+      )}
+      {!diff && crumbs.length > 0 && (
         <div className="editor-crumbs">
           {crumbs.map((c, i) => (
             <span key={`${i}-${c}`} className={i === crumbs.length - 1 ? "last" : ""}>
@@ -130,7 +169,30 @@ export function CodePane({
         </div>
       )}
       <div className="editor-body">
-        {shownFile || shownSnippet ? (
+        {diff ? (
+          <DiffEditor
+            theme="vs-dark"
+            original={diff.before}
+            modified={diff.after}
+            language={languageForPath(diff.path)}
+            originalModelPath={`review-before:/${diff.path}`}
+            modifiedModelPath={`review-after:/${diff.path}`}
+            keepCurrentOriginalModel
+            keepCurrentModifiedModel
+            options={{
+              readOnly: true,
+              renderSideBySide: false,
+              fontFamily: '"Cascadia Code", Consolas, "Courier New", monospace',
+              fontSize: 13,
+              lineHeight: 20,
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              renderOverviewRuler: true,
+              hideUnchangedRegions: { enabled: true },
+            }}
+          />
+        ) : shownFile || shownSnippet ? (
           <Editor
             theme="vs-dark"
             path={modelPath}
@@ -167,4 +229,12 @@ export function CodePane({
       </div>
     </div>
   );
+}
+
+function crumbsFor(filePath: string, workspace: string) {
+  const rel =
+    workspace && filePath.toLowerCase().startsWith(workspace.toLowerCase())
+      ? filePath.slice(workspace.length).replace(/^[\\/]+/, "")
+      : filePath;
+  return rel.split(/[\\/]/).filter(Boolean);
 }
