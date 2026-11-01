@@ -32,7 +32,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 
 ## Dev instance gotcha
 
-Chats often run inside ClaudeDesk itself, started with `npm run dev` (`CLAUDE_AGENT_SDK_CLIENT_APP=ClaudeDesk`). Saving any file under `electron/` rebuilds the main process and restarts the app, which cuts off the current turn. Put `electron/` edits together near the end of a turn. `src/` changes only hot-reload.
+Chats often run inside ClaudeDesk itself, started with `npm run dev` (`CLAUDE_AGENT_SDK_CLIENT_APP=ClaudeDesk`). Saving a file under `electron/` rebuilds the main process. `vite.config.ts` then tells the running app new code is ready, and the app restarts itself once no chat is running, so a chat editing ClaudeDesk is not cut off. The title bar says when new code is waiting. Editing `vite.config.ts` itself restarts the dev server immediately. `src/` changes only hot-reload.
 
 ## Remotes
 

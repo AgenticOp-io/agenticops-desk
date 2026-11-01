@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import electron from "vite-plugin-electron/simple";
@@ -28,6 +29,34 @@ function contentSecurityPolicy(): Plugin {
   };
 }
 
+type Startup = () => Promise<void>;
+const electronApp = () => (process as NodeJS.Process & { electronApp?: ChildProcess }).electronApp;
+
+async function start(startup: Startup) {
+  await startup();
+  electronApp()?.on("message", (msg) => {
+    if (msg === "claudedesk:restart") void start(startup);
+  });
+}
+
+// Restarting Electron ends every running chat, including one that is editing this code. When the app is
+// already running, tell it new code is ready; it asks for the restart once no chat is running. A build from
+// before this handshake never answers, so after 3 seconds it is restarted the old way.
+function onMainRebuilt(startup: Startup) {
+  const running = electronApp();
+  if (!running || running.exitCode !== null || !running.send) return start(startup);
+  let acked = false;
+  const onAck = (msg: unknown) => {
+    if (msg === "claudedesk:ack") acked = true;
+  };
+  running.on("message", onAck);
+  running.send("claudedesk:main-rebuilt");
+  setTimeout(() => {
+    running.off("message", onAck);
+    if (!acked && electronApp() === running) void start(startup);
+  }, 3000);
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -35,6 +64,7 @@ export default defineConfig({
     electron({
       main: {
         entry: "electron/main.ts",
+        onstart: ({ startup }) => onMainRebuilt(startup),
         vite: {
           build: {
             rollupOptions: {

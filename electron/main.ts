@@ -218,6 +218,29 @@ async function claimSingleInstance(): Promise<boolean> {
   return false;
 }
 
+// Dev only: vite.config.ts tells this process when the main-process code was rebuilt, instead of killing it.
+// Restart once no chat is running, so editing electron/ from inside a ClaudeDesk chat never cuts that chat off.
+let restartTimer: ReturnType<typeof setInterval> | null = null;
+function restartWhenIdle() {
+  if (restartTimer) return;
+  const check = () => {
+    if (liveRunCount() > 0) {
+      if (win && !win.isDestroyed()) win.setTitle("ClaudeDesk (new code loads when running chats finish)");
+      return;
+    }
+    if (restartTimer) clearInterval(restartTimer);
+    restartTimer = null;
+    process.send?.("claudedesk:restart");
+  };
+  restartTimer = setInterval(check, 2000);
+  check();
+}
+process.on("message", (msg) => {
+  if (msg !== "claudedesk:main-rebuilt") return;
+  process.send?.("claudedesk:ack");
+  restartWhenIdle();
+});
+
 app.on("second-instance", () => {
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
