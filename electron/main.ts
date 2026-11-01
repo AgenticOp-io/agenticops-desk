@@ -187,6 +187,7 @@ function createWindow() {
         : path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
   win.setMenuBarVisibility(false);
@@ -486,6 +487,7 @@ ipcMain.handle("fs:reveal", (_e, filePath: string) => {
 
 ipcMain.handle("fs:list", async (_e, dir: string) => {
   const root = dir || workspace;
+  if (!inWorkspace(root, true)) throw new Error("Only the open folder can be listed.");
   const entries = await fs.readdir(root, { withFileTypes: true });
   return entries
     .filter(
@@ -501,6 +503,7 @@ ipcMain.handle("fs:list", async (_e, dir: string) => {
 });
 
 ipcMain.handle("fs:read", async (_e, filePath: string) => {
+  if (!inWorkspace(filePath)) throw new Error("Only files inside the open folder can be read.");
   const st = await fs.stat(filePath);
   if (st.size > 2_000_000) return `[[ file too large to open here: ${st.size} bytes ]]`;
   const buf = await fs.readFile(filePath);
@@ -509,6 +512,7 @@ ipcMain.handle("fs:read", async (_e, filePath: string) => {
 });
 
 ipcMain.handle("fs:write", async (_e, filePath: string, contents: string) => {
+  if (!inWorkspace(filePath)) throw new Error("Only files inside the open folder can be written.");
   await fs.writeFile(filePath, contents, "utf8");
   return true;
 });
@@ -646,9 +650,15 @@ ipcMain.handle("claude:revert", (_e, chatId: string, paths?: string[]) => revert
 ipcMain.handle("claude:keep", (_e, chatId: string, paths?: string[]) => keepChanges(win, chatId, paths));
 
 // Explorer actions only touch paths inside the open folder.
+function inWorkspace(target: string, allowRoot = false) {
+  if (!workspace) return false;
+  const rel = path.relative(path.resolve(workspace), path.resolve(target));
+  if (rel === "") return allowRoot;
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function insideWorkspace(target: string) {
-  const rel = path.relative(workspace, path.resolve(target));
-  return Boolean(rel) && !rel.startsWith("..") && !path.isAbsolute(rel);
+  return inWorkspace(target);
 }
 
 ipcMain.handle("fs:create", async (_e, target: string, isDir: boolean) => {

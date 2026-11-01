@@ -145,7 +145,7 @@ export const Composer = forwardRef<
       onChange("");
       return;
     }
-    if (running || (!value.trim() && !images.length)) return;
+    if (!value.trim() && !images.length) return;
     // Only mentions still present in the text count; deleting "@file" drops it.
     const live = Object.entries(mentions)
       .filter(([rel]) => value.includes(`@${rel}`))
@@ -263,21 +263,9 @@ export const Composer = forwardRef<
                 return;
               }
             }
-            if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-            if (e.ctrlKey || e.metaKey) {
-              e.preventDefault();
-              send();
-              return;
-            }
-            if (e.shiftKey) return;
-            // Enter on an empty trailing line (a second Enter in a row) sends; otherwise it is a newline.
-            const el = e.currentTarget;
-            const before = el.value.slice(0, el.selectionStart);
-            const after = el.value.slice(el.selectionEnd);
-            if (before.endsWith("\n") && after.trim() === "") {
-              e.preventDefault();
-              send();
-            }
+            if (e.key !== "Enter" || e.nativeEvent.isComposing || e.shiftKey) return;
+            e.preventDefault();
+            send();
           }}
         />
       </div>
@@ -347,14 +335,14 @@ export const Composer = forwardRef<
         <button className="btn" disabled={running} onClick={props.onCatchUp}>
           {running ? "Running…" : "Catch Claude up"}
         </button>
-        <button className="btn primary" disabled={running} onClick={send}>
-          Send
+        <button className="btn primary" disabled={!value.trim() && !images.length} onClick={send}>
+          {running ? "Guide" : "Send"}
         </button>
         <button className="btn danger" onClick={props.onStop}>
           Stop
         </button>
         <span className="grow" />
-        <span className="hint">Enter twice or Ctrl+Enter send · @ files · Ctrl+P open</span>
+        <span className="hint">Enter sends · Shift+Enter new line · @ files · Ctrl+P open</span>
       </div>
     </div>
   );

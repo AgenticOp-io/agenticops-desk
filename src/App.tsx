@@ -681,9 +681,16 @@ export function App() {
   ) => {
     const typed = (extra.text ?? prompt).trim();
     const chat = activeChat;
-    if ((!typed && !extra.images.length) || !chat || runningByChat[chat.id]) return;
+    if ((!typed && !extra.images.length) || !chat) return;
+    const guiding = Boolean(runningByChat[chat.id]);
     const text = typed || "(see attached image)";
     persistIds.current.add(chat.id);
+    // A new message after a finished run accepts that run's edits. A guide during a run leaves them in place.
+    if (!guiding && (changesByChat[chat.id] ?? []).length) {
+      setChangesByChat((c) => ({ ...c, [chat.id]: [] }));
+      if (diff) setDiff(null);
+      void window.desk.keepChanges(chat.id);
+    }
     const titled =
       chat.title === "New agent" || chat.title === "Untitled chat"
         ? { ...chat, title: text.slice(0, 72), updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model }
@@ -698,7 +705,12 @@ export function App() {
     setThreads((t) => ({ ...t, [chat.id]: nextMsgs }));
     void window.desk.saveThread(chat.id, nextMsgs);
     setPrompt("");
-    setProgressByChat((p) => ({ ...p, [chat.id]: { status: "Starting…", steps: [], phase: "starting" } }));
+    setProgressByChat((p) => ({
+      ...p,
+      [chat.id]: guiding
+        ? { ...(p[chat.id] ?? { steps: [], phase: "thinking" }), status: "Following your instruction…" }
+        : { status: "Starting…", steps: [], phase: "starting" },
+    }));
     markUsed(chat.id, chat.projectPath || workspace);
     const history = nextMsgs
       .slice(0, -1)
@@ -732,12 +744,9 @@ export function App() {
 
   const afterChangeAction = async (chatId: string, remaining: string[]) => {
     setChangesByChat((c) => ({ ...c, [chatId]: remaining }));
+    // Close the review of a file that is now kept or undone; never jump the editor to another diff.
     const keep = new Set(remaining.map((p) => p.toLowerCase()));
-    if (diff && !keep.has(diff.path.toLowerCase())) {
-      const next = remaining[0];
-      if (next) void openReview(next);
-      else setDiff(null);
-    }
+    if (diff && !keep.has(diff.path.toLowerCase())) setDiff(null);
     const ws = workspaceRef.current;
     if (ws) void refreshTree(ws);
     // Reload clean tabs so an undo shows up in the editor right away.

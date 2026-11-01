@@ -105,8 +105,12 @@ type Session = {
   // Shell decisions already shown in the dialog, so a later canUseTool for the same call is not asked twice.
   decisions: Map<string, PermissionResult>;
   stderr?: string;
-  // A background run that saves memories from this chat; never shown in the chat itself.
-  reflector?: ChildProcess;
+  // Which engine owns this chat right now, so a message during a run guides that engine instead of the other.
+  engine?: "claude" | "direct";
+  // Open while a Claude Code run can still take another instruction.
+  inbox?: Inbox;
+  // A steer waiting for the next Direct turn, applied before the following model call.
+  guide?: string;
   // Files Claude edited in this chat, keyed by lower-case path, with their contents before the first edit
   // (null when Claude created the file). Cleared when the user keeps or undoes them.
   changes: Map<string, { path: string; before: string | null }>;
@@ -119,8 +123,6 @@ type StoredSession = {
   claudeSession?: string;
   workspace?: string;
   pending?: { prompt: string; permissionMode?: string; startedAt: number; started: boolean };
-  // Completed runs since Claude last reviewed this chat for things to remember.
-  turnsSinceReflect?: number;
 };
 
 const sessions = new Map<string, Session>();
@@ -846,24 +848,74 @@ function toOptions(list: ModelInfo[]): ModelOption[] {
 }
 
 // One user turn with images. A string prompt cannot carry images, so the SDK gets a one-message stream.
-async function* turnWithImages(text: string, images: ImageAttachment[]): AsyncGenerator<SDKUserMessage> {
-  yield {
+function userTurn(text: string, images?: ImageAttachment[], priority?: "now"): SDKUserMessage {
+  const blocks = [
+    ...(images ?? []).map((img) => ({
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: img.mediaType as "image/png", data: img.data },
+    })),
+    { type: "text" as const, text },
+  ];
+  return {
     type: "user",
     parent_tool_use_id: null,
-    message: {
-      role: "user",
-      content: [
-        ...images.map((img) => ({
-          type: "image" as const,
-          source: { type: "base64" as const, media_type: img.mediaType as "image/png", data: img.data },
-        })),
-        { type: "text" as const, text },
-      ],
+    message: { role: "user", content: images?.length ? blocks : text },
+    ...(priority ? { priority } : {}),
+  };
+}
+
+// Stays open for the life of one Claude Code run so a later instruction can be written to the same process.
+function openInbox(): { inbox: Inbox; stream: AsyncIterable<SDKUserMessage> } {
+  const pending: SDKUserMessage[] = [];
+  let wake: (() => void) | null = null;
+  let closed = false;
+  const stream = (async function* () {
+    for (;;) {
+      if (pending.length) {
+        yield pending.shift()!;
+        continue;
+      }
+      if (closed) return;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+  })();
+  return {
+    stream,
+    inbox: {
+      push(msg) {
+        if (closed) return false;
+        pending.push(msg);
+        const resume = wake;
+        wake = null;
+        resume?.();
+        return true;
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        const resume = wake;
+        wake = null;
+        resume?.();
+      },
     },
-  } as SDKUserMessage;
+  };
+}
+
+type Inbox = {
+  push: (msg: SDKUserMessage) => boolean;
+  close: () => void;
+};
+
+export function guidePrompt(text: string) {
+  return `The user is guiding this run. Follow this instruction now, then continue the work already in progress. Do not start over and do not discard finished steps.\n\n${text}`;
 }
 
 function endRun(session: Session) {
+  session.inbox?.close();
+  session.inbox = undefined;
+  session.guide = undefined;
   const child = session.child;
   const running = session.query;
   session.child = null;
@@ -1022,6 +1074,20 @@ export function runClaude(opts: {
 }) {
   const chatId = opts.chatId;
   const session = sessionFor(chatId);
+  if (session.engine === "claude" && session.inbox && !session.stopping) {
+    const steered = session.inbox.push(userTurn(guidePrompt(opts.prompt), opts.images, "now"));
+    if (steered) {
+      send(opts.win, {
+        kind: "status",
+        running: true,
+        phase: "thinking",
+        text: "Following your instruction…",
+        sessionId: session.claudeSession,
+        chatId,
+      });
+      return;
+    }
+  }
   if (session.child || session.query || session.abort) stopClaude(opts.win, chatId);
 
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
@@ -1031,6 +1097,7 @@ export function runClaude(opts: {
   const cwd =
     resuming && session.workspace && existsSync(session.workspace) ? session.workspace : opts.workspace;
   session.workspace = cwd;
+  session.engine = "claude";
   session.stopping = false;
   session.sawText = false;
   session.lastWasText = false;
@@ -1052,6 +1119,10 @@ export function runClaude(opts: {
     if (!resuming) delete s.claudeSession;
     s.pending = { prompt: opts.prompt, permissionMode: mode, startedAt: Date.now(), started: false };
   });
+
+  const { inbox, stream } = openInbox();
+  session.inbox = inbox;
+  inbox.push(userTurn(prompt, opts.images));
 
   send(opts.win, {
     kind: "status",
@@ -1097,7 +1168,7 @@ export function runClaude(opts: {
       }
       if (session.abort !== abort) return;
       q = query({
-    prompt: opts.images?.length ? turnWithImages(prompt, opts.images) : prompt,
+    prompt: stream,
     options: {
       cwd,
       ...(opts.model ? { model: opts.model } : {}),
@@ -1192,6 +1263,7 @@ export function runClaude(opts: {
       for await (const msg of q) {
         if (session.query !== q) return;
         parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
+        if (msg.type === "result") session.inbox?.close();
       }
     } catch (err) {
       if (session.query !== q) return;

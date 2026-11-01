@@ -137,11 +137,3 @@ export function memoryArgs(chatId: string, workspace: string): string[] {
     return [];
   }
 }
-
-export const REFLECT_PROMPT = `Before this session ends, review the conversation above for anything worth remembering long-term,
-following the persistent memory instructions in your system prompt: corrections, preferences, confirmed
-approaches, project decisions and their reasons, gotchas, useful references.
-
-Save each one now (update existing memories rather than duplicating, fix any that proved wrong, keep the
-MEMORY.md indexes in sync). Only touch files inside the memory folders. If nothing new is worth keeping,
-change nothing. Reply with one short line saying what you saved.`;

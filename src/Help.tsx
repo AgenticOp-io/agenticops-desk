@@ -26,7 +26,7 @@ const SECTIONS: Section[] = [
     id: "talk",
     title: "Sending a message",
     body: [
-      "Type in the box and press Send, Ctrl+Enter, or Enter twice in a row. A single Enter is a new line.",
+      "Type in the box and press Enter or Send. Shift+Enter starts a new line. While a chat is already working, Send guides that run instead of starting over.",
       "Type @ to attach a file from the open folder. You can also paste or drop images (up to 10, each under 5 MB).",
       "Agent is the usual mode: Claude edits files and runs commands. Plan reads and writes a plan, and waits for you before changing anything. Auto-edit applies file edits without an extra prompt. The permission rules below still apply.",
       "The model menu defaults to Claude Code, which uses your Claude sign-in. Models under Direct call that provider with the key you saved in Settings and are billed per token.",
@@ -39,8 +39,9 @@ const SECTIONS: Section[] = [
     title: "While it is working",
     body: [
       "The line under the chat title is the current step, in plain language: getting ready, thinking, reading or editing a file, searching, running a command, writing the reply, or pushing to main.",
+      "You can type another instruction and press Enter while it is still working. That guides the run in progress. It does not wait for the run to finish, and it does not throw away the steps already done.",
       "The same line appears on that chat in the list, so you can see background work without opening it.",
-      "A small trail under the current line is the last few steps. When Claude edits files, a bar lists them. Open one to review the diff, then Keep or Undo.",
+      "A small trail under the current line is the last few steps. When Claude edits files, a small bar lists them. The changes are already kept: review a diff or undo a file if you want, or just keep working. Sending your next message clears the bar.",
     ],
   },
   {
@@ -90,7 +91,8 @@ const SECTIONS: Section[] = [
     body: [
       "Ctrl+N — new chat",
       "Ctrl+K — focus the message box",
-      "Ctrl+Enter, or Enter twice — send",
+      "Enter — send (or guide, if a run is already going)",
+      "Shift+Enter — new line",
       "Ctrl+P — open a file",
       "Ctrl+Shift+E — Chats or Files",
       "Ctrl+S — save the open file",

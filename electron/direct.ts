@@ -9,6 +9,7 @@ import {
   askPermission,
   clearClaudeSession,
   dropApprovals,
+  guidePrompt,
   type ImageAttachment,
   pruneChanges,
   realStorePwsh,
@@ -466,6 +467,11 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
   let jsonRetries = 0;
 
   for (let turn = 0; turn < 80 && !ctx.signal.aborted; turn++) {
+    const guide = ctx.session.guide;
+    if (guide) {
+      ctx.session.guide = undefined;
+      messages.push({ role: "user", content: guide });
+    }
     sendPhase(ctx.win, ctx.chatId, ctx.session, "thinking", "Thinking…");
     const stream = client.beta.messages.stream(
       {
@@ -557,6 +563,11 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
   }));
 
   for (let turn = 0; turn < 80 && !ctx.signal.aborted; turn++) {
+    const guide = ctx.session.guide;
+    if (guide) {
+      ctx.session.guide = undefined;
+      messages.push({ role: "user", content: guide });
+    }
     sendPhase(ctx.win, ctx.chatId, ctx.session, "thinking", "Thinking…");
     const stream = await client.chat.completions.create(
       { model, messages, tools, stream: true, stream_options: { include_usage: true } },
@@ -627,6 +638,11 @@ export function runDirect(opts: {
 }) {
   const { win, chatId } = opts;
   const session = sessionFor(chatId);
+  if (session.engine === "direct" && session.abort && !session.query && !session.child && !session.stopping) {
+    session.guide = [session.guide, guidePrompt(opts.prompt)].filter(Boolean).join("\n\n");
+    send(win, { kind: "status", running: true, phase: "thinking", text: "Following your instruction…", chatId });
+    return;
+  }
   if (session.child || session.query || session.abort) stopClaude(win, chatId);
   const preset = PRESETS[opts.provider];
   if (preset.needsKey && !providerKey(opts.provider)) {
@@ -637,6 +653,7 @@ export function runDirect(opts: {
 
   const cwd = opts.workspace;
   session.workspace = cwd;
+  session.engine = "direct";
   session.stopping = false;
   // The next Claude Code message must not resume a session that missed this chat's direct turns.
   clearClaudeSession(chatId, session);

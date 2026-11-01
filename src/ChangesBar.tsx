@@ -1,6 +1,7 @@
 import { useState } from "react";
 
-// Files Claude edited in this chat that the user has not reviewed yet, like Cursor's "N files changed" strip.
+// Files Claude edited in this chat. They are already kept; this strip only offers an optional review or undo,
+// and sending the next message clears it. It starts collapsed so it never gets in the way.
 export function ChangesBar({
   files,
   workspace,
@@ -16,7 +17,7 @@ export function ChangesBar({
   onKeep: (paths?: string[]) => void;
   onUndo: (paths?: string[]) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   if (!files.length) return null;
   const rel = (p: string) =>
     workspace && p.toLowerCase().startsWith(workspace.toLowerCase())
@@ -29,6 +30,9 @@ export function ChangesBar({
           {open ? "▾" : "▸"} Claude changed {files.length} file{files.length === 1 ? "" : "s"}
         </button>
         <span className="grow" />
+        <button type="button" className="ghost" title="Show the changes in the editor" onClick={() => onReview(files[0])}>
+          Review
+        </button>
         <button
           type="button"
           className="ghost danger-text"
@@ -38,8 +42,8 @@ export function ChangesBar({
         >
           Undo all
         </button>
-        <button type="button" className="ghost" onClick={() => onKeep()}>
-          Keep all
+        <button type="button" className="ghost" title="The changes stay; hide this list" onClick={() => onKeep()}>
+          Dismiss
         </button>
       </div>
       {open && (
