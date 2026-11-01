@@ -69,10 +69,15 @@ function savedClaude(version: string, target: Target): string | null {
 
 type Dist = { tarball: string; integrity: string };
 
+// Give up instead of waiting forever: every Claude Code chat waits on this one download.
+const META_TIMEOUT_MS = 30_000;
+const STALL_TIMEOUT_MS = 60_000;
+
 async function registryDist(pkg: string, version: string): Promise<Dist> {
   const url = `https://registry.npmjs.org/${pkg}/${version}`;
   const res = await net.fetch(url, {
     headers: { Accept: "application/json", "User-Agent": "ClaudeDesk" },
+    signal: AbortSignal.timeout(META_TIMEOUT_MS),
   });
   if (res.status === 404) throw new Error(`missing:${pkg}`);
   if (!res.ok) throw new Error(`npm returned ${res.status} for ${pkg}.`);
@@ -86,14 +91,31 @@ async function registryDist(pkg: string, version: string): Promise<Dist> {
 }
 
 async function downloadTarball(url: string, dest: string, onStatus?: (text: string) => void): Promise<string> {
-  const res = await net.fetch(url, { headers: { "User-Agent": "ClaudeDesk" } });
-  if (!res.ok || !res.body) throw new Error(`The Claude Code download failed (${res.status}).`);
+  // Abort when no bytes arrive for a minute, so a dead connection fails instead of hanging.
+  const stall = new AbortController();
+  let timer = setTimeout(() => stall.abort(), STALL_TIMEOUT_MS);
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => stall.abort(), STALL_TIMEOUT_MS);
+  };
+  let res: Response;
+  try {
+    res = await net.fetch(url, { headers: { "User-Agent": "ClaudeDesk" }, signal: stall.signal });
+  } catch (err) {
+    clearTimeout(timer);
+    throw stall.signal.aborted ? new Error("The Claude Code download timed out. Check the connection and try again.") : err;
+  }
+  if (!res.ok || !res.body) {
+    clearTimeout(timer);
+    throw new Error(`The Claude Code download failed (${res.status}).`);
+  }
   const total = Number(res.headers.get("content-length") || 0);
   const hash = createHash("sha512");
   let received = 0;
   let lastPct = -1;
   const hasher = new Transform({
     transform(chunk: Buffer, _enc, cb) {
+      touch();
       hash.update(chunk);
       received += chunk.length;
       if (onStatus) {
@@ -107,8 +129,29 @@ async function downloadTarball(url: string, dest: string, onStatus?: (text: stri
     },
   });
   const web = res.body as unknown as NodeWebStream<Uint8Array>;
-  await pipeline(Readable.fromWeb(web), hasher, createWriteStream(dest));
+  try {
+    await pipeline(Readable.fromWeb(web), hasher, createWriteStream(dest));
+  } catch (err) {
+    throw stall.signal.aborted ? new Error("The Claude Code download stalled. Check the connection and try again.") : err;
+  } finally {
+    clearTimeout(timer);
+  }
   return `sha512-${hash.digest("base64")}`;
+}
+
+// Each SDK update downloads a new 270 MB binary; drop the versions nothing uses anymore.
+async function removeOldVersions(keep: string) {
+  const root = path.join(app.getPath("userData"), "claude-code");
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (name === keep) continue;
+    await fs.rm(path.join(root, name), { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function fetchBinary(version: string, target: Target, onStatus?: (text: string) => void): Promise<string> {
@@ -131,6 +174,7 @@ async function fetchBinary(version: string, target: Target, onStatus?: (text: st
     await fs.rename(partial, exe);
     if (process.platform !== "win32") await fs.chmod(exe, 0o755);
     await fs.writeFile(`${exe}.sha512`, dist.integrity, "utf8");
+    await removeOldVersions(version);
     return exe;
   } finally {
     await fs.rm(tgz, { force: true }).catch(() => {});

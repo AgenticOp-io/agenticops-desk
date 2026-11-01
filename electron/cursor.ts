@@ -29,6 +29,8 @@ export type CursorChat = {
   mode?: string;
   model?: string;
   parentId?: string;
+  // Set when the user renames a chat, so a Cursor rescan never puts the old title back.
+  titleLocked?: boolean;
 };
 
 export type ChatMessage = {

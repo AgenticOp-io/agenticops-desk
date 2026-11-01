@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app, type BrowserWindow } from "electron";
@@ -213,9 +213,15 @@ function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string
 }
 
 // Shell and file changes go through the same gate as Claude Code: folder trust, risky commands, plan mode.
-async function allowed(ctx: Ctx, toolName: string, input: Record<string, unknown>, id: string): Promise<string | null> {
+async function allowed(
+  ctx: Ctx,
+  toolName: string,
+  input: Record<string, unknown>,
+  id: string,
+  readOnly = false,
+): Promise<string | null> {
   const editing = toolName === "Edit" || toolName === "Write";
-  if (ctx.mode === "plan") return "Plan mode is on: describe the change instead of making it.";
+  if (ctx.mode === "plan" && !readOnly) return "Plan mode is on: describe the change instead of making it.";
   if (editing && ctx.mode === "acceptEdits") return null;
   const result = await askPermission(ctx.win, ctx.chatId, ctx.session, toolName, input, {
     signal: ctx.signal,
@@ -317,17 +323,39 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
     if (name === "web_fetch") {
       const url = str(input.url);
       if (!url || !/^https?:\/\//i.test(url)) return { text: "url must start with http:// or https://", error: true };
+      // Same gate as Claude Code's WebFetch: an untrusted folder asks first. Reading a page is allowed in plan mode.
+      const denied = await allowed(ctx, "WebFetch", { url }, id, true);
+      if (denied) return { text: denied, error: true };
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 20_000);
       const onAbort = () => ctrl.abort();
       ctx.signal.addEventListener("abort", onAbort);
-      const res = await fetch(url, { signal: ctrl.signal }).finally(() => {
+      try {
+        const res = await fetch(url, { signal: ctrl.signal });
+        // Stop reading after 2 MB instead of pulling an arbitrarily large body into memory.
+        const limit = 2_000_000;
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        const reader = res.body?.getReader();
+        while (reader && size < limit) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          chunks.push(value);
+          size += value.length;
+        }
+        await reader?.cancel().catch(() => {});
+        const raw = Buffer.concat(chunks).subarray(0, limit).toString("utf8");
+        const text = raw
+          .replace(/<script[\s\S]*?<\/script>/gi, " ")
+          .replace(/<style[\s\S]*?<\/style>/gi, " ")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        return { text: clip(`${res.status} ${url}\n${text}`) };
+      } finally {
         clearTimeout(timer);
         ctx.signal.removeEventListener("abort", onAbort);
-      });
-      const raw = await res.text();
-      const text = raw.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-      return { text: clip(`${res.status} ${url}\n${text}`) };
+      }
     }
     if (name === "todo_write") {
       const todos = Array.isArray(input.todos) ? input.todos : [];
@@ -374,6 +402,11 @@ type Saved = { provider: ProviderId; messages: unknown[] };
 
 function savedFile(chatId: string) {
   return path.join(app.getPath("userData"), "direct", `${chatId.replace(/[^\w.-]+/g, "_")}.json`);
+}
+
+// Called when the user deletes a chat, so its direct-engine history goes with it.
+export function deleteDirectHistory(chatId: string) {
+  rmSync(savedFile(chatId), { force: true });
 }
 
 function loadSaved(chatId: string): Saved | null {

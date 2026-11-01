@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -32,10 +32,14 @@ const macros: Record<string, string> = {
   "\\Theta": "\\Theta",
 };
 
-export function ChatMarkdown({ text }: { text: string }) {
+const REMARK = [[remarkMath, { singleDollarTextMath: true }], remarkGfm] as const;
+
+// Memoized: while a reply streams, only the message whose text changed is parsed again.
+// Markdown and KaTeX parsing of every earlier message on each token was the main cost.
+export const ChatMarkdown = memo(function ChatMarkdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[[remarkMath, { singleDollarTextMath: true }], remarkGfm]}
+      remarkPlugins={REMARK as never}
       rehypePlugins={[
         [
           rehypeKatex,
@@ -64,4 +68,4 @@ export function ChatMarkdown({ text }: { text: string }) {
       {normalizeMathDelimiters(text)}
     </ReactMarkdown>
   );
-}
+});

@@ -152,7 +152,8 @@ declare global {
       gitPullRequest: (cwd: string, title: string, body: string) => Promise<{ ok: boolean; output: string }>;
       readProjectDoc: (cwd: string, name: string) => Promise<string>;
       writeProjectDoc: (cwd: string, name: string, contents: string) => Promise<boolean>;
-      openShell: (cwd: string) => Promise<string>;
+      openShell: (cwd: string) => Promise<{ id: string; backlog: string }>;
+      restartShell: (cwd: string) => Promise<{ id: string; backlog: string }>;
       writeShell: (id: string, text: string) => Promise<boolean>;
       closeShell: (id: string) => Promise<boolean>;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;

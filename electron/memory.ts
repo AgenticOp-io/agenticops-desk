@@ -16,12 +16,17 @@ export function memoryRoot() {
 }
 
 // Claude Code already reads ~/.claude/projects/<encoded-cwd>/memory. Use that folder so notes
-// show up where the agent looks, instead of a private copy it never opens.
+// show up where the agent looks, instead of a private copy it never opens. Claude Code names the
+// folder by turning every character that is not a letter or digit into "-" (so "." "_" and spaces too).
+function encodeProjectPath(p: string) {
+  return p.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 function claudeProjectMemoryDir(workspace: string): string {
   const resolved = path.resolve(workspace);
   const projects = path.join(os.homedir(), ".claude", "projects");
   const driveLower = resolved.replace(/^([A-Za-z]):/, (_, drive: string) => drive.toLowerCase());
-  const names = [driveLower.replace(/[\\/:]/g, "-"), resolved.replace(/[\\/:]/g, "-")];
+  const names = [encodeProjectPath(driveLower), encodeProjectPath(resolved)];
   for (const name of names) {
     if (existsSync(path.join(projects, name))) return path.join(projects, name, "memory");
   }
@@ -103,81 +108,12 @@ ${readIndex(dirs.project) || "(empty)"}
 `;
 }
 
-function addIndexLine(dir: string, line: string, fileName: string) {
-  const index = path.join(dir, INDEX);
-  const current = existsSync(index) ? readFileSync(index, "utf8") : "";
-  if (current.includes(`(${fileName})`)) return;
-  writeFileSync(index, `${current.trimEnd()}\n${line}\n`, "utf8");
-}
-
-function writeMemory(dir: string, fileName: string, indexLine: string, body: string) {
-  const file = path.join(dir, fileName);
-  if (!existsSync(file)) writeFileSync(file, body, "utf8");
-  addIndexLine(dir, indexLine, fileName);
-}
-
-// Facts the agent got wrong when this folder was empty: it described committed, checked work as uncommitted.
-function seedProjectMemory(dir: string, workspace: string) {
-  const here = path.resolve(workspace).toLowerCase();
-  if (!here.endsWith(`${path.sep}claudedesk`)) return;
-  writeMemory(
-    dir,
-    "permission-prompts.md",
-    "- [Permission prompts](permission-prompts.md) — one yes covers edits, tests, git, and network",
-    `---
-name: permission-prompts
-description: One allow lets Claude code in the folder, including git and network
-type: project
----
-
-The first time Claude needs to act in a folder, ClaudeDesk asks once: let it work there. After Allow, edits, tests, git (including push), and network run without another dialog. The same chat continues when you Send again.
-
-Disk format, administrator commands, and shutdown still ask. Allowing one of those remembers that action.
-
-**Why:** Stopping for each command broke both vibe coding and careful coding.
-**How to apply:** Do not tell the user that every shell command waits for approval.
-`,
-  );
-  writeMemory(
-    dir,
-    "powershell-path.md",
-    "- [PowerShell path](powershell-path.md) — use the real pwsh.exe, not the WindowsApps alias",
-    `---
-name: powershell-path
-description: The Store pwsh alias fails Claude's parser with "The command line is too long"
-type: project
----
-
-On this PC, \`%LOCALAPPDATA%\\Microsoft\\WindowsApps\\pwsh.exe\` is a 0-byte Store alias. Claude's PowerShell parser launches it with a long EncodedCommand and Windows returns "The command line is too long" before any command starts.
-
-The real binary is \`C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_*\\pwsh.exe\`. ClaudeDesk puts that directory first on PATH for the session. An allowed PowerShell command can run. Do not point the shell back at the alias.
-`,
-  );
-  writeMemory(
-    dir,
-    "git-identity.md",
-    "- [Git identity](git-identity.md) — commits are AgenticOp-io, and only when asked",
-    `---
-name: git-identity
-description: AgenticOp-io authors commits; do not present the work as a personal account
-type: feedback
----
-
-Commits for this repo are authored AgenticOp-io <opensource@agenticop.io>. Present the work as AgenticOp-io. Do not commit or push unless the user asks.
-
-**Why:** The user corrected the git identity and treats a commit as a separate request from the edit.
-**How to apply:** Check the branch and \`git log -1\` before saying what the last commit is.
-`,
-  );
-}
-
 // Prepares both memory folders and returns the system-prompt addendum for this run.
 export function prepareMemory(workspace: string): { append: string; directories: string[] } {
   const dirs = memoryDirs(workspace);
   try {
     ensureScope(dirs.global, "Global memory");
     ensureScope(dirs.project, "Project memory", `Project: ${workspace}\n\n`);
-    seedProjectMemory(dirs.project, workspace);
     return { append: instructions(dirs, workspace), directories: [dirs.global, dirs.project] };
   } catch (err) {
     console.error("ClaudeDesk could not prepare memory", err);

@@ -231,12 +231,13 @@ export function App() {
   const msgs = activeChat ? threads[activeChat.id] ?? [] : [];
   const running = Boolean(activeChat && runningByChat[activeChat.id]);
   const runProgress = activeChat ? progressByChat[activeChat.id] : undefined;
+  // Code blocks are only needed while the code pane is open; skip the scan of every message otherwise.
   const snippets = useMemo(
     () =>
-      msgs.flatMap((m, i) =>
-        m.role === "assistant" ? extractCodeBlocks(m.text, `reply${i + 1}`) : [],
-      ),
-    [msgs],
+      prefs.showCode
+        ? msgs.flatMap((m, i) => (m.role === "assistant" ? extractCodeBlocks(m.text, `reply${i + 1}`) : []))
+        : [],
+    [msgs, prefs.showCode],
   );
 
   const refreshTree = async (dir: string) => {

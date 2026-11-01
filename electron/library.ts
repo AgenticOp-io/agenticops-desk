@@ -13,6 +13,8 @@ type Library = {
   lastUsed: Record<string, number>;
   chatLastUsed: Record<string, number>;
   chats: CursorChat[];
+  // Chats the user deleted. Cursor rescans and late saves skip these, so a deleted chat stays deleted.
+  deleted: string[];
 };
 
 const empty = (): Library => ({
@@ -21,6 +23,7 @@ const empty = (): Library => ({
   lastUsed: {},
   chatLastUsed: {},
   chats: [],
+  deleted: [],
 });
 
 function keyOf(p: string) {
@@ -149,6 +152,7 @@ async function load(): Promise<Library> {
           lastUsed: raw.lastUsed && typeof raw.lastUsed === "object" ? raw.lastUsed : {},
           chatLastUsed: raw.chatLastUsed && typeof raw.chatLastUsed === "object" ? raw.chatLastUsed : {},
           chats: Array.isArray(raw.chats) ? (raw.chats as CursorChat[]) : [],
+          deleted: Array.isArray(raw.deleted) ? raw.deleted.filter((x): x is string => typeof x === "string") : [],
         }
       : empty();
   const beforeAdded = lib.added.length;
@@ -236,8 +240,10 @@ export function rememberChats(chats: CursorChat[]) {
   if (!chats.length) return Promise.resolve();
   return withLibrary(async (lib) => {
     const byId = new Map(lib.chats.map((c) => [c.id, c]));
+    const gone = new Set(lib.deleted);
     let changed = false;
     for (const c of chats) {
+      if (gone.has(c.id)) continue;
       const prev = byId.get(c.id);
       if (!prev) {
         byId.set(c.id, { ...c });
@@ -253,6 +259,8 @@ export function rememberChats(chats: CursorChat[]) {
         byId.set(c.id, {
           ...prev,
           ...c,
+          title: prev.titleLocked ? prev.title : c.title,
+          titleLocked: prev.titleLocked,
           lastUsedAt: c.lastUsedAt ?? prev.lastUsedAt,
           pinned: c.pinned ?? prev.pinned,
           mode: c.mode ?? prev.mode,
@@ -271,6 +279,7 @@ export function rememberChats(chats: CursorChat[]) {
 
 export function upsertChat(chat: CursorChat) {
   return withLibrary(async (lib) => {
+    if (lib.deleted.includes(chat.id)) return;
     const i = lib.chats.findIndex((c) => c.id === chat.id);
     if (i >= 0) lib.chats[i] = { ...lib.chats[i], ...chat };
     else lib.chats.push(chat);
@@ -291,11 +300,23 @@ export function upsertChat(chat: CursorChat) {
   });
 }
 
-export function patchChat(id: string, patch: Partial<CursorChat>) {
+// Only the fields the UI edits; anything else in the patch (ids, paths) is ignored.
+export function patchChat(
+  id: string,
+  patch: { title?: unknown; pinned?: unknown; mode?: unknown; model?: unknown; parentId?: unknown },
+) {
   return withLibrary(async (lib) => {
     const row = lib.chats.find((c) => c.id === id);
     if (!row) return null;
-    Object.assign(row, patch, { updatedAt: Date.now() });
+    if (typeof patch.title === "string" && patch.title.trim()) {
+      row.title = patch.title.trim().slice(0, 200);
+      row.titleLocked = true;
+    }
+    if (typeof patch.pinned === "boolean") row.pinned = patch.pinned;
+    if (typeof patch.mode === "string") row.mode = patch.mode.slice(0, 40);
+    if (typeof patch.model === "string") row.model = patch.model.slice(0, 120);
+    if (typeof patch.parentId === "string") row.parentId = patch.parentId.slice(0, 120);
+    row.updatedAt = Date.now();
     await save(lib);
     return row;
   });
@@ -305,33 +326,46 @@ export function deleteChat(id: string) {
   return withLibrary(async (lib) => {
     lib.chats = lib.chats.filter((c) => c.id !== id);
     delete lib.chatLastUsed[id];
+    if (!lib.deleted.includes(id)) lib.deleted.push(id);
     await save(lib);
     await fs.rm(threadFile(id), { force: true }).catch(() => undefined);
   });
 }
 
+export function deletedChatIds(): Promise<Set<string>> {
+  return withLibrary((lib) => new Set(lib.deleted));
+}
+
+type SavedMsg = { text?: unknown };
+
+// Searches message text only (not the JSON around it), several files at a time.
 export async function searchMessages(query: string): Promise<string[]> {
   const needle = query.trim().toLowerCase();
   if (needle.length < 2) return [];
   const dir = path.join(app.getPath("userData"), "threads");
   let names: string[] = [];
   try {
-    names = await fs.readdir(dir);
+    names = (await fs.readdir(dir)).filter((n) => n.endsWith(".json"));
   } catch {
     return [];
   }
   const hits: string[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".json") || hits.length >= 40) continue;
-    const id = name.slice(0, -5);
+  const check = async (name: string) => {
     try {
       const raw = await fs.readFile(path.join(dir, name), "utf8");
-      if (raw.toLowerCase().includes(needle)) hits.push(id);
+      if (!raw.toLowerCase().includes(needle)) return;
+      const msgs = JSON.parse(raw) as SavedMsg[];
+      if (Array.isArray(msgs) && msgs.some((m) => typeof m?.text === "string" && m.text.toLowerCase().includes(needle))) {
+        hits.push(name.slice(0, -5));
+      }
     } catch {
       /* skip a thread that is mid-write */
     }
+  };
+  for (let i = 0; i < names.length && hits.length < 40; i += 16) {
+    await Promise.all(names.slice(i, i + 16).map(check));
   }
-  return hits;
+  return hits.slice(0, 40);
 }
 
 export function rememberedChats(): Promise<CursorChat[]> {

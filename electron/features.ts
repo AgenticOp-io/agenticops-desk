@@ -32,7 +32,8 @@ export function gitStatus(cwd: string) {
 export async function gitCommit(cwd: string, message: string) {
   const text = message.trim();
   if (!text) return { ok: false, output: "Write a commit message first." };
-  const added = await run("git", ["add", "-u"], cwd);
+  // Include new files too (-A); .gitignore still keeps build output and secrets out.
+  const added = await run("git", ["add", "-A"], cwd);
   if (!added.ok) return added;
   return run("git", ["commit", "-m", text], cwd);
 }
@@ -69,57 +70,117 @@ function shellExe(): string {
   return realStorePwsh() || "powershell.exe";
 }
 
-const shells = new Map<string, ChildProcess>();
+type Shell = { child: ChildProcess; backlog: string; onData: (chunk: string) => void; usedAt: number };
+const shells = new Map<string, Shell>();
+const BACKLOG = 50_000;
+// Shells stay alive while you switch folders; the least recently used ones close past this many.
+const MAX_SHELLS = 3;
 
-export function openShell(cwd: string, onData: (chunk: string) => void): string {
-  const id = path.resolve(cwd).toLowerCase();
+function shellId(cwd: string) {
+  const resolved = path.resolve(cwd);
+  // Windows and macOS paths are case-insensitive; Linux paths are not.
+  return process.platform === "linux" ? resolved : resolved.toLowerCase();
+}
+
+// Ends the shell and everything it started (a dev server, a test watcher).
+function killTree(child: ChildProcess) {
+  if (!child.pid || child.exitCode !== null) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }).on("error", () => child.kill());
+    } else {
+      process.kill(-child.pid, "SIGTERM");
+    }
+  } catch {
+    child.kill();
+  }
+}
+
+// Returns the shell id and what it printed so far, so reopening the tab shows the history.
+export function openShell(cwd: string, onData: (chunk: string) => void): { id: string; backlog: string } {
+  const id = shellId(cwd);
   const live = shells.get(id);
-  if (live && live.exitCode === null && !live.killed) return id;
+  if (live && live.child.exitCode === null && !live.child.killed) {
+    live.onData = onData;
+    live.usedAt = Date.now();
+    return { id, backlog: live.backlog };
+  }
   const exe = shellExe();
   const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NoExit"] : [];
-  const child = spawn(exe, args, { cwd, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-  const push = (buf: Buffer) => onData(buf.toString("utf8"));
-  child.stdout?.on("data", push);
-  child.stderr?.on("data", push);
-  child.on("exit", (code) => {
-    onData(`\n[shell closed${code === null ? "" : ` (${code})`}]\n`);
-    if (shells.get(id) === child) shells.delete(id);
+  const child = spawn(exe, args, {
+    cwd,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+    // Its own process group on macOS and Linux, so Restart also stops what it started.
+    detached: process.platform !== "win32",
   });
-  shells.set(id, child);
-  onData(`Started ${path.basename(exe)} in ${cwd}\n`);
-  return id;
+  const entry: Shell = { child, backlog: "", onData, usedAt: Date.now() };
+  const push = (text: string) => {
+    entry.backlog = (entry.backlog + text).slice(-BACKLOG);
+    entry.onData(text);
+  };
+  child.stdout?.on("data", (buf: Buffer) => push(buf.toString("utf8")));
+  child.stderr?.on("data", (buf: Buffer) => push(buf.toString("utf8")));
+  child.on("error", (err) => push(`\n[could not start the shell: ${err.message}]\n`));
+  child.on("exit", (code) => {
+    push(`\n[shell closed${code === null ? "" : ` (${code})`}]\n`);
+    if (shells.get(id) === entry) shells.delete(id);
+  });
+  shells.set(id, entry);
+  push(`Started ${path.basename(exe)} in ${cwd}\n`);
+  const extra = [...shells.entries()].sort((a, b) => a[1].usedAt - b[1].usedAt).slice(0, Math.max(0, shells.size - MAX_SHELLS));
+  for (const [oldId] of extra) closeShell(oldId);
+  return { id, backlog: entry.backlog };
 }
 
 export function writeShell(id: string, text: string) {
-  const child = shells.get(id);
-  if (!child?.stdin || child.exitCode !== null) return false;
-  child.stdin.write(text.endsWith("\n") ? text : `${text}\n`);
+  const entry = shells.get(id);
+  if (!entry?.child.stdin || entry.child.exitCode !== null) return false;
+  entry.usedAt = Date.now();
+  entry.child.stdin.write(text.endsWith("\n") ? text : `${text}\n`);
   return true;
 }
 
 export function closeShell(id: string) {
-  const child = shells.get(id);
-  if (!child) return;
+  const entry = shells.get(id);
+  if (!entry) return;
   shells.delete(id);
-  child.kill();
+  killTree(entry.child);
 }
 
 export function closeAllShells() {
   for (const id of [...shells.keys()]) closeShell(id);
 }
 
+const RELEASES = "repos/AgenticOp-io/claudedesk/releases/latest";
+
 export async function checkForUpdate(): Promise<{ current: string; latest: string | null; url: string | null; note: string }> {
   const current = app.getVersion();
   const note =
     "Installers are not code-signed. A signed setup needs a certificate, which this project does not have.";
   try {
-    const res = await fetch("https://api.github.com/repos/AgenticOp-io/claudedesk/releases/latest", {
+    const res = await fetch(`https://api.github.com/${RELEASES}`, {
       headers: { Accept: "application/vnd.github+json", "User-Agent": "ClaudeDesk" },
     });
-    if (!res.ok) return { current, latest: null, url: null, note: `No published release yet. ${note}` };
-    const data = (await res.json()) as { tag_name?: string; html_url?: string };
-    return { current, latest: data.tag_name ?? null, url: data.html_url ?? null, note };
+    if (res.ok) {
+      const data = (await res.json()) as { tag_name?: string; html_url?: string };
+      return { current, latest: data.tag_name ?? null, url: data.html_url ?? null, note };
+    }
+    if (res.status !== 404) return { current, latest: null, url: null, note: `GitHub answered ${res.status}. ${note}` };
   } catch {
-    return { current, latest: null, url: null, note: `Could not reach GitHub. ${note}` };
+    /* offline, or GitHub unreachable; try the CLI below */
   }
+  // The repository is private, so an anonymous request gets 404. The GitHub CLI's sign-in can see it.
+  const viaCli = await run("gh", ["api", RELEASES, "--jq", "[.tag_name, .html_url] | @tsv"], app.getPath("home"));
+  if (viaCli.ok && viaCli.output) {
+    const [tag, url] = viaCli.output.split("\t");
+    return { current, latest: tag || null, url: url || null, note };
+  }
+  if (/not found|404/i.test(viaCli.output)) return { current, latest: null, url: null, note: `No published release yet. ${note}` };
+  return {
+    current,
+    latest: null,
+    url: null,
+    note: `Could not check: the repository is private. Sign in with the GitHub CLI (gh auth login) to check for updates. ${note}`,
+  };
 }

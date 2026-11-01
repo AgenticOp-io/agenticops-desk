@@ -30,11 +30,16 @@ function Terminal({ workspace }: { workspace: string }) {
   useEffect(() => {
     if (!workspace) return;
     let alive = true;
-    void window.desk.openShell(workspace).then((id) => {
-      if (alive) idRef.current = id;
+    idRef.current = "";
+    setText("");
+    // The shell keeps running while the tab is hidden; its saved output comes back with the id.
+    void window.desk.openShell(workspace).then(({ id, backlog }) => {
+      if (!alive) return;
+      idRef.current = id;
+      setText(backlog.slice(-20_000));
     });
     const off = window.desk.onShellData((payload) => {
-      if (payload.cwd !== workspace.toLowerCase() && payload.cwd !== idRef.current) return;
+      if (!idRef.current || payload.cwd !== idRef.current) return;
       setText((cur) => (cur + payload.chunk).slice(-20_000));
     });
     return () => {
@@ -42,6 +47,16 @@ function Terminal({ workspace }: { workspace: string }) {
       off();
     };
   }, [workspace]);
+
+  // There is no Ctrl+C over a pipe, so Restart is how to stop a dev server or a stuck command.
+  const restart = () => {
+    idRef.current = "";
+    setText("");
+    void window.desk.restartShell(workspace).then(({ id, backlog }) => {
+      idRef.current = id;
+      setText(backlog.slice(-20_000));
+    });
+  };
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -65,6 +80,9 @@ function Terminal({ workspace }: { workspace: string }) {
         }}
       >
         <input value={line} onChange={(e) => setLine(e.target.value)} placeholder="Type a command and press Enter" spellCheck={false} />
+        <button type="button" className="btn" title="Stop everything running here and start a fresh shell" onClick={restart}>
+          Restart
+        </button>
       </form>
     </div>
   );
@@ -99,11 +117,13 @@ function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text:
         <button
           type="button"
           className="btn"
+          disabled={!message.trim()}
           onClick={() =>
             void window.desk.gitCommit(workspace, message).then((r) => {
               setOut(r.output);
               onStatus(r.ok ? "Committed" : "Commit did not finish");
-              setMessage("");
+              // Keep the message when the commit failed, so it can be fixed and retried.
+              if (r.ok) setMessage("");
               refresh();
             })
           }
@@ -132,8 +152,20 @@ function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text:
   );
 }
 
+// The preview page must never be able to reach ClaudeDesk itself: it is sandboxed without top-navigation,
+// and ClaudeDesk's own address is refused (same origin would let it lift the sandbox).
+function previewable(url: string) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 function Preview({ url, onUrl }: { url: string; onUrl: (url: string) => void }) {
   const [draft, setDraft] = useState(url);
+  const [error, setError] = useState("");
   return (
     <div className="dock-body preview-pane">
       <form
@@ -142,7 +174,13 @@ function Preview({ url, onUrl }: { url: string; onUrl: (url: string) => void }) 
           e.preventDefault();
           const next = draft.trim();
           if (!next) return;
-          onUrl(/^https?:\/\//i.test(next) ? next : `http://${next}`);
+          const full = /^https?:\/\//i.test(next) ? next : `http://${next}`;
+          if (!previewable(full)) {
+            setError("That address can't be previewed here. ClaudeDesk's own page is blocked.");
+            return;
+          }
+          setError("");
+          onUrl(full);
         }}
       >
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="http://localhost:5173" spellCheck={false} />
@@ -150,7 +188,18 @@ function Preview({ url, onUrl }: { url: string; onUrl: (url: string) => void }) 
           Open
         </button>
       </form>
-      {url ? <iframe className="preview-frame" title="Preview" src={url} /> : <p className="settings-hint">Enter a page address to preview it here.</p>}
+      {error && <p className="settings-hint">{error}</p>}
+      {url && previewable(url) ? (
+        <iframe
+          className="preview-frame"
+          title="Preview"
+          src={url}
+          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <p className="settings-hint">Enter a page address to preview it here.</p>
+      )}
     </div>
   );
 }

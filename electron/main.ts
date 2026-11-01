@@ -4,7 +4,7 @@ import { existsSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runDirect } from "./direct";
+import { deleteDirectHistory, runDirect } from "./direct";
 import { parseDirectModel, providerStatus, setProvider } from "./providers";
 import {
   answerApproval,
@@ -15,6 +15,7 @@ import {
   keepChanges,
   liveRunCount,
   listModels,
+  onNotificationClick,
   pendingRuns,
   probeClaude,
   resumePendingRun,
@@ -36,6 +37,7 @@ import {
   lastUsedProjects,
   listLibraryProjects,
   deleteChat,
+  deletedChatIds,
   loadThread,
   migrateLibraryIfNeeded,
   patchChat,
@@ -106,26 +108,67 @@ function ensureTray() {
   tray.on("click", () => showWindow());
 }
 
+const IGNORED_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "dist-electron",
+  "release",
+  "out",
+  "target",
+  ".next",
+  ".vite",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "coverage",
+  ".turbo",
+  ".cache",
+]);
+
 function watchWorkspace() {
   watcher?.close();
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     watcher = watch(workspace, { recursive: true }, (_event, filename) => {
       const rel = String(filename ?? "");
-      if (
-        rel.includes("node_modules") ||
-        rel.includes("dist-electron") ||
-        rel.includes(`${path.sep}.git${path.sep}`) ||
-        rel.startsWith(".git")
-      ) {
-        return;
-      }
+      // Build output and dependency folders change constantly during builds; reloading on them is wasted work.
+      if (rel.split(/[\\/]/).some((part) => IGNORED_DIRS.has(part))) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => win?.webContents.send("workspace:changed"), 250);
     });
   } catch {
     watcher = null;
   }
+}
+
+// The window must only ever show ClaudeDesk: the preload gives the page full file, shell and git access.
+// Links (chat replies, the preview pane) open in the system browser instead of replacing the app.
+function isAppUrl(url: string) {
+  const dev = process.env.VITE_DEV_SERVER_URL;
+  if (dev) return url.startsWith(dev);
+  return url.startsWith("file://");
+}
+
+function openOutside(url: string) {
+  if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url);
+}
+
+function guardNavigation(w: BrowserWindow) {
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    openOutside(url);
+    return { action: "deny" };
+  });
+  w.webContents.on("will-navigate", (e, url) => {
+    if (isAppUrl(url)) return;
+    e.preventDefault();
+    openOutside(url);
+  });
+  w.webContents.on("will-redirect", (e, url) => {
+    if (isAppUrl(url)) return;
+    e.preventDefault();
+  });
+  w.webContents.on("will-attach-webview", (e) => e.preventDefault());
 }
 
 function createWindow() {
@@ -148,6 +191,7 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
   win.once("ready-to-show", () => win?.show());
+  guardNavigation(win);
   win.on("close", (e) => {
     if (allowQuit || liveRunCount() === 0) return;
     e.preventDefault();
@@ -200,6 +244,8 @@ async function importCursorOnInstall() {
 app.whenReady().then(async () => {
   // The installer runs this and waits, so projects and chats are on disk before the first window.
   if (process.argv.includes("--import-cursor")) {
+    // The installer waits for this, so never let a slow Cursor scan hang the install.
+    const giveUp = setTimeout(() => app.exit(0), 60_000);
     let code = 0;
     if (app.requestSingleInstanceLock()) {
       try {
@@ -209,6 +255,7 @@ app.whenReady().then(async () => {
         code = 1;
       }
     }
+    clearTimeout(giveUp);
     app.exit(code);
     return;
   }
@@ -218,7 +265,9 @@ app.whenReady().then(async () => {
   }
   await migrateLibraryIfNeeded();
   await migrateSettingsIfNeeded();
-  if (!(await rememberedChats()).length) {
+  // Import from Cursor once. People without Cursor would otherwise rescan on every launch.
+  const imported = existsSync(path.join(app.getPath("userData"), "cursor-import.json"));
+  if (!imported && !(await rememberedChats()).length) {
     try {
       await importCursorOnInstall();
     } catch (err) {
@@ -237,6 +286,7 @@ app.whenReady().then(async () => {
     }
   }
   watchWorkspace();
+  onNotificationClick(() => showWindow());
   createWindow();
   for (const run of pendingRuns()) resumePendingRun(win, run.chatId, run.workspace || workspace);
   app.on("activate", () => {
@@ -306,6 +356,12 @@ ipcMain.handle("projects:remove", async (_e, dir: string) => {
   return remaining;
 });
 
+// Same key features.ts uses for a shell: case-insensitive except on Linux.
+function shellKey(cwd: string) {
+  const resolved = path.resolve(cwd);
+  return process.platform === "linux" ? resolved : resolved.toLowerCase();
+}
+
 function keyMatch(a: string, b: string) {
   return path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
 }
@@ -319,17 +375,24 @@ ipcMain.handle("cursor:chats", async (_e, projectPath?: string) => {
   }
   const stored = await rememberedChats();
   const used = await chatLastUsedMap();
+  const gone = await deletedChatIds();
   const byId = new Map<string, (typeof scanned)[number]>();
   for (const c of stored) if (c?.id) byId.set(c.id, c);
   for (const c of scanned) {
-    if (!c?.id) continue;
+    if (!c?.id || gone.has(c.id)) continue;
     const prev = byId.get(c.id);
+    const scannedTitle = c.title && c.title !== "Untitled chat" ? c.title : prev?.title || c.title;
     byId.set(c.id, {
       ...prev,
       ...c,
       projectPath: c.projectPath || prev?.projectPath || null,
       projectName: c.projectName || prev?.projectName || "",
-      title: c.title && c.title !== "Untitled chat" ? c.title : prev?.title || c.title,
+      title: prev?.titleLocked ? prev.title : scannedTitle,
+      titleLocked: prev?.titleLocked,
+      pinned: prev?.pinned,
+      mode: prev?.mode,
+      model: prev?.model,
+      parentId: prev?.parentId,
       lastUsedAt: c.lastUsedAt ?? prev?.lastUsedAt,
     });
   }
@@ -613,10 +676,21 @@ ipcMain.handle("claude:forget", (_e, chatId: string) => {
   forgetSession(chatId);
   return true;
 });
-ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: string; pinned?: boolean; mode?: string; model?: string; parentId?: string }) =>
+ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: unknown; pinned?: unknown; mode?: unknown; model?: unknown; parentId?: unknown }) =>
   patchChat(id, patch),
 );
-ipcMain.handle("chats:delete", (_e, id: string) => deleteChat(id));
+// Deleting a chat stops it and removes everything ClaudeDesk kept for it.
+ipcMain.handle("chats:delete", async (_e, id: string) => {
+  stopClaude(win, id);
+  forgetSession(id);
+  try {
+    deleteDirectHistory(id);
+  } catch (err) {
+    console.error("ClaudeDesk could not remove direct history", err);
+  }
+  await deleteChat(id);
+  return true;
+});
 ipcMain.handle("chats:search", (_e, query: string) => searchMessages(query));
 ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
 ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(cwd, message));
@@ -625,10 +699,16 @@ ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc
 ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(cwd, name, contents));
 ipcMain.handle("shell:open", (e, cwd: string) =>
   openShell(cwd, (chunk) => {
-    if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: path.resolve(cwd).toLowerCase(), chunk });
+    if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: shellKey(cwd), chunk });
   }),
 );
 ipcMain.handle("shell:write", (_e, id: string, text: string) => writeShell(id, text));
+ipcMain.handle("shell:restart", (e, cwd: string) => {
+  closeShell(shellKey(cwd));
+  return openShell(cwd, (chunk) => {
+    if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: shellKey(cwd), chunk });
+  });
+});
 ipcMain.handle("shell:close", (_e, id: string) => {
   closeShell(id);
   return true;

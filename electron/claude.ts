@@ -180,13 +180,53 @@ export function sessionFor(chatId: string): Session {
   return session;
 }
 
+let notificationClick: (() => void) | null = null;
+
+// Clicking a "finished" or "needs you" notification brings the window back, even from the tray.
+export function onNotificationClick(fn: () => void) {
+  notificationClick = fn;
+}
+
+// Streamed text arrives a few characters at a time, and each event re-renders the chat. Text for a chat is
+// combined and sent at most every 30 ms; any other event for that chat sends the waiting text first, so order holds.
+const TEXT_BATCH_MS = 30;
+const pendingText = new Map<string, { win: BrowserWindow | null; event: ClaudeEvent; timer: ReturnType<typeof setTimeout> }>();
+
+function flushText(chatId: string) {
+  const waiting = pendingText.get(chatId);
+  if (!waiting) return;
+  clearTimeout(waiting.timer);
+  pendingText.delete(chatId);
+  deliver(waiting.win, waiting.event);
+}
+
 export function send(win: BrowserWindow | null, event: ClaudeEvent) {
+  const chatId = event.chatId;
+  if (event.kind === "line" && chatId && event.text) {
+    const waiting = pendingText.get(chatId);
+    if (waiting && waiting.win === win && waiting.event.phase === event.phase && waiting.event.sessionId === event.sessionId) {
+      waiting.event.text = `${waiting.event.text ?? ""}${event.text}`;
+      return;
+    }
+    if (waiting) flushText(chatId);
+    pendingText.set(chatId, { win, event: { ...event }, timer: setTimeout(() => flushText(chatId), TEXT_BATCH_MS) });
+    return;
+  }
+  if (chatId) flushText(chatId);
+  deliver(win, event);
+}
+
+function deliver(win: BrowserWindow | null, event: ClaudeEvent) {
   if (win && !win.isDestroyed()) win.webContents.send("claude:event", event);
-  if (!win || win.isDestroyed() || win.isFocused()) return;
+  if (!win || win.isDestroyed() || (win.isVisible() && win.isFocused())) return;
   if (event.kind !== "done" && event.kind !== "approval") return;
+  // The user stopped it themselves; no need to tell them.
+  if (event.kind === "done" && /^Stopped/.test(event.text ?? "")) return;
   if (!Notification.isSupported()) return;
   const body = event.kind === "approval" ? event.approval?.summary || "Claude needs you" : event.text || "Finished";
-  new Notification({ title: "ClaudeDesk", body }).show();
+  const note = new Notification({ title: "ClaudeDesk", body });
+  note.on("click", () => notificationClick?.());
+  note.show();
 }
 
 export function forgetSession(chatId: string) {
