@@ -25,6 +25,10 @@ export type CursorChat = {
   updatedAt: number;
   lastUsedAt?: number;
   size: number;
+  pinned?: boolean;
+  mode?: string;
+  model?: string;
+  parentId?: string;
 };
 
 export type ChatMessage = {
@@ -58,7 +62,12 @@ export function cursorHome() {
 }
 
 export function cursorUserDir() {
-  return path.join(process.env.APPDATA ?? "", "Cursor", "User");
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "Cursor", "User");
+  }
+  if (process.platform === "win32") return path.join(process.env.APPDATA ?? "", "Cursor", "User");
+  const config = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  return path.join(config, "Cursor", "User");
 }
 
 export function slugFromPath(abs: string): string {

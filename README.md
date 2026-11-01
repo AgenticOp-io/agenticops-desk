@@ -18,7 +18,7 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 ## Requirements
 
-- Windows 10/11, Node.js 20+
+- Windows 10/11, Node.js 22+
 - A Claude account: sign in from **Settings → Claude Code → Sign in** (no CLI install needed)
 - For Direct chats, an API key per provider in **Settings → Direct AI providers** (Ollama needs none)
 - Git for Windows (for Claude Code's Bash tool); PowerShell 7 is optional
@@ -42,6 +42,8 @@ That adds **ClaudeDesk** to the Desktop and Start menu. It starts the same dev b
 ## Installers
 
 The **Release** workflow (Actions → Release → Run workflow, or push a `v*` tag) builds Windows, macOS and Linux, each for both chip types. The installers are about 100 MB. They do not contain Claude Code. On first launch, with a network connection, ClaudeDesk downloads the one binary for that computer from npm and checks it against npm's SHA-512 fingerprint. Later launches work offline. Running from a source checkout does not download anything; it uses the binary from `node_modules`.
+
+The Windows setup imports Cursor projects and chats while it installs, and opens the most recently used project if ClaudeDesk does not already have one. A portable copy does the same import the first time it starts.
 
 | Platform | Files |
 |----------|-------|

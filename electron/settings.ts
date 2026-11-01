@@ -16,6 +16,7 @@ export type UiPrefs = {
   openFiles: string[];
   activeFile: string;
   draft: string;
+  theme: "dark" | "light";
 };
 
 const defaults = (): UiPrefs => ({
@@ -32,6 +33,7 @@ const defaults = (): UiPrefs => ({
   openFiles: [],
   activeFile: "",
   draft: "",
+  theme: "dark",
 });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -69,6 +71,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     openFiles: Array.isArray(r.openFiles) ? r.openFiles.map(String) : [],
     activeFile: str(r.activeFile),
     draft: str(r.draft),
+    theme: r.theme === "light" ? "light" : "dark",
   };
 }
 

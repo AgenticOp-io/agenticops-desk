@@ -7,6 +7,23 @@ export const MODES = [
   { value: "acceptEdits", label: "Auto-edit", hint: "Applies file edits without asking" },
 ] as const;
 
+const SLASH = [
+  ["help", "Open help"],
+  ["agent", "Agent mode"],
+  ["plan", "Plan mode"],
+  ["auto", "Auto-edit mode"],
+  ["catchup", "Catch Claude up on this chat"],
+  ["terminal", "Open the terminal"],
+  ["git", "Open git"],
+  ["preview", "Open the page preview"],
+  ["notes", "Edit project instructions and MCP servers"],
+  ["rename", "Rename this chat"],
+  ["pin", "Pin or unpin this chat"],
+  ["branch", "Branch this chat"],
+  ["theme", "Switch light and dark"],
+  ["palette", "Open the command palette"],
+] as const;
+
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 type Hit = { name: string; path: string; rel: string };
 export type ComposerHandle = { focus: () => void; addMention: (abs: string, rel: string) => void };
@@ -44,6 +61,7 @@ export const Composer = forwardRef<
     models: ModelOption[];
     usage?: UsageInfo;
     onSend: (extra: { images: ImageAttachment[]; mentions: string[] }) => void;
+    onCommand: (command: string) => void;
     onCatchUp: () => void;
     onStop: () => void;
   }
@@ -114,7 +132,19 @@ export const Composer = forwardRef<
     if (read.length) setImages((cur) => [...cur, ...read].slice(0, 10));
   };
 
+  const slash = value.trim().match(/^\/([a-z]+)(?:\s+(\S.*))?$/i);
+  const slashHits = slash
+    ? SLASH.filter(([cmd]) => cmd.startsWith(slash[1].toLowerCase()))
+    : value.trim() === "/"
+      ? [...SLASH]
+      : [];
+
   const send = () => {
+    if (slash && slashHits.some(([cmd]) => cmd === slash[1].toLowerCase()) && !slash[2]) {
+      props.onCommand(slash[1].toLowerCase());
+      onChange("");
+      return;
+    }
     if (running || (!value.trim() && !images.length)) return;
     // Only mentions still present in the text count; deleting "@file" drops it.
     const live = Object.entries(mentions)
@@ -161,6 +191,25 @@ export const Composer = forwardRef<
         </div>
       )}
       <div className="composer-input">
+        {slashHits.length > 0 && (
+          <div className="mention-pop">
+            {slashHits.map(([cmd, label]) => (
+              <button
+                type="button"
+                key={cmd}
+                className="mention-item"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  props.onCommand(cmd);
+                  onChange("");
+                }}
+              >
+                <span className="mention-name">/{cmd}</span>
+                <span className="mention-rel">{label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {query !== null && hits.length > 0 && (
           <div className="mention-pop">
             {hits.map((h, i) => (

@@ -2,7 +2,7 @@ import { app } from "electron";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listCursorProjects, slugFromPath, type CursorChat, type CursorProject } from "./cursor";
+import { listCursorChats, listCursorProjects, slugFromPath, type CursorChat, type CursorProject } from "./cursor";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
 
 export type ProjectRecord = CursorProject & { lastUsedAt: number };
@@ -250,7 +250,15 @@ export function rememberChats(chats: CursorChat[]) {
         prev.projectPath !== c.projectPath ||
         prev.size !== c.size
       ) {
-        byId.set(c.id, { ...prev, ...c, lastUsedAt: c.lastUsedAt ?? prev.lastUsedAt });
+        byId.set(c.id, {
+          ...prev,
+          ...c,
+          lastUsedAt: c.lastUsedAt ?? prev.lastUsedAt,
+          pinned: c.pinned ?? prev.pinned,
+          mode: c.mode ?? prev.mode,
+          model: c.model ?? prev.model,
+          parentId: c.parentId ?? prev.parentId,
+        });
         changed = true;
       }
     }
@@ -283,8 +291,74 @@ export function upsertChat(chat: CursorChat) {
   });
 }
 
+export function patchChat(id: string, patch: Partial<CursorChat>) {
+  return withLibrary(async (lib) => {
+    const row = lib.chats.find((c) => c.id === id);
+    if (!row) return null;
+    Object.assign(row, patch, { updatedAt: Date.now() });
+    await save(lib);
+    return row;
+  });
+}
+
+export function deleteChat(id: string) {
+  return withLibrary(async (lib) => {
+    lib.chats = lib.chats.filter((c) => c.id !== id);
+    delete lib.chatLastUsed[id];
+    await save(lib);
+    await fs.rm(threadFile(id), { force: true }).catch(() => undefined);
+  });
+}
+
+export async function searchMessages(query: string): Promise<string[]> {
+  const needle = query.trim().toLowerCase();
+  if (needle.length < 2) return [];
+  const dir = path.join(app.getPath("userData"), "threads");
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+  const hits: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json") || hits.length >= 40) continue;
+    const id = name.slice(0, -5);
+    try {
+      const raw = await fs.readFile(path.join(dir, name), "utf8");
+      if (raw.toLowerCase().includes(needle)) hits.push(id);
+    } catch {
+      /* skip a thread that is mid-write */
+    }
+  }
+  return hits;
+}
+
 export function rememberedChats(): Promise<CursorChat[]> {
   return withLibrary((lib) => lib.chats);
+}
+
+// Reads Cursor's own project list and chat index into this library. Removed projects stay removed.
+export async function importCursorLibrary(): Promise<{ projects: number; chats: number; workspace: string | null }> {
+  let projects: CursorProject[] = [];
+  let chats: CursorChat[] = [];
+  try {
+    projects = await listCursorProjects();
+    await rememberProjects(projects);
+  } catch (err) {
+    console.error("ClaudeDesk could not read Cursor projects", err);
+  }
+  try {
+    chats = await listCursorChats();
+    await rememberChats(chats);
+  } catch (err) {
+    console.error("ClaudeDesk could not read Cursor chats", err);
+  }
+  const workspace =
+    [...projects]
+      .filter((p) => p.path && p.exists)
+      .sort((a, b) => (b.lastChatAt ?? 0) - (a.lastChatAt ?? 0))[0]?.path ?? null;
+  return { projects: projects.filter((p) => p.path).length, chats: chats.length, workspace };
 }
 
 export function lastUsedProjects() {

@@ -12,6 +12,7 @@ export type UiPrefs = {
   openFiles: string[];
   activeFile: string;
   draft: string;
+  theme: "dark" | "light";
 };
 
 export const defaultPrefs = (): UiPrefs => ({
@@ -28,6 +29,7 @@ export const defaultPrefs = (): UiPrefs => ({
   openFiles: [],
   activeFile: "",
   draft: "",
+  theme: "dark",
 });
 
 export function clamp(n: number, min: number, max: number) {

@@ -3,7 +3,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
@@ -47,8 +47,11 @@ export type ClaudeEvent = {
     | "done"
     | "changes"
     | "usage"
-    | "models";
+    | "models"
+    | "todos"
+    | "plan";
   files?: string[];
+  todos?: Array<{ content: string; status: string }>;
   usage?: UsageInfo;
   models?: ModelOption[];
   text?: string;
@@ -179,6 +182,35 @@ export function sessionFor(chatId: string): Session {
 
 export function send(win: BrowserWindow | null, event: ClaudeEvent) {
   if (win && !win.isDestroyed()) win.webContents.send("claude:event", event);
+  if (!win || win.isDestroyed() || win.isFocused()) return;
+  if (event.kind !== "done" && event.kind !== "approval") return;
+  if (!Notification.isSupported()) return;
+  const body = event.kind === "approval" ? event.approval?.summary || "Claude needs you" : event.text || "Finished";
+  new Notification({ title: "ClaudeDesk", body }).show();
+}
+
+export function forgetSession(chatId: string) {
+  clearClaudeSession(chatId, sessionFor(chatId));
+}
+
+function noteStructured(win: BrowserWindow | null, chatId: string, name: string, input: unknown) {
+  const rec = input && typeof input === "object" ? (input as Record<string, unknown>) : null;
+  if (!rec) return;
+  if (name === "TodoWrite" || name === "todo_write") {
+    const todos = Array.isArray(rec.todos) ? rec.todos : [];
+    const items = todos
+      .map((row) => {
+        const item = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+        const content = typeof item.content === "string" ? item.content : "";
+        const status = typeof item.status === "string" ? item.status : "pending";
+        return content ? { content, status } : null;
+      })
+      .filter((item): item is { content: string; status: string } => Boolean(item));
+    if (items.length) send(win, { kind: "todos", chatId, todos: items, running: true });
+  }
+  if (name === "ExitPlanMode" && typeof rec.plan === "string" && rec.plan.trim()) {
+    send(win, { kind: "plan", chatId, text: rec.plan, running: true });
+  }
 }
 
 function approvalSummary(toolName: string, input: Record<string, unknown>): string {
@@ -331,6 +363,46 @@ function toolLabel(name: string, input: unknown): string {
   return name;
 }
 
+function shortPath(p: string): string {
+  const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.slice(-2).join("/") || p;
+}
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+// A plain sentence for the status line, the way Cursor names the current step.
+export function explainWork(name: string, input: unknown): { phase: RunPhase; text: string } {
+  const rec = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const file = typeof rec.file_path === "string" ? rec.file_path : typeof rec.path === "string" ? rec.path : "";
+  const dir = typeof rec.target_directory === "string" ? rec.target_directory : typeof rec.path === "string" ? rec.path : "";
+  const pattern =
+    typeof rec.pattern === "string" ? rec.pattern : typeof rec.query === "string" ? rec.query : typeof rec.regex === "string" ? rec.regex : "";
+  const command = commandText(input);
+  const pushed = pushActivity(command);
+  if (pushed) return pushed;
+  const key = name.toLowerCase().replace(/[^a-z]/g, "");
+  if (key === "read" || key === "readfile") return { phase: "tool", text: file ? `Reading ${shortPath(file)}` : "Reading a file" };
+  if (key === "edit" || key === "multiedit" || key === "notebookedit" || key === "editfile") {
+    return { phase: "tool", text: file ? `Editing ${shortPath(file)}` : "Editing a file" };
+  }
+  if (key === "write" || key === "writefile") return { phase: "tool", text: file ? `Writing ${shortPath(file)}` : "Writing a file" };
+  if (key === "grep" || key === "search") return { phase: "tool", text: pattern ? `Searching for ${clip(pattern, 48)}` : "Searching the project" };
+  if (key === "glob" || key === "ls" || key === "listfiles") {
+    return { phase: "tool", text: dir ? `Looking through ${shortPath(dir)}` : "Looking through the project" };
+  }
+  if (key === "bash" || key === "powershell" || key === "runcommand") {
+    return { phase: "tool", text: command ? `Running ${clip(command, 72)}` : "Running a command" };
+  }
+  if (key === "webfetch") return { phase: "tool", text: "Fetching a web page" };
+  if (key === "websearch") return { phase: "tool", text: pattern ? `Searching the web for ${clip(pattern, 48)}` : "Searching the web" };
+  if (key === "todowrite") return { phase: "tool", text: "Updating the task list" };
+  if (key === "task") return { phase: "tool", text: "Working on a subtask" };
+  return { phase: "tool", text: file ? `${name} ${shortPath(file)}` : name };
+}
+
 // Claude Code for this machine. A source checkout uses the copy in node_modules. A packaged
 // install downloads the matching build on first launch and checks it against npm's fingerprint.
 
@@ -422,7 +494,7 @@ function pushActivity(blob: string): { phase: RunPhase; text: string } | null {
 }
 
 function describeTool(name: string, input: unknown): { phase: RunPhase; text: string } {
-  return pushActivity(`${commandText(input)} ${toolLabel(name, input)}`) ?? { phase: "tool", text: toolLabel(name, input) };
+  return explainWork(name, input);
 }
 
 function describePartial(partial: string): { phase: RunPhase; text: string } | null {
@@ -458,6 +530,7 @@ function announceTool(
   if (session.block) session.block.label = activity.text;
   session.lastWasText = false;
   sendPhase(win, chatId, session, activity.phase, activity.text, true);
+  noteStructured(win, chatId, name, input);
 }
 
 function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string, session: Session) {
@@ -479,7 +552,7 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
     if (type === "system") {
       const subtype = String(msg.subtype ?? "");
       if (subtype === "init") {
-        send(win, { kind: "status", text: "Claude Code started", sessionId, chatId, running: true, phase: "thinking" });
+        send(win, { kind: "status", text: "Getting ready…", sessionId, chatId, running: true, phase: "thinking" });
       } else if (subtype === "permission_denied") {
         const message = typeof msg.message === "string" ? msg.message : "Permission denied";
         if (!/denied this in ClaudeDesk|Stopped before approval/i.test(message)) {
@@ -504,7 +577,7 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       if (text && !session.streamedText) {
         // Separate consecutive assistant messages that the renderer would otherwise glue together.
         const prefix = session.lastWasText ? "\n\n" : "";
-        sendPhase(win, chatId, session, "writing", "Writing…");
+        sendPhase(win, chatId, session, "writing", "Writing the reply…");
         send(win, { kind: "line", text: prefix + text, phase: "writing", sessionId, chatId, running: true });
         session.sawText = true;
         session.lastWasText = true;
@@ -535,7 +608,7 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
           sendPhase(win, chatId, session, "thinking", "Thinking…");
         } else if (block?.type === "text") {
           session.block.label = "Writing…";
-          sendPhase(win, chatId, session, "writing", "Writing…");
+          sendPhase(win, chatId, session, "writing", "Writing the reply…");
         } else if (block?.type === "tool_use" && block.name) {
           session.block.label = block.name;
           sendPhase(win, chatId, session, "tool", block.name);
@@ -558,7 +631,7 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
           session.lastWasText = true;
           if (session.block?.label !== "Writing…") {
             if (session.block) session.block.label = "Writing…";
-            sendPhase(win, chatId, session, "writing", "Writing…");
+            sendPhase(win, chatId, session, "writing", "Writing the reply…");
           }
           send(win, { kind: "line", text: delta.text, phase: "writing", sessionId, chatId, running: true });
           return;
@@ -792,6 +865,14 @@ export function shutdownClaude() {
     session.approvals.clear();
     endRun(session);
   }
+}
+
+export function liveRunCount() {
+  let n = 0;
+  for (const session of sessions.values()) {
+    if (session.query || session.abort) n += 1;
+  }
+  return n;
 }
 
 export function pendingRuns(): Array<{ chatId: string; workspace?: string }> {

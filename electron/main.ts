@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
@@ -11,7 +11,9 @@ import {
   changeBase,
   changedFiles,
   findClaudeCli,
+  forgetSession,
   keepChanges,
+  liveRunCount,
   listModels,
   pendingRuns,
   probeClaude,
@@ -30,10 +32,14 @@ import {
 import {
   addProject,
   chatLastUsedMap,
+  importCursorLibrary,
   lastUsedProjects,
   listLibraryProjects,
+  deleteChat,
   loadThread,
   migrateLibraryIfNeeded,
+  patchChat,
+  searchMessages,
   rememberChats,
   rememberProjects,
   rememberedChats,
@@ -43,6 +49,18 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
+import {
+  checkForUpdate,
+  closeAllShells,
+  closeShell,
+  gitCommit,
+  gitPullRequest,
+  gitStatus,
+  openShell,
+  readProjectDoc,
+  writeProjectDoc,
+  writeShell,
+} from "./features";
 import { loadSettings, migrateSettingsIfNeeded, patchSettings, type UiPrefs } from "./settings";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +69,42 @@ app.setPath("userData", path.join(app.getPath("appData"), "ClaudeDesk"));
 let win: BrowserWindow | null = null;
 let workspace = process.cwd();
 let watcher: FSWatcher | null = null;
+let tray: Tray | null = null;
+let allowQuit = false;
+
+function showWindow() {
+  if (!win || win.isDestroyed()) createWindow();
+  if (win?.isMinimized()) win.restore();
+  win?.show();
+  win?.focus();
+}
+
+function ensureTray() {
+  if (tray) return;
+  const size = 16;
+  const buf = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    buf[i * 4] = 80;
+    buf[i * 4 + 1] = 180;
+    buf[i * 4 + 2] = 60;
+    buf[i * 4 + 3] = 255;
+  }
+  tray = new Tray(nativeImage.createFromBitmap(buf, { width: size, height: size }));
+  tray.setToolTip("ClaudeDesk is still working");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Show ClaudeDesk", click: () => showWindow() },
+      {
+        label: "Quit",
+        click: () => {
+          allowQuit = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  tray.on("click", () => showWindow());
+}
 
 function watchWorkspace() {
   watcher?.close();
@@ -94,6 +148,12 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
   win.once("ready-to-show", () => win?.show());
+  win.on("close", (e) => {
+    if (allowQuit || liveRunCount() === 0) return;
+    e.preventDefault();
+    ensureTray();
+    win?.hide();
+  });
 
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -121,13 +181,50 @@ app.on("second-instance", () => {
   win.focus();
 });
 
+async function importCursorOnInstall() {
+  await migrateLibraryIfNeeded();
+  const result = await importCursorLibrary();
+  await migrateSettingsIfNeeded();
+  const s = await loadSettings();
+  if (!s.lastWorkspace && result.workspace && existsSync(result.workspace)) {
+    await patchSettings({ lastWorkspace: result.workspace });
+  }
+  await fs.writeFile(
+    path.join(app.getPath("userData"), "cursor-import.json"),
+    JSON.stringify({ ...result, at: new Date().toISOString() }, null, 2),
+    "utf8",
+  );
+  return result;
+}
+
 app.whenReady().then(async () => {
+  // The installer runs this and waits, so projects and chats are on disk before the first window.
+  if (process.argv.includes("--import-cursor")) {
+    let code = 0;
+    if (app.requestSingleInstanceLock()) {
+      try {
+        await importCursorOnInstall();
+      } catch (err) {
+        console.error("ClaudeDesk could not import Cursor during install", err);
+        code = 1;
+      }
+    }
+    app.exit(code);
+    return;
+  }
   if (!(await claimSingleInstance())) {
     app.quit();
     return;
   }
   await migrateLibraryIfNeeded();
   await migrateSettingsIfNeeded();
+  if (!(await rememberedChats()).length) {
+    try {
+      await importCursorOnInstall();
+    } catch (err) {
+      console.error("ClaudeDesk could not import Cursor", err);
+    }
+  }
   const s = await loadSettings();
   if (s.lastWorkspace && existsSync(s.lastWorkspace)) {
     workspace = s.lastWorkspace;
@@ -147,7 +244,11 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => shutdownClaude());
+app.on("before-quit", () => {
+  allowQuit = true;
+  closeAllShells();
+  shutdownClaude();
+});
 
 app.on("window-all-closed", () => {
   watcher?.close();
@@ -507,3 +608,29 @@ ipcMain.handle(
     },
   ) => answerApproval(win, payload.chatId, payload.requestId, payload),
 );
+
+ipcMain.handle("claude:forget", (_e, chatId: string) => {
+  forgetSession(chatId);
+  return true;
+});
+ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: string; pinned?: boolean; mode?: string; model?: string; parentId?: string }) =>
+  patchChat(id, patch),
+);
+ipcMain.handle("chats:delete", (_e, id: string) => deleteChat(id));
+ipcMain.handle("chats:search", (_e, query: string) => searchMessages(query));
+ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
+ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(cwd, message));
+ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(cwd, title, body));
+ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc(cwd, name));
+ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(cwd, name, contents));
+ipcMain.handle("shell:open", (e, cwd: string) =>
+  openShell(cwd, (chunk) => {
+    if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: path.resolve(cwd).toLowerCase(), chunk });
+  }),
+);
+ipcMain.handle("shell:write", (_e, id: string, text: string) => writeShell(id, text));
+ipcMain.handle("shell:close", (_e, id: string) => {
+  closeShell(id);
+  return true;
+});
+ipcMain.handle("updates:check", () => checkForUpdate());

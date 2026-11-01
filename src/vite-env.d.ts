@@ -36,7 +36,8 @@ export type ProviderStatus = {
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
 
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models";
+  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan";
+  todos?: Array<{ content: string; status: string }>;
   // "changes": files Claude edited in this chat that the user has not kept or undone yet.
   files?: string[];
   usage?: UsageInfo;
@@ -69,6 +70,10 @@ export type CursorChat = {
   updatedAt: number;
   lastUsedAt?: number;
   size: number;
+  pinned?: boolean;
+  mode?: string;
+  model?: string;
+  parentId?: string;
 };
 
 export type CursorChatDetail = CursorChat & {
@@ -138,6 +143,20 @@ declare global {
       saveSettings: (prefs: Partial<import("./prefs").UiPrefs>) => Promise<import("./prefs").UiPrefs>;
       onClaudeEvent: (cb: (event: ClaudeEvent) => void) => () => void;
       onWorkspaceChanged: (cb: () => void) => () => void;
+      forgetSession: (chatId: string) => Promise<boolean>;
+      patchChat: (id: string, patch: Partial<CursorChat>) => Promise<CursorChat | null>;
+      deleteChat: (id: string) => Promise<void>;
+      searchMessages: (query: string) => Promise<string[]>;
+      gitStatus: (cwd: string) => Promise<{ ok: boolean; branch: string; lines: string; diff: string }>;
+      gitCommit: (cwd: string, message: string) => Promise<{ ok: boolean; output: string }>;
+      gitPullRequest: (cwd: string, title: string, body: string) => Promise<{ ok: boolean; output: string }>;
+      readProjectDoc: (cwd: string, name: string) => Promise<string>;
+      writeProjectDoc: (cwd: string, name: string, contents: string) => Promise<boolean>;
+      openShell: (cwd: string) => Promise<string>;
+      writeShell: (id: string, text: string) => Promise<boolean>;
+      closeShell: (id: string) => Promise<boolean>;
+      onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
+      checkForUpdate: () => Promise<{ current: string; latest: string | null; url: string | null; note: string }>;
     };
   }
 }

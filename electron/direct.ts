@@ -14,6 +14,7 @@ import {
   realStorePwsh,
   send,
   sendChanges,
+  explainWork,
   sendPhase,
   sessionFor,
   snapshotFile,
@@ -89,6 +90,27 @@ const TOOLS: Neutral[] = [
       timeout_seconds: { type: "integer", description: "Default 120, max 600" },
     },
     required: ["command"],
+  },
+  {
+    name: "web_fetch",
+    description: "Fetch a public http or https page and return its text (HTML tags stripped, length capped).",
+    properties: { url: { type: "string" } },
+    required: ["url"],
+  },
+  {
+    name: "todo_write",
+    description: "Replace the task list the user can see. Each item has content and status: pending, in_progress, or completed.",
+    properties: {
+      todos: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { content: { type: "string" }, status: { type: "string" } },
+          required: ["content", "status"],
+        },
+      },
+    },
+    required: ["todos"],
   },
 ];
 
@@ -292,6 +314,34 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
       }
       return { text: hits.length ? hits.join("\n") : "No matches." };
     }
+    if (name === "web_fetch") {
+      const url = str(input.url);
+      if (!url || !/^https?:\/\//i.test(url)) return { text: "url must start with http:// or https://", error: true };
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20_000);
+      const onAbort = () => ctrl.abort();
+      ctx.signal.addEventListener("abort", onAbort);
+      const res = await fetch(url, { signal: ctrl.signal }).finally(() => {
+        clearTimeout(timer);
+        ctx.signal.removeEventListener("abort", onAbort);
+      });
+      const raw = await res.text();
+      const text = raw.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      return { text: clip(`${res.status} ${url}\n${text}`) };
+    }
+    if (name === "todo_write") {
+      const todos = Array.isArray(input.todos) ? input.todos : [];
+      const items = todos
+        .map((row) => {
+          const item = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+          const content = typeof item.content === "string" ? item.content : "";
+          const status = typeof item.status === "string" ? item.status : "pending";
+          return content ? { content, status } : null;
+        })
+        .filter((item): item is { content: string; status: string } => Boolean(item));
+      send(ctx.win, { kind: "todos", chatId: ctx.chatId, todos: items, running: true });
+      return { text: `Task list updated (${items.length})` };
+    }
     if (name === "run_command") {
       const command = str(input.command);
       if (!command) return { text: "command is required", error: true };
@@ -304,19 +354,6 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
   } catch (err) {
     return { text: err instanceof Error ? err.message : String(err), error: true };
   }
-}
-
-function toolLabel(name: string, input: Record<string, unknown>) {
-  const bit = str(input.path) ?? str(input.command) ?? str(input.pattern) ?? "";
-  const verb: Record<string, string> = {
-    read_file: "Read",
-    write_file: "Write",
-    edit_file: "Edit",
-    list_files: "List",
-    search: "Search",
-    run_command: "Run",
-  };
-  return `${verb[name] ?? name} ${bit.replace(/\s+/g, " ").slice(0, 90)}`.trim();
 }
 
 function systemPrompt(cwd: string, memory: string) {
@@ -412,7 +449,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     );
     stream.on("text", (delta) => {
       if (!lastWasText) {
-        sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing…");
+        sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing the reply…");
         lastWasText = true;
       }
       send(ctx.win, { kind: "line", text: delta, phase: "writing", chatId: ctx.chatId, running: true });
@@ -454,7 +491,8 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
       const spec = TOOLS.find((t) => t.name === call.name);
       const missing = spec?.required.filter((k) => input[k] === undefined) ?? [];
       lastWasText = false;
-      sendPhase(ctx.win, ctx.chatId, ctx.session, "tool", toolLabel(call.name, input), true);
+      const step = explainWork(call.name, input);
+      sendPhase(ctx.win, ctx.chatId, ctx.session, step.phase, step.text, true);
       const r = missing.length
         ? { text: `INVALID_JSON: missing ${missing.join(", ")}`, error: true }
         : await runTool(ctx, call.name, input, call.id);
@@ -496,7 +534,7 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
       if (delta?.content) {
-        if (!text) sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing…");
+        if (!text) sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing the reply…");
         text += delta.content;
         send(ctx.win, { kind: "line", text: delta.content, phase: "writing", chatId: ctx.chatId, running: true });
       }
@@ -528,7 +566,8 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       } catch {
         bad = "INVALID_JSON: the tool arguments were not valid JSON.";
       }
-      sendPhase(ctx.win, ctx.chatId, ctx.session, "tool", toolLabel(c.name, input), true);
+      const step = explainWork(c.name, input);
+      sendPhase(ctx.win, ctx.chatId, ctx.session, step.phase, step.text, true);
       const r = bad ? { text: bad } : await runTool(ctx, c.name, input, id);
       messages.push({ role: "tool", tool_call_id: id, content: r.text });
     }

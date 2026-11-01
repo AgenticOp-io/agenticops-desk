@@ -15,6 +15,9 @@ const ICONS: Record<string, string> = {
   newFolder: "M1.5 3.5a1 1 0 0 1 1-1h3.6l1.5 1.5h5.9a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9ZM8 6.5v5M5.5 9h5",
   refresh: "M13.5 8A5.5 5.5 0 1 1 11.9 4.1M13.5 2v3.5H10",
   collapse: "M3 5.5 8 1.5l5 4M3 10.5l5 4 5-4",
+  folder: "M2.2 4.4h4l1.2 1.3h6.4v6.8H2.2Z",
+  folderOpen: "M2.2 6.2h11.6v6.2H2.2ZM2.2 6.2 3.6 4.2h3.2l1.1 1.2",
+  page: "M4.2 2.2h5L12 4.8v8.8H4.2ZM9 2.4v2.8h2.6",
 };
 
 function Icon({ name }: { name: keyof typeof ICONS }) {
@@ -87,13 +90,17 @@ function Node({
         onClick={() => (entry.isDir ? ctx.toggleDir(entry.path) : ctx.onOpen(entry.path))}
         onContextMenu={(e) => ctx.onMenu(e, entry)}
       >
-        <span className={`tree-icon ${entry.isDir ? (open ? "dir open" : "dir") : "file"}`} />
+        <span className="tree-icon">
+          <Icon name={entry.isDir ? (open ? "folderOpen" : "folder") : "page"} />
+        </span>
         {renaming ? <NameInput initial={entry.name} onDone={ctx.finishEdit} /> : <span className="tree-name">{entry.name}</span>}
         {changed && <span className="tree-badge" title="Changed by Claude">M</span>}
       </div>
       {open && creating && (
         <div className="tree-item" style={{ ["--depth" as string]: depth + 1 }}>
-          <span className={`tree-icon ${ctx.editing?.kind === "folder" ? "dir" : "file"}`} />
+          <span className="tree-icon">
+            <Icon name={ctx.editing?.kind === "folder" ? "folder" : "page"} />
+          </span>
           <NameInput initial="" onDone={ctx.finishEdit} />
         </div>
       )}

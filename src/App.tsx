@@ -4,6 +4,9 @@ import { ChangesBar } from "./ChangesBar";
 import { CodePane, type DiffView } from "./CodePane";
 import { Composer, type ComposerHandle } from "./Composer";
 import { Explorer } from "./Explorer";
+import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import { Dock, type DockTab } from "./Dock";
+import { Help } from "./Help";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
@@ -34,14 +37,10 @@ type Tab = { path: string; name: string; contents: string; dirty: boolean };
 type RunProgress = { status: string; steps: string[]; phase?: RunPhase };
 
 function phaseWord(progress?: RunProgress) {
-  if (!progress) return "Starting";
-  if (progress.phase === "approval") return "Needs permission";
-  if (progress.phase === "thinking") return "Thinking";
-  if (progress.phase === "writing") return "Writing";
-  if (progress.phase === "pushing") return progress.status.startsWith("Pushing to main") ? "Pushing to main" : "Pushing";
-  if (progress.phase === "starting") return "Starting";
-  const text = progress.status.replace(/…$/, "").trim();
-  return text || "Working";
+  const text = progress?.status?.replace(/…$/, "").trim();
+  if (text) return text;
+  if (progress?.phase === "approval") return "Needs permission";
+  return "Working";
 }
 
 function phaseRank(progress?: RunProgress) {
@@ -71,20 +70,18 @@ function relTime(ms: number | null) {
   return new Date(ms).toLocaleDateString();
 }
 
-function Chevron({ open }: { open: boolean }) {
+const GLYPH: Record<string, string> = {
+  chats: "M2.4 4.2h6.4a1 1 0 0 1 1 1v3.6a1 1 0 0 1-1 1H6.2L4.4 12v-2.2H2.4a1 1 0 0 1-1-1V5.2a1 1 0 0 1 1-1ZM6.2 6.6h6.4a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H8.6",
+  files: "M3.2 2.4h5.6L12.4 6v7.2a.8.8 0 0 1-.8.8H3.2a.8.8 0 0 1-.8-.8V3.2a.8.8 0 0 1 .8-.8ZM8.6 2.6V6h3.6",
+  project: "M8 1.8 13.2 4.6v6.8L8 14.2 2.8 11.4V4.6Z",
+  chat: "M3.2 3.6h9.6v6.4H6.4L4.2 12.4V10H3.2Z",
+};
+
+function Glyph({ name }: { name: keyof typeof GLYPH }) {
   return (
-    <span className={`chevron ${open ? "open" : ""}`} aria-hidden>
-      <svg viewBox="0 0 16 16" focusable="false">
-        <path
-          d="M6 3.25 11.25 8 6 12.75"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
+    <svg className="glyph" viewBox="0 0 16 16" aria-hidden>
+      <path d={GLYPH[name]} fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -186,6 +183,14 @@ export function App() {
   const [filter, setFilter] = useState("");
   const [prefs, setPrefs] = useState<UiPrefs>(() => defaultPrefs());
   const [showSettings, setShowSettings] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [dock, setDock] = useState<DockTab | null>(null);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [todosByChat, setTodosByChat] = useState<Record<string, Array<{ content: string; status: string }>>>({});
+  const [planByChat, setPlanByChat] = useState<Record<string, string>>({});
+  const [bodyHits, setBodyHits] = useState<string[]>([]);
+  const [updateNote, setUpdateNote] = useState("");
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -212,6 +217,7 @@ export function App() {
   const autoOpenRef = useRef<string | null>(null);
   const activeChatRef = useRef<CursorChat | null>(null);
   const threadsRef = useRef(threads);
+  const chatsRef = useRef(chats);
   const prefsReady = useRef(false);
   const persistIds = useRef(new Set<string>());
   // The thread array last sent to disk per chat, so the debounced save skips chats that did not change.
@@ -221,6 +227,7 @@ export function App() {
   activeRef.current = activePath;
   activeChatRef.current = activeChat;
   threadsRef.current = threads;
+  chatsRef.current = chats;
   const msgs = activeChat ? threads[activeChat.id] ?? [] : [];
   const running = Boolean(activeChat && runningByChat[activeChat.id]);
   const runProgress = activeChat ? progressByChat[activeChat.id] : undefined;
@@ -311,6 +318,8 @@ export function App() {
       await focusProject(chat.projectPath);
     }
     setActiveChat(chat);
+    setMode(chat.mode || "default");
+    setModel(chat.model ?? "");
     if (threadsRef.current[chat.id]) {
       setStatus(chat.title);
       return;
@@ -422,7 +431,7 @@ export function App() {
       if (ev.kind === "line" && ev.text) {
         setProgressByChat((p) => ({
           ...p,
-          [chatId]: { status: "Writing…", steps: p[chatId]?.steps ?? [], phase: "writing" },
+          [chatId]: { status: "Writing the reply…", steps: p[chatId]?.steps ?? [], phase: "writing" },
         }));
         patchThread(chatId, (m) => {
           const last = m[m.length - 1];
@@ -440,7 +449,17 @@ export function App() {
         }));
         if (activeChatRef.current?.id === chatId) setStatus(ev.text);
       }
+      if (ev.kind === "todos" && ev.todos) {
+        setTodosByChat((cur) => ({ ...cur, [chatId]: ev.todos ?? [] }));
+      }
+      if (ev.kind === "plan" && ev.text) {
+        setPlanByChat((cur) => ({ ...cur, [chatId]: ev.text ?? "" }));
+      }
       if (ev.kind === "done") {
+        if (activeChatRef.current?.id !== chatId && typeof Notification !== "undefined") {
+          const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "A chat";
+          new Notification("ClaudeDesk", { body: `${title} finished` });
+        }
         setPendingApprovals((list) => list.filter((a) => a.chatId !== chatId));
         setProgressByChat((p) => ({
           ...p,
@@ -532,6 +551,16 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
+      if (e.key === "F1" || ((e.ctrlKey || e.metaKey) && e.key === "/")) {
+        e.preventDefault();
+        setShowHelp((v) => !v);
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         setSideView((v) => (v === "files" ? "chats" : "files"));
@@ -551,7 +580,12 @@ export function App() {
         setQuickQuery("");
         setTimeout(() => quickRef.current?.focus(), 0);
       }
-      if (e.key === "Escape") setQuickOpen(false);
+      if (e.key === "Escape") {
+        setQuickOpen(false);
+        setShowHelp(false);
+        setShowSettings(false);
+        setPaletteOpen(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -641,16 +675,18 @@ export function App() {
     markUsed(id, workspace);
   };
 
-  const send = async (extra: { images: ImageAttachment[]; mentions: string[] } = { images: [], mentions: [] }) => {
-    const typed = prompt.trim();
+  const send = async (
+    extra: { images: ImageAttachment[]; mentions: string[]; text?: string } = { images: [], mentions: [] },
+  ) => {
+    const typed = (extra.text ?? prompt).trim();
     const chat = activeChat;
     if ((!typed && !extra.images.length) || !chat || runningByChat[chat.id]) return;
     const text = typed || "(see attached image)";
     persistIds.current.add(chat.id);
     const titled =
       chat.title === "New agent" || chat.title === "Untitled chat"
-        ? { ...chat, title: text.slice(0, 72), updatedAt: Date.now(), lastUsedAt: Date.now() }
-        : { ...chat, updatedAt: Date.now(), lastUsedAt: Date.now() };
+        ? { ...chat, title: text.slice(0, 72), updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model }
+        : { ...chat, updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model };
     setActiveChat(titled);
     setChats((all) => all.map((c) => (c.id === chat.id ? titled : c)));
     void window.desk.upsertChat(titled);
@@ -745,6 +781,105 @@ export function App() {
     });
   };
 
+  const storeChat = (chat: CursorChat) => {
+    setChats((all) => all.map((c) => (c.id === chat.id ? chat : c)));
+    setActiveChat((cur) => (cur?.id === chat.id ? chat : cur));
+    void window.desk.patchChat(chat.id, chat);
+  };
+
+  const renameChat = (chat: CursorChat) => {
+    const title = window.prompt("Chat name", chat.title)?.trim();
+    if (!title || title === chat.title) return;
+    storeChat({ ...chat, title });
+  };
+
+  const togglePin = (chat: CursorChat) => storeChat({ ...chat, pinned: !chat.pinned });
+
+  const removeChat = async (chat: CursorChat) => {
+    if (!window.confirm(`Delete “${chat.title}”?`)) return;
+    await window.desk.stopClaude(chat.id);
+    await window.desk.deleteChat(chat.id);
+    setChats((all) => all.filter((c) => c.id !== chat.id));
+    setThreads((t) => {
+      const next = { ...t };
+      delete next[chat.id];
+      threadsRef.current = next;
+      return next;
+    });
+    if (activeChatRef.current?.id === chat.id) setActiveChat(null);
+  };
+
+  const branchFrom = async (chat: CursorChat, messages: Msg[]) => {
+    const id = `branch-${Date.now()}`;
+    const copy: CursorChat = {
+      ...chat,
+      id,
+      title: `Branch of ${chat.title}`.slice(0, 80),
+      parentId: chat.id,
+      pinned: false,
+      updatedAt: Date.now(),
+      lastUsedAt: Date.now(),
+    };
+    persistIds.current.add(id);
+    const nextThreads = { ...threadsRef.current, [id]: messages };
+    threadsRef.current = nextThreads;
+    setThreads(nextThreads);
+    setChats((all) => [copy, ...all]);
+    setActiveChat(copy);
+    await window.desk.upsertChat(copy);
+    await window.desk.saveThread(id, messages);
+    setStatus(`Branched “${chat.title}”`);
+  };
+
+  const rewindTo = async (index: number, resend: boolean) => {
+    const chat = activeChatRef.current;
+    if (!chat) return;
+    const all = threadsRef.current[chat.id] ?? [];
+    const prior = resend ? all.slice(0, index) : all.slice(0, index + 1);
+    const again = resend ? all[index]?.text ?? "" : "";
+    await window.desk.forgetSession(chat.id);
+    const nextThreads = { ...threadsRef.current, [chat.id]: prior };
+    threadsRef.current = nextThreads;
+    setThreads(nextThreads);
+    await window.desk.saveThread(chat.id, prior);
+    if (resend && again) {
+      await send({ images: [], mentions: [], text: again });
+      return;
+    }
+    setStatus("Rewound this chat. Send continues from here.");
+  };
+
+  const runCommand = (command: string) => {
+    const chat = activeChatRef.current;
+    if (command === "help") setShowHelp(true);
+    else if (command === "agent") setMode("default");
+    else if (command === "plan") setMode("plan");
+    else if (command === "auto") setMode("acceptEdits");
+    else if (command === "catchup") void catchUp();
+    else if (command === "terminal" || command === "git" || command === "preview" || command === "notes") {
+      setDock((cur) => (cur === command ? null : command));
+    } else if (command === "rename" && chat) renameChat(chat);
+    else if (command === "pin" && chat) togglePin(chat);
+    else if (command === "branch" && chat) void branchFrom(chat, threadsRef.current[chat.id] ?? []);
+    else if (command === "theme") patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" });
+    else if (command === "palette") setPaletteOpen(true);
+  };
+
+  const paletteActions: PaletteAction[] = [
+    { id: "new", label: "New chat", hint: "Ctrl+N", run: () => newAgent() },
+    { id: "help", label: "Help", hint: "F1", run: () => setShowHelp(true) },
+    { id: "settings", label: "Settings", run: () => setShowSettings(true) },
+    { id: "files", label: "Open a file", hint: "Ctrl+P", run: () => setQuickOpen(true) },
+    { id: "terminal", label: "Terminal", run: () => setDock("terminal") },
+    { id: "git", label: "Git", run: () => setDock("git") },
+    { id: "preview", label: "Preview a page", run: () => setDock("preview") },
+    { id: "notes", label: "Project instructions and MCP", run: () => setDock("notes") },
+    { id: "theme", label: prefs.theme === "light" ? "Use dark theme" : "Use light theme", run: () => patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" }) },
+    { id: "agent", label: "Agent mode", run: () => setMode("default") },
+    { id: "plan", label: "Plan mode", run: () => setMode("plan") },
+    { id: "auto", label: "Auto-edit mode", run: () => setMode("acceptEdits") },
+  ];
+
   const cliLabel = useMemo(() => {
     if (!cli) return "Detecting Claude Code…";
     if (!cli.found) return "Claude Code not found";
@@ -753,6 +888,16 @@ export function App() {
   }, [cli, authOk]);
 
   const q = filter.trim().toLowerCase();
+  useEffect(() => {
+    if (q.length < 2) {
+      setBodyHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void window.desk.searchMessages(q).then(setBodyHits);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [q]);
   const groups = useMemo(() => {
     type Group = {
       key: string;
@@ -815,10 +960,13 @@ export function App() {
       if (ord?.length) {
         const rank = new Map(ord.map((id, i) => [id, i]));
         g.chats.sort(
-          (a, b) => (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999) || b.updatedAt - a.updatedAt,
+          (a, b) =>
+            Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
+            (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999) ||
+            b.updatedAt - a.updatedAt,
         );
       } else {
-        g.chats.sort((a, b) => b.updatedAt - a.updatedAt);
+        g.chats.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt);
       }
     }
     let list = [...map.values()];
@@ -829,7 +977,9 @@ export function App() {
             g.name.toLowerCase().includes(q) || g.path.toLowerCase().includes(q);
           return {
             ...g,
-            chats: projectHit ? g.chats : g.chats.filter((c) => c.title.toLowerCase().includes(q)),
+            chats: projectHit
+              ? g.chats
+              : g.chats.filter((c) => c.title.toLowerCase().includes(q) || bodyHits.includes(c.id)),
           };
         })
         .filter((g) => g.chats.length > 0 || g.name.toLowerCase().includes(q));
@@ -849,7 +999,7 @@ export function App() {
       list.sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.name.localeCompare(b.name));
     }
     return list;
-  }, [projects, chats, q, prefs.chatOrder, prefs.projectOrder]);
+  }, [projects, chats, q, bodyHits, prefs.chatOrder, prefs.projectOrder]);
 
   const isExpanded = (key: string) => Boolean(prefs.expanded[key]);
 
@@ -908,6 +1058,7 @@ export function App() {
   return (
     <div
       className="app"
+      data-theme={prefs.theme}
       style={
         {
           "--window-font": `${prefs.windowFont}px`,
@@ -921,6 +1072,9 @@ export function App() {
           {workspace ? baseName(workspace) : "No folder"}
         </span>
         <span className="grow" />
+        <button className="ghost" onClick={() => setShowHelp(true)} title="Help (F1)">
+          Help
+        </button>
         <button className="ghost" onClick={() => setShowSettings(true)} title="Settings">
           Settings
         </button>
@@ -928,23 +1082,25 @@ export function App() {
 
       <div className="workspace">
         <aside className="sidebar">
-          <div className="side-switch">
+          <nav className="rail" aria-label="Sidebar">
             <button
               type="button"
               className={sideView === "chats" ? "on" : ""}
+              title="Chats"
               onClick={() => setSideView("chats")}
             >
-              Chats
+              <Glyph name="chats" />
             </button>
             <button
               type="button"
               className={sideView === "files" ? "on" : ""}
+              title="Files (Ctrl+Shift+E)"
               onClick={() => setSideView("files")}
-              title="Ctrl+Shift+E"
             >
-              Files
+              <Glyph name="files" />
             </button>
-          </div>
+          </nav>
+          <div className="side-panel">
           {sideView === "files" ? (
             <Explorer
               root={workspace}
@@ -1056,17 +1212,20 @@ export function App() {
                     }}
                   >
                     <span
-                      className="chevron-hit"
+                      className={`row-icon ${showAll ? "open" : ""}`}
+                      title={showAll ? "Show fewer chats" : "Show chats"}
                       onClick={(e) => {
                         e.stopPropagation();
                         toggleGroup(g.key);
                       }}
                     >
-                      <Chevron open={showAll} />
+                      <Glyph name="project" />
                     </span>
                     <span className="list-title">{g.name}</span>
                     {projectRun && (
-                      <span className={`phase phase-${projectRun.phase ?? "tool"}`}>{phaseWord(projectRun)}</span>
+                      <span className={`phase phase-${projectRun.phase ?? "tool"}`} title={projectRun.status}>
+                        {phaseWord(projectRun)}
+                      </span>
                     )}
                     <span className="count">{liveChats.length}</span>
                     <span
@@ -1118,7 +1277,8 @@ export function App() {
                           void openChat(c);
                         }}
                       >
-                        <span className="list-title">{c.title}</span>
+                        <span className="row-icon chat"><Glyph name="chat" /></span>
+                        <span className="list-title">{c.pinned ? "★ " : ""}{c.title}</span>
                         <span className="list-sub">
                           {runningByChat[c.id] ? phaseWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
                         </span>
@@ -1165,6 +1325,7 @@ export function App() {
           <button className="settings-item" onClick={() => setShowSettings(true)}>
             Settings
           </button>
+          </div>
         </aside>
 
         <section
@@ -1206,8 +1367,20 @@ export function App() {
               <span className="chat-title">{activeChat?.title ?? "New agent"}</span>
               {running && <span className="run-dot" title={runProgress?.status ?? "Starting"} />}
               {running && (
-                <span className={`phase phase-${runProgress?.phase ?? "starting"}`}>{phaseWord(runProgress)}</span>
+                <span className={`phase phase-${runProgress?.phase ?? "starting"}`} title={runProgress?.status}>
+                  {phaseWord(runProgress)}
+                </span>
               )}
+              {(["terminal", "git", "preview", "notes"] as DockTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  className={`ghost ${dock === tab ? "on" : ""}`}
+                  onClick={() => setDock((cur) => (cur === tab ? null : tab))}
+                >
+                  {tab === "notes" ? "Instructions" : tab[0].toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
               <span className="grow" />
               <button
                 className="ghost"
@@ -1219,10 +1392,10 @@ export function App() {
             {(running || (runProgress && runProgress.steps.length > 0)) && (
               <div className={`run-progress ${running ? "live" : ""} ${runProgress?.phase ? `phase-${runProgress.phase}` : ""}`}>
                 <div className="run-progress-status">
-                  {running ? phaseWord(runProgress) : runProgress?.status}
+                  {running ? runProgress?.status || "Working…" : runProgress?.status}
                 </div>
                 {runProgress?.steps.length ? (
-                  <div className="run-progress-steps">{runProgress.steps.join(" → ")}</div>
+                  <div className="run-progress-steps">{runProgress.steps.slice(-6).join(" · ")}</div>
                 ) : null}
               </div>
             )}
@@ -1230,8 +1403,23 @@ export function App() {
               {msgs.length === 0 && (
                 <div className="bubble system">
                   Click a project to open its last-used chat, or pick any past chat to read it.
-                  Send continues this chat. Other chats can keep running.
+                  Send continues this chat. Other chats can keep running. Help (F1) explains the rest.
                 </div>
+              )}
+              {activeChat && planByChat[activeChat.id] && (
+                <div className="plan-card">
+                  <strong>Plan</strong>
+                  <ChatMarkdown text={planByChat[activeChat.id]} />
+                </div>
+              )}
+              {activeChat && (todosByChat[activeChat.id]?.length ?? 0) > 0 && (
+                <ul className="todo-list">
+                  {todosByChat[activeChat.id].map((item) => (
+                    <li key={item.content} className={`todo-${item.status}`}>
+                      {item.status === "completed" ? "✓" : item.status === "in_progress" ? "…" : "○"} {item.content}
+                    </li>
+                  ))}
+                </ul>
               )}
               {msgs.map((m, i) => (
                 <div key={i} className={`bubble ${m.role}`}>
@@ -1239,6 +1427,13 @@ export function App() {
                     <ChatMarkdown text={m.text} />
                   ) : (
                     m.text
+                  )}
+                  {m.role === "user" && activeChat && (
+                    <div className="msg-actions">
+                      <button type="button" onClick={() => void rewindTo(i, false)}>Rewind</button>
+                      <button type="button" onClick={() => void rewindTo(i, true)}>Retry</button>
+                      <button type="button" onClick={() => void branchFrom(activeChat, msgs.slice(0, i + 1))}>Branch</button>
+                    </div>
                   )}
                 </div>
               ))}
@@ -1258,15 +1453,26 @@ export function App() {
               onChange={setPrompt}
               running={running}
               mode={mode}
-              onMode={setMode}
+              onMode={(m) => {
+                setMode(m);
+                if (activeChat) storeChat({ ...activeChat, mode: m });
+              }}
               model={model}
-              onModel={setModel}
+              onModel={(m) => {
+                setModel(m);
+                if (activeChat) storeChat({ ...activeChat, model: m });
+              }}
               models={models}
               usage={activeChat ? usageByChat[activeChat.id] : undefined}
               onSend={(extra) => void send(extra)}
               onCatchUp={() => void catchUp()}
+              onCommand={runCommand}
               onStop={() => void window.desk.stopClaude(activeChat?.id)}
-            />          </div>
+            />
+            {dock && workspace && (
+              <Dock tab={dock} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} />
+            )}
+          </div>
         </section>
       </div>
 
@@ -1325,7 +1531,49 @@ export function App() {
           onClick={(e) => e.stopPropagation()}
         >
           {menu.chatId ? (
-            <button onClick={() => hideChat(menu.chatId!)}>Hide chat</button>
+            <>
+              <button
+                onClick={() => {
+                  const chat = chats.find((c) => c.id === menu.chatId);
+                  if (chat) renameChat(chat);
+                  setMenu(null);
+                }}
+              >
+                Rename
+              </button>
+              <button
+                onClick={() => {
+                  const chat = chats.find((c) => c.id === menu.chatId);
+                  if (chat) togglePin(chat);
+                  setMenu(null);
+                }}
+              >
+                {chats.find((c) => c.id === menu.chatId)?.pinned ? "Unpin" : "Pin"}
+              </button>
+              <button
+                onClick={() => {
+                  const chat = chats.find((c) => c.id === menu.chatId);
+                  setMenu(null);
+                  if (!chat) return;
+                  void (async () => {
+                    const loaded = threadsRef.current[chat.id] ?? (await window.desk.readCursorChat(chat.slug, chat.id))?.messages ?? [];
+                    await branchFrom(chat, loaded);
+                  })();
+                }}
+              >
+                Branch
+              </button>
+              <button
+                onClick={() => {
+                  const chat = chats.find((c) => c.id === menu.chatId);
+                  setMenu(null);
+                  if (chat) void removeChat(chat);
+                }}
+              >
+                Delete
+              </button>
+              <button onClick={() => hideChat(menu.chatId!)}>Hide chat</button>
+            </>
           ) : menu.projectKey ? (
             <button onClick={() => hideProject(menu.projectKey!)}>Hide project</button>
           ) : null}
@@ -1361,6 +1609,9 @@ export function App() {
         />
       )}
 
+      {showHelp && <Help onClose={() => setShowHelp(false)} />}
+      {paletteOpen && <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />}
+
       {showSettings && (
         <div className="modal" onClick={() => setShowSettings(false)}>
           <div className="settings" onClick={(e) => e.stopPropagation()}>
@@ -1370,6 +1621,17 @@ export function App() {
                 Close
               </button>
             </div>
+            <label className="settings-row">
+              <span>Theme</span>
+              <select
+                value={prefs.theme}
+                onChange={(e) => patchPrefs({ theme: e.target.value === "light" ? "light" : "dark" })}
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+              <em />
+            </label>
             <label className="settings-row">
               <span>Window font size</span>
               <input
@@ -1392,6 +1654,24 @@ export function App() {
               />
               <em>{prefs.itemFont}px</em>
             </label>
+            <div className="settings-label">Updates</div>
+            <div className="signin-row">
+              <button
+                className="btn"
+                onClick={() =>
+                  void window.desk.checkForUpdate().then((info) => {
+                    setUpdateNote(
+                      info.latest
+                        ? `This copy is ${info.current}. Latest release is ${info.latest}. ${info.url ?? ""} ${info.note}`
+                        : `${info.note} This copy is ${info.current}.`,
+                    );
+                  })
+                }
+              >
+                Check for updates
+              </button>
+            </div>
+            {updateNote && <p className="settings-hint">{updateNote}</p>}
             <div className="settings-label">Claude Code</div>
             <div className="signin-row">
               <span>
@@ -1429,7 +1709,7 @@ export function App() {
             <ProvidersSettings onChanged={() => void window.desk.listModels().then(setModels)} />
             <p className="settings-hint">
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
-              Drag items to reorder. Each folder shows two chats; use the chevron or more link for the rest.
+              Drag items to reorder. Each folder shows two chats; use the project icon or more link for the rest.
             </p>
             {(hiddenGroupList.length > 0 || hiddenChatList.length > 0) && (
               <div className="settings-hidden">
