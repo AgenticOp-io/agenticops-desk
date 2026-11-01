@@ -17,6 +17,7 @@ export type UiPrefs = {
   activeFile: string;
   draft: string;
   theme: "dark" | "light";
+  privacy: "standard" | "protect" | "local";
 };
 
 const defaults = (): UiPrefs => ({
@@ -34,6 +35,7 @@ const defaults = (): UiPrefs => ({
   activeFile: "",
   draft: "",
   theme: "dark",
+  privacy: "protect",
 });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -72,6 +74,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     activeFile: str(r.activeFile),
     draft: str(r.draft),
     theme: r.theme === "light" ? "light" : "dark",
+    privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
   };
 }
 

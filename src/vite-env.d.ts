@@ -34,6 +34,12 @@ export type ProviderStatus = {
   ready: boolean;
 };
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
+export type PrivacyStatus = {
+  mode: "standard" | "protect" | "local";
+  stored: number;
+  encrypted: boolean;
+  pinned: Array<{ index: number; masked: string }>;
+};
 
 export type ClaudeEvent = {
   kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan";
@@ -141,6 +147,10 @@ declare global {
       }) => Promise<boolean>;
       getSettings: () => Promise<import("./prefs").UiPrefs>;
       saveSettings: (prefs: Partial<import("./prefs").UiPrefs>) => Promise<import("./prefs").UiPrefs>;
+      privacyStatus: () => Promise<PrivacyStatus>;
+      pinSecret: (value: string) => Promise<PrivacyStatus>;
+      unpinSecret: (index: number) => Promise<PrivacyStatus>;
+      forgetPlaceholders: () => Promise<PrivacyStatus>;
       onClaudeEvent: (cb: (event: ClaudeEvent) => void) => () => void;
       onWorkspaceChanged: (cb: () => void) => () => void;
       forgetSession: (chatId: string) => Promise<boolean>;

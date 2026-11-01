@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { parseDirectModel, providerStatus, setProvider } from "./providers";
+import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
   answerApproval,
   changeBase,
@@ -39,6 +40,8 @@ import {
   deleteChat,
   deletedChatIds,
   loadThread,
+  flushLibrary,
+  libraryPending,
   migrateLibraryIfNeeded,
   patchChat,
   searchMessages,
@@ -299,6 +302,7 @@ app.whenReady().then(async () => {
     }
   }
   const s = await loadSettings();
+  setPrivacyMode(s.privacy);
   if (s.lastWorkspace && existsSync(s.lastWorkspace)) {
     workspace = s.lastWorkspace;
   } else {
@@ -318,10 +322,15 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => {
+let flushingQuit = false;
+app.on("before-quit", (e) => {
   allowQuit = true;
   closeAllShells();
   shutdownClaude();
+  if (flushingQuit) return;
+  flushingQuit = true;
+  e.preventDefault();
+  void Promise.allSettled([libraryPending() ? flushLibrary() : null, saveVault()]).finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
@@ -339,7 +348,15 @@ function setWorkspace(dir: string) {
 }
 
 ipcMain.handle("settings:get", () => loadSettings());
-ipcMain.handle("settings:set", (_e, prefs: Partial<UiPrefs>) => patchSettings(prefs));
+ipcMain.handle("settings:set", async (_e, prefs: Partial<UiPrefs>) => {
+  const next = await patchSettings(prefs);
+  setPrivacyMode(next.privacy);
+  return next;
+});
+ipcMain.handle("privacy:status", () => privacyStatus());
+ipcMain.handle("privacy:pin", (_e, value: string) => pinSecret(value));
+ipcMain.handle("privacy:unpin", (_e, index: number) => unpinSecret(Number(index)));
+ipcMain.handle("privacy:forget", () => forgetPlaceholders());
 
 ipcMain.handle("workspace:open", async () => {
   const result = await dialog.showOpenDialog(win!, {
@@ -472,16 +489,25 @@ ipcMain.handle(
   },
 );
 ipcMain.handle("fs:search", (_e, query: string) => searchWorkspaceFiles(workspace, query));
+const openedOutside = new Set<string>();
+
+function canon(filePath: string) {
+  return path.resolve(filePath);
+}
+
 ipcMain.handle("fs:pickFile", async () => {
   const result = await dialog.showOpenDialog(win!, {
     title: "Open file",
     defaultPath: workspace,
     properties: ["openFile"],
   });
-  return result.canceled ? null : result.filePaths[0] ?? null;
+  const picked = result.canceled ? null : result.filePaths[0] ?? null;
+  if (picked) openedOutside.add(canon(picked));
+  return picked;
 });
 ipcMain.handle("fs:reveal", (_e, filePath: string) => {
-  if (filePath && existsSync(filePath)) shell.showItemInFolder(filePath);
+  if (!filePath || !canTouch(filePath, true)) return false;
+  if (existsSync(filePath)) shell.showItemInFolder(filePath);
   return true;
 });
 
@@ -503,7 +529,7 @@ ipcMain.handle("fs:list", async (_e, dir: string) => {
 });
 
 ipcMain.handle("fs:read", async (_e, filePath: string) => {
-  if (!inWorkspace(filePath)) throw new Error("Only files inside the open folder can be read.");
+  if (!canTouch(filePath)) throw new Error("Only files inside the open folder can be read.");
   const st = await fs.stat(filePath);
   if (st.size > 2_000_000) return `[[ file too large to open here: ${st.size} bytes ]]`;
   const buf = await fs.readFile(filePath);
@@ -659,6 +685,10 @@ function inWorkspace(target: string, allowRoot = false) {
 
 function insideWorkspace(target: string) {
   return inWorkspace(target);
+}
+
+function canTouch(target: string, allowRoot = false) {
+  return inWorkspace(target, allowRoot) || openedOutside.has(canon(target));
 }
 
 ipcMain.handle("fs:create", async (_e, target: string, isDir: boolean) => {

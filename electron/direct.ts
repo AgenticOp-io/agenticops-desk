@@ -13,6 +13,8 @@ import {
   type ImageAttachment,
   pruneChanges,
   realStorePwsh,
+  restoreInput,
+  secretFileMessage,
   send,
   sendChanges,
   explainWork,
@@ -25,7 +27,9 @@ import {
   withHistory,
 } from "./claude";
 import { prepareMemory } from "./memory";
+import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
+import { commandTouchesSecretFile, isSecretFile } from "./redact";
 
 // The Direct engine: ClaudeDesk's own agent loop, talking straight to a model API instead of Claude Code.
 // It reuses the chat session for approvals, folder trust, change snapshots and stop handling.
@@ -233,6 +237,17 @@ async function allowed(
 
 function str(v: unknown) {
   return typeof v === "string" ? v : undefined;
+}
+
+// Privacy Mode around every tool: real values go into the tool, placeholders come back out.
+async function runPrivateTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
+  if (!protecting()) return runTool(ctx, name, input, id);
+  // A fetched URL leaves this computer, so it keeps the placeholders.
+  const real = name === "web_fetch" ? input : restoreInput(input);
+  const file = name === "read_file" ? String(real.path ?? "") : name === "run_command" ? commandTouchesSecretFile(String(real.command ?? "")) : "";
+  if (file && isSecretFile(file)) return { text: secretFileMessage(file), error: true };
+  const r = await runTool(ctx, name, real, id);
+  return { ...r, text: scrubOutgoing(r.text).text };
 }
 
 async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
@@ -534,7 +549,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
       sendPhase(ctx.win, ctx.chatId, ctx.session, step.phase, step.text, true);
       const r = missing.length
         ? { text: `INVALID_JSON: missing ${missing.join(", ")}`, error: true }
-        : await runTool(ctx, call.name, input, call.id);
+        : await runPrivateTool(ctx, call.name, input, call.id);
       results.push({ type: "tool_result", tool_use_id: call.id, content: r.text, ...(r.error ? { is_error: true } : {}) });
     }
     messages.push({ role: "user", content: results });
@@ -612,7 +627,7 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       }
       const step = explainWork(c.name, input);
       sendPhase(ctx.win, ctx.chatId, ctx.session, step.phase, step.text, true);
-      const r = bad ? { text: bad } : await runTool(ctx, c.name, input, id);
+      const r = bad ? { text: bad } : await runPrivateTool(ctx, c.name, input, id);
       messages.push({ role: "tool", tool_call_id: id, content: r.text });
     }
     text = "";
@@ -638,8 +653,13 @@ export function runDirect(opts: {
 }) {
   const { win, chatId } = opts;
   const session = sessionFor(chatId);
+  if (privacyMode() === "local" && !isLocalProvider(opts.provider)) {
+    send(win, { kind: "error", text: LOCAL_ONLY_MESSAGE, chatId, running: false });
+    send(win, { kind: "done", text: "Stopped.", chatId, running: false });
+    return;
+  }
   if (session.engine === "direct" && session.abort && !session.query && !session.child && !session.stopping) {
-    session.guide = [session.guide, guidePrompt(opts.prompt)].filter(Boolean).join("\n\n");
+    session.guide = [session.guide, guidePrompt(scrubOutgoing(opts.prompt).text)].filter(Boolean).join("\n\n");
     send(win, { kind: "status", running: true, phase: "thinking", text: "Following your instruction…", chatId });
     return;
   }
@@ -659,15 +679,16 @@ export function runDirect(opts: {
   clearClaudeSession(chatId, session);
   const abort = new AbortController();
   session.abort = abort;
-  send(win, { kind: "status", running: true, phase: "starting", text: "Starting…", chatId });
-
   const memory = prepareMemory(cwd);
-  const system = systemPrompt(cwd, memory.append);
+  const system = systemPrompt(cwd, privateAppend(memory.append));
   const prior = loadSaved(chatId);
   // Same provider: continue its native history. Otherwise hand over the visible transcript as text.
   const sameProvider = prior?.provider === opts.provider;
   const saved: Saved = sameProvider ? prior! : { provider: opts.provider, messages: [] };
-  const prompt = sameProvider ? opts.prompt : withHistory(opts.prompt, opts.history);
+  const scrubbed = scrubOutgoing(sameProvider ? opts.prompt : withHistory(opts.prompt, opts.history));
+  const prompt = scrubbed.text;
+  const starting = scrubbed.hidden ? `Hid ${scrubbed.hidden} secret${scrubbed.hidden > 1 ? "s" : ""} before sending. Starting…` : "Starting…";
+  send(win, { kind: "status", running: true, phase: "starting", text: starting, chatId });
   const ctx: Ctx = {
     win,
     chatId,

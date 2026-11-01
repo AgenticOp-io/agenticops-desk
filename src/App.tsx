@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChangesBar } from "./ChangesBar";
-import { CodePane, type DiffView } from "./CodePane";
+import { appendStep, appendText, Conversation, type TranscriptMsg } from "./Conversation";
+import type { DiffView } from "./CodePane";
+import { Windowed } from "./Windowed";
+
+const CodePane = lazy(() => import("./CodePane").then((m) => ({ default: m.CodePane })));
 import { Composer, type ComposerHandle } from "./Composer";
 import { Explorer } from "./Explorer";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dock, type DockTab } from "./Dock";
 import { Help } from "./Help";
+import { PrivacySettings } from "./PrivacySettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
@@ -32,7 +37,21 @@ function setDragData(e: DragEvent, payload: DragPayload) {
 }
 
 type Entry = { name: string; path: string; isDir: boolean };
-type Msg = { role: "user" | "assistant" | "system" | "error"; text: string };
+type Msg = TranscriptMsg;
+type SideGroup = { key: string; name: string; path: string; slug: string; chats: CursorChat[] };
+type SideRow =
+  | { kind: "project"; id: string; group: SideGroup }
+  | { kind: "chat"; id: string; group: SideGroup; chat: CursorChat }
+  | { kind: "more"; id: string; group: SideGroup; count: number }
+  | { kind: "less"; id: string; group: SideGroup }
+  | { kind: "note"; id: string; text: string };
+
+function sideRowHeight(row: SideRow) {
+  if (row.kind === "chat") return 52;
+  if (row.kind === "project") return 36;
+  if (row.kind === "note") return 32;
+  return 28;
+}
 type Tab = { path: string; name: string; contents: string; dirty: boolean };
 type RunProgress = { status: string; steps: string[]; phase?: RunPhase };
 
@@ -210,13 +229,16 @@ export function App() {
   const [pendingApprovals, setPendingApprovals] = useState<Array<ApprovalRequest & { chatId: string }>>([]);
   const composerRef = useRef<ComposerHandle>(null);
   const quickRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
   const workspaceRef = useRef(workspace);
   const activeRef = useRef(activePath);
   const autoOpenRef = useRef<string | null>(null);
   const activeChatRef = useRef<CursorChat | null>(null);
   const threadsRef = useRef(threads);
+  const runningByChatRef = useRef(runningByChat);
+  const threadTimers = useRef(new Map<string, number>());
+  const stickToBottom = useRef(true);
   const chatsRef = useRef(chats);
   const prefsReady = useRef(false);
   const persistIds = useRef(new Set<string>());
@@ -227,6 +249,7 @@ export function App() {
   activeRef.current = activePath;
   activeChatRef.current = activeChat;
   threadsRef.current = threads;
+  runningByChatRef.current = runningByChat;
   chatsRef.current = chats;
   const msgs = activeChat ? threads[activeChat.id] ?? [] : [];
   const running = Boolean(activeChat && runningByChat[activeChat.id]);
@@ -427,20 +450,14 @@ export function App() {
             [chatId]: { status: ev.text ?? cur.status, steps, phase: ev.phase ?? cur.phase ?? "tool" },
           };
         });
-        patchThread(chatId, (m) => [...m, { role: "system", text: `▸ ${ev.text}` }]);
+        patchThread(chatId, (m) => appendStep(m, ev.text ?? ""));
       }
       if (ev.kind === "line" && ev.text) {
         setProgressByChat((p) => ({
           ...p,
           [chatId]: { status: "Writing the reply…", steps: p[chatId]?.steps ?? [], phase: "writing" },
         }));
-        patchThread(chatId, (m) => {
-          const last = m[m.length - 1];
-          if (last?.role === "assistant") {
-            return [...m.slice(0, -1), { role: "assistant", text: last.text + ev.text }];
-          }
-          return [...m, { role: "assistant", text: ev.text ?? "" }];
-        });
+        patchThread(chatId, (m) => appendText(m, ev.text ?? ""));
       }
       if (ev.kind === "error" && ev.text) {
         patchThread(chatId, (m) => [...m, { role: "error", text: ev.text ?? "" }]);
@@ -470,8 +487,16 @@ export function App() {
         const ws = workspaceRef.current;
         if (ws) void refreshTree(ws);
         void reloadOpenFile();
+        const pendingSave = threadTimers.current.get(chatId);
+        if (pendingSave) {
+          window.clearTimeout(pendingSave);
+          threadTimers.current.delete(chatId);
+        }
         const msgs = threadsRef.current[chatId];
-        if (msgs) void window.desk.saveThread(chatId, msgs);
+        if (msgs) {
+          savedThreads.current.set(chatId, msgs);
+          void window.desk.saveThread(chatId, msgs);
+        }
         const row = activeChatRef.current?.id === chatId ? activeChatRef.current : null;
         if (row) void window.desk.upsertChat({ ...row, updatedAt: Date.now() });
       }
@@ -498,22 +523,28 @@ export function App() {
   }, [chats, workspace]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
+    const el = messagesRef.current;
+    if (stickToBottom.current && el) el.scrollTop = el.scrollHeight;
   }, [msgs, running]);
 
   useEffect(() => {
     const ids = [...persistIds.current].filter(
       (id) => id in threads && savedThreads.current.get(id) !== threads[id],
     );
-    if (!ids.length) return;
-    const timer = window.setTimeout(() => {
-      for (const id of ids) {
-        const msgs = threads[id] ?? [];
-        savedThreads.current.set(id, msgs);
-        void window.desk.saveThread(id, msgs);
-      }
-    }, 500);
-    return () => window.clearTimeout(timer);
+    for (const id of ids) {
+      const pending = threadTimers.current.get(id);
+      const streaming = Boolean(runningByChatRef.current[id]);
+      if (streaming && pending) continue;
+      if (pending) window.clearTimeout(pending);
+      const timer = window.setTimeout(() => {
+        threadTimers.current.delete(id);
+        const next = threadsRef.current[id];
+        if (!next || savedThreads.current.get(id) === next) return;
+        savedThreads.current.set(id, next);
+        void window.desk.saveThread(id, next);
+      }, streaming ? 8000 : 800);
+      threadTimers.current.set(id, timer);
+    }
   }, [threads]);
 
   useEffect(() => {
@@ -701,7 +732,10 @@ export function App() {
     const shown = extra.images.length
       ? `${text}\n\n*${extra.images.length} image${extra.images.length === 1 ? "" : "s"} attached*`
       : text;
-    const nextMsgs = [...(threadsRef.current[chat.id] ?? []), { role: "user" as const, text: shown }];
+    const nextMsgs = [
+      ...(threadsRef.current[chat.id] ?? []),
+      { role: "user" as const, text: shown, ...(guiding ? { steer: true } : {}) },
+    ];
     setThreads((t) => ({ ...t, [chat.id]: nextMsgs }));
     void window.desk.saveThread(chat.id, nextMsgs);
     setPrompt("");
@@ -1011,8 +1045,6 @@ export function App() {
     return list;
   }, [projects, chats, q, bodyHits, prefs.chatOrder, prefs.projectOrder]);
 
-  const isExpanded = (key: string) => Boolean(prefs.expanded[key]);
-
   const toggleGroup = (key: string) => {
     patchPrefs({ expanded: { ...prefs.expanded, [key]: !prefs.expanded[key] } });
   };
@@ -1022,6 +1054,23 @@ export function App() {
   const visibleGroups = q ? groups : groups.filter((g) => !hiddenProjectSet.has(g.key));
   const hiddenGroupList = groups.filter((g) => hiddenProjectSet.has(g.key));
   const hiddenChatList = chats.filter((c) => hiddenChatSet.has(c.id));
+  const sideRows = useMemo(() => {
+    const rows: SideRow[] = [];
+    for (const g of visibleGroups) {
+      const showAll = Boolean(q) || Boolean(prefs.expanded[g.key]);
+      const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
+      const runningChats = liveChats.filter((c) => runningByChat[c.id]);
+      const idleChats = liveChats.filter((c) => !runningByChat[c.id]);
+      const visibleChats = showAll ? liveChats : [...runningChats, ...idleChats].slice(0, Math.max(2, runningChats.length));
+      const hiddenCount = liveChats.length - visibleChats.length;
+      rows.push({ kind: "project", id: `p:${g.key}`, group: g });
+      for (const c of visibleChats) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
+      if (hiddenCount > 0) rows.push({ kind: "more", id: `more:${g.key}`, group: g, count: hiddenCount });
+      if (showAll && !q && liveChats.length > 2) rows.push({ kind: "less", id: `less:${g.key}`, group: g });
+      if (liveChats.length === 0) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
+    }
+    return rows;
+  }, [visibleGroups, q, prefs.expanded, hiddenChatSet, runningByChat]);
 
   const openMenu = (e: ReactMouseEvent, extra: Partial<CtxMenu> = {}) => {
     e.preventDefault();
@@ -1165,25 +1214,105 @@ export function App() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
-          <div
+          <Windowed
             className="tree"
+            items={sideRows}
+            heightOf={sideRowHeight}
+            keyOf={(row) => row.id}
             onContextMenu={(e) => openMenu(e)}
           >
-            {visibleGroups.map((g) => {
-              const showAll = Boolean(q) || isExpanded(g.key);
+            {(row) => {
+              if (row.kind === "note") return <div className="tree-note">{row.text}</div>;
+              if (row.kind === "more") {
+                const g = row.group;
+                return (
+                  <button
+                    type="button"
+                    className="more-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patchPrefs({ expanded: { ...prefs.expanded, [g.key]: true } });
+                    }}
+                  >
+                    {row.count} more
+                  </button>
+                );
+              }
+              if (row.kind === "less") {
+                const g = row.group;
+                return (
+                  <button
+                    type="button"
+                    className="more-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patchPrefs({ expanded: { ...prefs.expanded, [g.key]: false } });
+                    }}
+                  >
+                    Show less
+                  </button>
+                );
+              }
+              if (row.kind === "chat") {
+                const g = row.group;
+                const c = row.chat;
+                return (
+                  <button
+                    type="button"
+                    draggable={!q}
+                    className={`list-item nested ${activeChat?.id === c.id ? "active" : ""} ${runningByChat[c.id] ? `running phase-${progressByChat[c.id]?.phase ?? "starting"}` : ""} ${dragging === `c:${c.id}` ? "dragging" : ""} ${dragOver === `c:${c.id}` ? "drag-over" : ""}`}
+                    onDragStart={(e: DragEvent) => {
+                      e.stopPropagation();
+                      setDragData(e, { kind: "chat", key: g.key, id: c.id });
+                      setDragging(`c:${c.id}`);
+                    }}
+                    onDragOver={(e: DragEvent) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOver(`c:${c.id}`);
+                    }}
+                    onDrop={(e: DragEvent) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const from = parseDrag(e);
+                      if (from?.kind === "chat" && from.key === g.key && from.id && from.id !== c.id) {
+                        moveChat(g.key, from.id, c.id);
+                      }
+                      setDragOver(null);
+                      setDragging(null);
+                    }}
+                    onDragEnd={() => {
+                      setDragOver(null);
+                      setDragging(null);
+                    }}
+                    onContextMenu={(e) => openMenu(e, { projectKey: g.key, chatId: c.id, chatTitle: c.title })}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void openChat(c);
+                    }}
+                  >
+                    <span className="row-icon chat"><Glyph name="chat" /></span>
+                    <span className="list-title">{c.pinned ? "★ " : ""}{c.title}</span>
+                    <span className="list-sub">
+                      {runningByChat[c.id] ? phaseWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
+                    </span>
+                  </button>
+                );
+              }
+              const g = row.group;
+              const showAll = Boolean(q) || Boolean(prefs.expanded[g.key]);
               const current = samePath(g.path, workspace);
               const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
-              const runningChats = liveChats.filter((c) => runningByChat[c.id]);
-              const idleChats = liveChats.filter((c) => !runningByChat[c.id]);
-              const visibleChats = showAll ? liveChats : [...runningChats, ...idleChats].slice(0, Math.max(2, runningChats.length));
-              const hiddenCount = liveChats.length - visibleChats.length;
-              const projectRun = runningChats
+              const projectRun = liveChats
+                .filter((c) => runningByChat[c.id])
                 .map((c) => progressByChat[c.id])
                 .sort((a, b) => phaseRank(b) - phaseRank(a))[0];
               return (
-                <div
-                  key={g.key}
-                  className={`project-group ${dragging === `p:${g.key}` ? "dragging" : ""} ${dragOver === `p:${g.key}` ? "drag-over" : ""}`}
+                <button
+                  type="button"
+                  className={`project-row ${current ? "current" : ""} ${dragging === `p:${g.key}` ? "dragging" : ""} ${dragOver === `p:${g.key}` ? "drag-over" : ""}`}
+                  title={g.path || g.slug}
                   draggable={!q}
                   onDragStart={(e: DragEvent) => {
                     setDragData(e, { kind: "project", key: g.key });
@@ -1197,9 +1326,7 @@ export function App() {
                   onDrop={(e: DragEvent) => {
                     e.preventDefault();
                     const from = parseDrag(e);
-                    if (from?.kind === "project" && from.key && from.key !== g.key) {
-                      moveProject(from.key, g.key);
-                    }
+                    if (from?.kind === "project" && from.key && from.key !== g.key) moveProject(from.key, g.key);
                     setDragOver(null);
                     setDragging(null);
                   }}
@@ -1208,128 +1335,46 @@ export function App() {
                     setDragging(null);
                   }}
                   onContextMenu={(e) => openMenu(e, { projectKey: g.key })}
+                  onClick={() => {
+                    void openProjectLatest(g.path, liveChats);
+                  }}
                 >
-                  <button
-                    className={`project-row ${current ? "current" : ""}`}
-                    title={g.path || g.slug}
-                    draggable={!q}
-                    onDragStart={(e: DragEvent) => {
-                      setDragData(e, { kind: "project", key: g.key });
-                      setDragging(`p:${g.key}`);
-                    }}
-                    onClick={() => {
-                      void openProjectLatest(g.path, liveChats);
+                  <span
+                    className={`row-icon ${showAll ? "open" : ""}`}
+                    title={showAll ? "Show fewer chats" : "Show chats"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleGroup(g.key);
                     }}
                   >
-                    <span
-                      className={`row-icon ${showAll ? "open" : ""}`}
-                      title={showAll ? "Show fewer chats" : "Show chats"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleGroup(g.key);
-                      }}
-                    >
-                      <Glyph name="project" />
+                    <Glyph name="project" />
+                  </span>
+                  <span className="list-title">{g.name}</span>
+                  {projectRun && (
+                    <span className={`phase phase-${projectRun.phase ?? "tool"}`} title={projectRun.status}>
+                      {phaseWord(projectRun)}
                     </span>
-                    <span className="list-title">{g.name}</span>
-                    {projectRun && (
-                      <span className={`phase phase-${projectRun.phase ?? "tool"}`} title={projectRun.status}>
-                        {phaseWord(projectRun)}
-                      </span>
-                    )}
-                    <span className="count">{liveChats.length}</span>
-                    <span
-                      className="row-x"
-                      title="Hide"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        hideProject(g.key);
-                      }}
-                    >
-                      ×
-                    </span>
-                  </button>
-                  {visibleChats.map((c) => (
-                      <button
-                        key={c.id}
-                        draggable={!q}
-                        className={`list-item nested ${activeChat?.id === c.id ? "active" : ""} ${runningByChat[c.id] ? `running phase-${progressByChat[c.id]?.phase ?? "starting"}` : ""} ${dragging === `c:${c.id}` ? "dragging" : ""} ${dragOver === `c:${c.id}` ? "drag-over" : ""}`}
-                        onDragStart={(e: DragEvent) => {
-                          e.stopPropagation();
-                          setDragData(e, { kind: "chat", key: g.key, id: c.id });
-                          setDragging(`c:${c.id}`);
-                        }}
-                        onDragOver={(e: DragEvent) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          e.dataTransfer.dropEffect = "move";
-                          setDragOver(`c:${c.id}`);
-                        }}
-                        onDrop={(e: DragEvent) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const from = parseDrag(e);
-                          if (from?.kind === "chat" && from.key === g.key && from.id && from.id !== c.id) {
-                            moveChat(g.key, from.id, c.id);
-                          }
-                          setDragOver(null);
-                          setDragging(null);
-                        }}
-                        onDragEnd={() => {
-                          setDragOver(null);
-                          setDragging(null);
-                        }}
-                        onContextMenu={(e) =>
-                          openMenu(e, { projectKey: g.key, chatId: c.id, chatTitle: c.title })
-                        }
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void openChat(c);
-                        }}
-                      >
-                        <span className="row-icon chat"><Glyph name="chat" /></span>
-                        <span className="list-title">{c.pinned ? "★ " : ""}{c.title}</span>
-                        <span className="list-sub">
-                          {runningByChat[c.id] ? phaseWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
-                        </span>
-                      </button>
-                    ))}
-                  {hiddenCount > 0 && (
-                    <button
-                      className="more-link"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        patchPrefs({ expanded: { ...prefs.expanded, [g.key]: true } });
-                      }}
-                    >
-                      {hiddenCount} more
-                    </button>
                   )}
-                  {showAll && !q && liveChats.length > 2 && (
-                    <button
-                      className="more-link"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        patchPrefs({ expanded: { ...prefs.expanded, [g.key]: false } });
-                      }}
-                    >
-                      Show less
-                    </button>
-                  )}
-                  {liveChats.length === 0 && (
-                    <div className="bubble system" style={{ margin: "4px 12px 8px 28px" }}>
-                      No chats yet
-                    </div>
-                  )}
-                </div>
+                  <span className="count">{liveChats.length}</span>
+                  <span
+                    className="row-x"
+                    title="Hide"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      hideProject(g.key);
+                    }}
+                  >
+                    ×
+                  </span>
+                </button>
               );
-            })}
-            {visibleGroups.length === 0 && (
-              <div className="bubble system" style={{ margin: 10 }}>
-                {hiddenGroupList.length ? "All projects hidden. Right-click to unhide." : "No Cursor projects found."}
-              </div>
-            )}
-          </div>
+            }}
+          </Windowed>
+          {visibleGroups.length === 0 && (
+            <div className="bubble system" style={{ margin: 10 }}>
+              {hiddenGroupList.length ? "All projects hidden. Right-click to unhide." : "No Cursor projects found."}
+            </div>
+          )}
           </>
           )}
           <button className="settings-item" onClick={() => setShowSettings(true)}>
@@ -1343,6 +1388,7 @@ export function App() {
           style={{ "--chat-width": `${chatWidth}px` } as CSSProperties}
         >
           {prefs.showCode && (
+            <Suspense fallback={<div className="editor-wait">Opening the editor…</div>}>
             <CodePane
               files={tabs}
               activePath={activePath}
@@ -1369,6 +1415,7 @@ export function App() {
               onSaveFile={(p) => void saveTab(p)}
               onHide={() => patchPrefs({ showCode: false })}
             />
+            </Suspense>
           )}
           {prefs.showCode && <div className="split" onMouseDown={startChatResize} title="Drag to resize" />}
 
@@ -1399,17 +1446,15 @@ export function App() {
                 {prefs.showCode ? "Hide code" : "Code"}
               </button>
             </div>
-            {(running || (runProgress && runProgress.steps.length > 0)) && (
-              <div className={`run-progress ${running ? "live" : ""} ${runProgress?.phase ? `phase-${runProgress.phase}` : ""}`}>
-                <div className="run-progress-status">
-                  {running ? runProgress?.status || "Working…" : runProgress?.status}
-                </div>
-                {runProgress?.steps.length ? (
-                  <div className="run-progress-steps">{runProgress.steps.slice(-6).join(" · ")}</div>
-                ) : null}
-              </div>
-            )}
-            <div className="messages">
+            <div
+              className="messages"
+              ref={messagesRef}
+              onScroll={() => {
+                const el = messagesRef.current;
+                if (!el) return;
+                stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              }}
+            >
               {msgs.length === 0 && (
                 <div className="bubble system">
                   Click a project to open its last-used chat, or pick any past chat to read it.
@@ -1431,23 +1476,16 @@ export function App() {
                   ))}
                 </ul>
               )}
-              {msgs.map((m, i) => (
-                <div key={i} className={`bubble ${m.role}`}>
-                  {m.role === "user" || m.role === "assistant" ? (
-                    <ChatMarkdown text={m.text} />
-                  ) : (
-                    m.text
-                  )}
-                  {m.role === "user" && activeChat && (
-                    <div className="msg-actions">
-                      <button type="button" onClick={() => void rewindTo(i, false)}>Rewind</button>
-                      <button type="button" onClick={() => void rewindTo(i, true)}>Retry</button>
-                      <button type="button" onClick={() => void branchFrom(activeChat, msgs.slice(0, i + 1))}>Branch</button>
-                    </div>
-                  )}
-                </div>
-              ))}
-              <div ref={bottomRef} />
+              <Conversation
+                msgs={msgs}
+                live={running}
+                liveStatus={running ? runProgress?.status : undefined}
+                onRewind={(i) => void rewindTo(i, false)}
+                onRetry={(i) => void rewindTo(i, true)}
+                onBranch={(i) => {
+                  if (activeChat) void branchFrom(activeChat, msgs.slice(0, i + 1));
+                }}
+              />
             </div>
             <ChangesBar
               files={activeChanges}
@@ -1631,6 +1669,7 @@ export function App() {
                 Close
               </button>
             </div>
+            <PrivacySettings mode={prefs.privacy} onMode={(privacy) => patchPrefs({ privacy })} />
             <label className="settings-row">
               <span>Theme</span>
               <select

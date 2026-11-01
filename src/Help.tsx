@@ -35,13 +35,24 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "privacy",
+    title: "Privacy Mode and secrets",
+    body: [
+      "Privacy Mode is on by default (Settings, at the top). Passwords, keys and tokens in what you send, in files Claude reads and in command output are swapped for placeholders like {{SECRET_3}} before anything reaches the AI. The same value always gets the same placeholder.",
+      "Claude works with the placeholders. When it runs a command or edits a file, ClaudeDesk puts the real value back on this computer just before the tool runs, so a config can be fixed without the AI ever seeing the password. Approval prompts show you the real command.",
+      "Key, certificate and credential files (.key, .pem, .pfx, SSH keys, password databases) are blocked outright. Values with no label next to them, like a VPN key, can be added under “Always hide these values”.",
+      "Local only runs chats on an Ollama model on this computer and turns cloud models off. Standard turns filtering off. Images you attach are never filtered, so crop out anything secret before attaching.",
+      "Detection follows patterns, so an unusual secret can still slip through. When it matters, add it to Always hide first.",
+    ],
+  },
+  {
     id: "status",
     title: "While it is working",
     body: [
-      "The line under the chat title is the current step, in plain language: getting ready, thinking, reading or editing a file, searching, running a command, writing the reply, or pushing to main.",
-      "You can type another instruction and press Enter while it is still working. That guides the run in progress. It does not wait for the run to finish, and it does not throw away the steps already done.",
-      "The same line appears on that chat in the list, so you can see background work without opening it.",
-      "A small trail under the current line is the last few steps. When Claude edits files, a small bar lists them. The changes are already kept: review a diff or undo a file if you want, or just keep working. Sending your next message clears the bar.",
+      "The word next to the chat title is the current step: getting ready, thinking, reading or editing a file, searching, running a command, writing the reply, or pushing to main. The same word appears on that chat in the list.",
+      "Each message you send starts a round. While it works, that round lists what it is doing. The list stays open for the round in progress and closes when the reply is in, so the answer is what you read. Open it again to see the steps. A long chat shows the latest rounds. Earlier rounds open from the top.",
+      "You can type another instruction and press Enter while it is still working. That guides the run in progress. The added line shows in the same round. It does not wait for the run to finish, and it does not throw away the steps already done.",
+      "When Claude edits files, a small bar lists them. The changes are already kept: review a diff or undo a file if you want, or just keep working. Sending your next message clears the bar.",
     ],
   },
   {
@@ -59,7 +70,7 @@ const SECTIONS: Section[] = [
     title: "Files and the editor",
     body: [
       "Files in the sidebar is the folder tree. Ctrl+Shift+E switches between Chats and Files. Ctrl+P opens a file by name.",
-      "Code shows the editor. Ctrl+S saves the file you are editing. A dot on a tab means unsaved changes. Middle-click a tab to close it.",
+      "Code shows the editor. It loads the first time you open it. Ctrl+S saves the file you are editing. A dot on a tab means unsaved changes. Middle-click a tab to close it.",
       "Right-click a file to make a new file or folder, rename, delete, copy the path, reveal it in the system folder, or add it to the chat.",
       "Code blocks in a reply can be opened in the editor as a read-only snippet.",
     ],

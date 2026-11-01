@@ -7,7 +7,9 @@ import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
+import { LOCAL_ONLY_MESSAGE, privacyMode, privacyVault, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { directModelOptions } from "./providers";
+import { commandTouchesSecretFile, isSecretFile, mapStrings, wrapCommand } from "./redact";
 
 export type ApprovalQuestion = {
   question: string;
@@ -908,6 +910,16 @@ type Inbox = {
   close: () => void;
 };
 
+// Put real values back in place of {{SECRET_n}} placeholders, just before a tool runs on this computer.
+export function restoreInput(input: Record<string, unknown>): Record<string, unknown> {
+  const vault = privacyVault();
+  return mapStrings(input, (s) => vault.restore(s));
+}
+
+export function secretFileMessage(file: string) {
+  return `Privacy Mode blocked this: ${file} is a key, certificate or credential file, so its contents must not be sent to the model. Ask the user to check it themselves, or work from a copy with the secret parts removed.`;
+}
+
 export function guidePrompt(text: string) {
   return `The user is guiding this run. Follow this instruction now, then continue the work already in progress. Do not start over and do not discard finished steps.\n\n${text}`;
 }
@@ -1074,8 +1086,14 @@ export function runClaude(opts: {
 }) {
   const chatId = opts.chatId;
   const session = sessionFor(chatId);
+  if (privacyMode() === "local") {
+    send(opts.win, { kind: "error", text: LOCAL_ONLY_MESSAGE, chatId, running: false });
+    patchStored(chatId, (s) => delete s.pending);
+    send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
+    return;
+  }
   if (session.engine === "claude" && session.inbox && !session.stopping) {
-    const steered = session.inbox.push(userTurn(guidePrompt(opts.prompt), opts.images, "now"));
+    const steered = session.inbox.push(userTurn(guidePrompt(scrubOutgoing(opts.prompt).text), opts.images, "now"));
     if (steered) {
       send(opts.win, {
         kind: "status",
@@ -1092,7 +1110,8 @@ export function runClaude(opts: {
 
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
-  const prompt = resuming ? opts.prompt : withHistory(opts.prompt, opts.history);
+  const scrubbed = scrubOutgoing(resuming ? opts.prompt : withHistory(opts.prompt, opts.history));
+  const prompt = scrubbed.text;
   // A CLI session lives under the folder it started in, so resume it there.
   const cwd =
     resuming && session.workspace && existsSync(session.workspace) ? session.workspace : opts.workspace;
@@ -1128,7 +1147,7 @@ export function runClaude(opts: {
     kind: "status",
     running: true,
     phase: "starting",
-    text: "Starting…",
+    text: scrubbed.hidden ? `Hid ${scrubbed.hidden} secret${scrubbed.hidden > 1 ? "s" : ""} before sending. Starting…` : "Starting…",
     sessionId: session.claudeSession,
     chatId,
   });
@@ -1178,7 +1197,7 @@ export function runClaude(opts: {
       permissionMode: mode,
       permissionPrompts: "host",
       includePartialMessages: true,
-      systemPrompt: { type: "preset", preset: "claude_code", append: memory.append, snapshot: false },
+      systemPrompt: { type: "preset", preset: "claude_code", append: privateAppend(memory.append), snapshot: false },
       ...(memory.directories.length ? { additionalDirectories: memory.directories } : {}),
       tools: { type: "preset", preset: "claude_code" },
       ...(skipStorePwsh ? { disallowedTools: ["PowerShell"] } : {}),
@@ -1190,30 +1209,41 @@ export function runClaude(opts: {
             hooks: [
               async (input, _toolUseId, { signal }) => {
                 if (input.hook_event_name !== "PreToolUse") return {};
-                const toolInput =
+                const raw =
                   input.tool_input && typeof input.tool_input === "object"
                     ? (input.tool_input as Record<string, unknown>)
                     : {};
+                const privacy = protecting();
+                // The user approves the real command; Claude only ever saw the placeholders.
+                const toolInput = privacy ? restoreInput(raw) : raw;
+                const deny = (reason: string) => ({
+                  hookSpecificOutput: {
+                    hookEventName: "PreToolUse" as const,
+                    permissionDecision: "deny" as const,
+                    permissionDecisionReason: reason,
+                  },
+                });
+                const secretFile = privacy ? commandTouchesSecretFile(String(toolInput.command ?? "")) : null;
+                if (secretFile) return deny(secretFileMessage(secretFile));
                 const requestId = input.tool_use_id || _toolUseId || `shell-${Date.now()}`;
                 const result = await askPermission(opts.win, chatId, session, input.tool_name, toolInput, {
                   signal,
                   requestId,
                 });
-                session.decisions.set(requestId, result);
                 if (result.behavior === "deny") {
-                  return {
-                    hookSpecificOutput: {
-                      hookEventName: "PreToolUse" as const,
-                      permissionDecision: "deny" as const,
-                      permissionDecisionReason: result.message,
-                    },
-                  };
+                  session.decisions.set(requestId, result);
+                  return deny(result.message);
                 }
+                let updated = result.updatedInput ?? (privacy ? toolInput : undefined);
+                if (privacy && updated && typeof updated.command === "string") {
+                  updated = { ...updated, command: wrapCommand(input.tool_name === "Bash" ? "Bash" : "PowerShell", updated.command) };
+                }
+                session.decisions.set(requestId, updated ? { ...result, updatedInput: updated } : result);
                 return {
                   hookSpecificOutput: {
                     hookEventName: "PreToolUse" as const,
                     permissionDecision: "allow" as const,
-                    ...(result.updatedInput ? { updatedInput: result.updatedInput } : {}),
+                    ...(updated ? { updatedInput: updated } : {}),
                   },
                 };
               },
@@ -1224,8 +1254,50 @@ export function runClaude(opts: {
             matcher: "Edit|Write|MultiEdit|NotebookEdit",
             hooks: [
               async (input) => {
-                if (input.hook_event_name === "PreToolUse") snapshotFile(opts.win, chatId, session, cwd, input.tool_input);
-                return {};
+                if (input.hook_event_name !== "PreToolUse") return {};
+                snapshotFile(opts.win, chatId, session, cwd, input.tool_input);
+                if (!protecting() || !input.tool_input || typeof input.tool_input !== "object") return {};
+                // Write the real values into the file. This does not approve the edit; the usual prompt still applies.
+                const raw = input.tool_input as Record<string, unknown>;
+                const restored = restoreInput(raw);
+                if (JSON.stringify(restored) === JSON.stringify(raw)) return {};
+                return { hookSpecificOutput: { hookEventName: "PreToolUse" as const, updatedInput: restored } };
+              },
+            ],
+          },
+          {
+            matcher: "Read|NotebookRead",
+            hooks: [
+              async (input) => {
+                if (input.hook_event_name !== "PreToolUse" || !protecting()) return {};
+                const file = String((input.tool_input as Record<string, unknown> | undefined)?.file_path ?? "");
+                if (!isSecretFile(file)) return {};
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: "PreToolUse" as const,
+                    permissionDecision: "deny" as const,
+                    permissionDecisionReason: secretFileMessage(file),
+                  },
+                };
+              },
+            ],
+          },
+        ],
+        // Every tool result passes through here before Claude sees it.
+        PostToolUse: [
+          {
+            hooks: [
+              async (input) => {
+                if (input.hook_event_name !== "PostToolUse" || !protecting()) return {};
+                const vault = privacyVault();
+                let changed = false;
+                const scrubbed = mapStrings(input.tool_response, (s) => {
+                  const r = vault.scrub(s);
+                  if (r.text !== s) changed = true;
+                  return r.text;
+                });
+                if (!changed) return {};
+                return { hookSpecificOutput: { hookEventName: "PostToolUse" as const, updatedToolOutput: scrubbed } };
               },
             ],
           },

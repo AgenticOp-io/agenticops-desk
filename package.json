@@ -10,6 +10,7 @@
     "dev": "node scripts/patch-vite-electron.mjs && vite",
     "build": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --publish never",
     "pack": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --publish never",
+    "test": "node --experimental-strip-types --test electron/gate.test.ts electron/memoryPath.test.ts electron/tarMember.test.ts electron/redact.test.ts",
     "preview": "vite preview",
     "postinstall": "node scripts/patch-vite-electron.mjs"
   },

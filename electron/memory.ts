@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
+import { claudeMemoryDir } from "./memoryPath";
 
 // Claude's long-term memory: plain markdown files that outlive every chat, CLI session and app restart.
 // global/ holds what applies everywhere (who the user is, how they like to work); projects/<slug>/ holds
@@ -16,21 +17,9 @@ export function memoryRoot() {
 }
 
 // Claude Code already reads ~/.claude/projects/<encoded-cwd>/memory. Use that folder so notes
-// show up where the agent looks, instead of a private copy it never opens. Claude Code names the
-// folder by turning every character that is not a letter or digit into "-" (so "." "_" and spaces too).
-function encodeProjectPath(p: string) {
-  return p.replace(/[^a-zA-Z0-9]/g, "-");
-}
-
+// show up where the agent looks, instead of a private copy it never opens.
 function claudeProjectMemoryDir(workspace: string): string {
-  const resolved = path.resolve(workspace);
-  const projects = path.join(os.homedir(), ".claude", "projects");
-  const driveLower = resolved.replace(/^([A-Za-z]):/, (_, drive: string) => drive.toLowerCase());
-  const names = [encodeProjectPath(driveLower), encodeProjectPath(resolved)];
-  for (const name of names) {
-    if (existsSync(path.join(projects, name))) return path.join(projects, name, "memory");
-  }
-  return path.join(projects, names[0], "memory");
+  return claudeMemoryDir(workspace, os.homedir(), existsSync);
 }
 
 export function memoryDirs(workspace: string) {

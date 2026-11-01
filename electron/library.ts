@@ -41,6 +41,46 @@ function threadFile(id: string) {
 }
 
 const LIB = "library";
+let memory: Library | null = null;
+let dirty = false;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let flushing: Promise<void> | null = null;
+
+// The library stays in memory. Touches update that copy and one write follows, instead of
+// rewriting library.json on every rename, send, or last-used bump.
+function remember(lib: Library) {
+  memory = lib;
+  dirty = true;
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushLibrary();
+  }, 1000);
+}
+
+export function libraryPending() {
+  return dirty || flushing !== null || flushTimer !== null;
+}
+
+export function flushLibrary(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (flushing) return flushing.then(() => (dirty ? flushLibrary() : undefined));
+  if (!memory || !dirty) return Promise.resolve();
+  dirty = false;
+  const snapshot = JSON.parse(JSON.stringify(memory)) as Library;
+  flushing = writeJsonAtomic(libraryFile(), snapshot)
+    .catch((err) => {
+      console.error("ClaudeDesk could not save the library", err);
+      dirty = true;
+    })
+    .finally(() => {
+      flushing = null;
+    });
+  return flushing;
+}
 
 // Every library read-modify-write goes through here so concurrent IPC calls can't drop each other's changes.
 function withLibrary<T>(fn: (lib: Library) => Promise<T> | T): Promise<T> {
@@ -90,7 +130,10 @@ async function migrate(lib: Library) {
       /* try next */
     }
   }
-  if (changed) await save(lib);
+  if (changed) {
+    remember(lib);
+    await flushLibrary();
+  }
 
   const destThreads = path.join(app.getPath("userData"), "threads");
   const oldThreadDirs = [
@@ -145,6 +188,7 @@ function hydrate(lib: Library): Library {
 
 // Only call inside withLibrary. readJson sets a corrupt file aside before we start over from empty.
 async function load(): Promise<Library> {
+  if (memory) return memory;
   const raw = (await readJson(libraryFile())) as Partial<Library> | undefined;
   const lib: Library =
     raw && typeof raw === "object" && !Array.isArray(raw)
@@ -160,21 +204,19 @@ async function load(): Promise<Library> {
   const beforeAdded = lib.added.length;
   const beforeChats = lib.chats.length;
   hydrate(lib);
+  memory = lib;
   if (lib.added.length !== beforeAdded || lib.chats.length !== beforeChats) {
-    await save(lib);
+    remember(lib);
+    await flushLibrary();
   }
   return lib;
-}
-
-async function save(lib: Library) {
-  await writeJsonAtomic(libraryFile(), lib);
 }
 
 export function touchProject(dir: string) {
   if (!dir) return Promise.resolve();
   return withLibrary(async (lib) => {
     lib.lastUsed[keyOf(dir)] = Date.now();
-    await save(lib);
+    remember(lib);
   });
 }
 
@@ -188,7 +230,7 @@ export function touchChat(chatId: string, projectPath?: string | null) {
       row.lastUsedAt = Date.now();
       row.updatedAt = Date.now();
     }
-    await save(lib);
+    remember(lib);
   });
 }
 
@@ -211,7 +253,7 @@ export function addProject(dir: string) {
       });
     }
     lib.lastUsed[k] = Date.now();
-    await save(lib);
+    remember(lib);
     return resolved;
   });
 }
@@ -234,7 +276,7 @@ export function rememberProjects(projects: CursorProject[]) {
         changed = true;
       }
     }
-    if (changed) await save(lib);
+    if (changed) remember(lib);
   });
 }
 
@@ -274,7 +316,7 @@ export function rememberChats(chats: CursorChat[]) {
     }
     if (changed) {
       lib.chats = [...byId.values()];
-      await save(lib);
+      remember(lib);
     }
   });
 }
@@ -298,7 +340,7 @@ export function upsertChat(chat: CursorChat) {
         });
       }
     }
-    await save(lib);
+    remember(lib);
   });
 }
 
@@ -319,7 +361,7 @@ export function patchChat(
     if (typeof patch.model === "string") row.model = patch.model.slice(0, 120);
     if (typeof patch.parentId === "string") row.parentId = patch.parentId.slice(0, 120);
     row.updatedAt = Date.now();
-    await save(lib);
+    remember(lib);
     return row;
   });
 }
@@ -329,7 +371,8 @@ export function deleteChat(id: string) {
     lib.chats = lib.chats.filter((c) => c.id !== id);
     delete lib.chatLastUsed[id];
     if (!lib.deleted.includes(id)) lib.deleted.push(id);
-    await save(lib);
+    remember(lib);
+    await flushLibrary();
     await fs.rm(threadFile(id), { force: true }).catch(() => undefined);
   });
 }
@@ -417,7 +460,8 @@ export function removeProject(dir: string) {
     const k = keyOf(dir);
     if (!lib.removed.includes(k)) lib.removed.push(k);
     lib.added = lib.added.filter((a) => keyOf(a.path) !== k);
-    await save(lib);
+    remember(lib);
+    await flushLibrary();
   });
 }
 

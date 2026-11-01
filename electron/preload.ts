@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+type PrivacyStatus = ReturnType<typeof import("./privacy").privacyStatus>;
+
 export type ClaudeEvent = {
   kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "todos" | "plan";
   text?: string;
@@ -126,6 +128,10 @@ contextBridge.exposeInMainWorld("desk", {
   }) => ipcRenderer.invoke("claude:approve", payload) as Promise<boolean>,
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (prefs: unknown) => ipcRenderer.invoke("settings:set", prefs),
+  privacyStatus: () => ipcRenderer.invoke("privacy:status") as Promise<PrivacyStatus>,
+  pinSecret: (value: string) => ipcRenderer.invoke("privacy:pin", value) as Promise<PrivacyStatus>,
+  unpinSecret: (index: number) => ipcRenderer.invoke("privacy:unpin", index) as Promise<PrivacyStatus>,
+  forgetPlaceholders: () => ipcRenderer.invoke("privacy:forget") as Promise<PrivacyStatus>,
   onClaudeEvent: (cb: (event: ClaudeEvent) => void) => {
     const listener = (_: unknown, event: ClaudeEvent) => cb(event);
     ipcRenderer.on("claude:event", listener);
