@@ -7,6 +7,10 @@ import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
+import { loadOrders, ordersPrompt, protectedBy, runChecks } from "./orders";
+import { recordOrigin } from "./provenance";
+import { secondOpinion } from "./review";
+import { loadSettings } from "./settings";
 import { LOCAL_ONLY_MESSAGE, privacyMode, privacyVault, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { directModelOptions } from "./providers";
 import { commandTouchesSecretFile, isSecretFile, mapStrings, wrapCommand } from "./redact";
@@ -51,7 +55,8 @@ export type ClaudeEvent = {
     | "usage"
     | "models"
     | "todos"
-    | "plan";
+    | "plan"
+    | "note";
   files?: string[];
   todos?: Array<{ content: string; status: string }>;
   usage?: UsageInfo;
@@ -118,6 +123,10 @@ type Session = {
   changes: Map<string, { path: string; before: string | null }>;
   // Prompt tokens on the latest main-agent turn, i.e. how full the context is.
   lastContext?: number;
+  // The user's instruction for the current run (kept local), for the "why" trail on changed files.
+  lastPrompt?: string;
+  // Times a standing-order check has sent this run back to Claude.
+  fixAttempts?: number;
 };
 
 // What survives a restart: the CLI session to resume, and any run that was cut off mid-flight.
@@ -753,6 +762,7 @@ export function snapshotFile(win: BrowserWindow | null, chatId: string, session:
   if (typeof raw !== "string" || !raw) return;
   const file = path.resolve(cwd, raw);
   const key = file.toLowerCase();
+  recordOrigin(file, chatId, session.lastPrompt ?? "");
   if (session.changes.has(key)) return;
   let before: string | null = null;
   try {
@@ -971,6 +981,12 @@ export function shutdownClaude() {
   }
 }
 
+// For the briefing and the watcher: is this chat working, and is it waiting on the user?
+export function chatState(chatId: string) {
+  const s = sessions.get(chatId);
+  return { running: Boolean(s?.query || s?.abort), waiting: Boolean(s?.approvals.size) };
+}
+
 export function liveRunCount() {
   let n = 0;
   for (const session of sessions.values()) {
@@ -1107,6 +1123,8 @@ export function runClaude(opts: {
     }
   }
   if (session.child || session.query || session.abort) stopClaude(opts.win, chatId);
+  session.lastPrompt = opts.prompt;
+  session.fixAttempts = 0;
 
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
@@ -1163,6 +1181,8 @@ export function runClaude(opts: {
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
   const memory = prepareMemory(cwd);
+  const orders = loadOrders(cwd);
+  const standing = ordersPrompt(orders);
   void (async () => {
     let failed = "";
     let q: Query | undefined;
@@ -1197,7 +1217,7 @@ export function runClaude(opts: {
       permissionMode: mode,
       permissionPrompts: "host",
       includePartialMessages: true,
-      systemPrompt: { type: "preset", preset: "claude_code", append: privateAppend(memory.append), snapshot: false },
+      systemPrompt: { type: "preset", preset: "claude_code", append: privateAppend([memory.append, standing].filter(Boolean).join("\n\n")), snapshot: false },
       ...(memory.directories.length ? { additionalDirectories: memory.directories } : {}),
       tools: { type: "preset", preset: "claude_code" },
       ...(skipStorePwsh ? { disallowedTools: ["PowerShell"] } : {}),
@@ -1255,6 +1275,17 @@ export function runClaude(opts: {
             hooks: [
               async (input) => {
                 if (input.hook_event_name !== "PreToolUse") return {};
+                const target = (input.tool_input as Record<string, unknown> | undefined) ?? {};
+                const blockedBy = protectedBy(cwd, String(target.file_path ?? target.notebook_path ?? ""), orders);
+                if (blockedBy) {
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: "PreToolUse" as const,
+                      permissionDecision: "deny" as const,
+                      permissionDecisionReason: `A standing order protects this path (${blockedBy}). Do not edit it; tell the user if the task needs it changed.`,
+                    },
+                  };
+                }
                 snapshotFile(opts.win, chatId, session, cwd, input.tool_input);
                 if (!protecting() || !input.tool_input || typeof input.tool_input !== "object") return {};
                 // Write the real values into the file. This does not approve the edit; the usual prompt still applies.
@@ -1278,6 +1309,45 @@ export function runClaude(opts: {
                     permissionDecision: "deny" as const,
                     permissionDecisionReason: secretFileMessage(file),
                   },
+                };
+              },
+            ],
+          },
+        ],
+        // Standing-order checks: a run that changed files is not finished until they pass.
+        // A failure goes back to Claude with the output, up to maxFixes times.
+        Stop: [
+          {
+            timeout: 900,
+            hooks: [
+              async (input, _id, { signal }) => {
+                if (input.hook_event_name !== "Stop" || !orders.checks.length) return {};
+                pruneChanges(session);
+                if (!session.changes.size) return {};
+                const result = await runChecks(cwd, orders.checks, signal, (cmd) =>
+                  sendPhase(opts.win, chatId, session, "tool", `Checking: ${cmd}`, true),
+                );
+                if (result.ok) {
+                  sendPhase(opts.win, chatId, session, "tool", "Standing-order checks passed", true);
+                  return {};
+                }
+                session.fixAttempts = (session.fixAttempts ?? 0) + 1;
+                if (session.fixAttempts > orders.maxFixes) {
+                  send(opts.win, {
+                    kind: "error",
+                    text: `Standing-order check still fails after ${orders.maxFixes} fix attempts: ${result.command}`,
+                    chatId,
+                    running: true,
+                  });
+                  return {};
+                }
+                sendPhase(opts.win, chatId, session, "tool", `Check failed, sending back to Claude: ${result.command}`, true);
+                return {
+                  decision: "block" as const,
+                  reason:
+                    `ClaudeDesk standing order: \`${result.command}\` must pass before you finish, and it failed ` +
+                    `(attempt ${session.fixAttempts} of ${orders.maxFixes}). Fix the cause, then finish. Output:\n` +
+                    scrubOutgoing(result.output).text,
                 };
               },
             ],
@@ -1381,6 +1451,33 @@ export function runClaude(opts: {
         chatId,
         text: failed ? "Stopped." : "Done.",
       });
+      if (!failed && !session.stopping) void reviewRun(opts.win, chatId, session, cwd, opts.prompt);
     }
   })();
+}
+
+// Second opinion: a model from another provider checks the finished change against the request.
+async function reviewRun(win: BrowserWindow | null, chatId: string, session: Session, cwd: string, request: string) {
+  if (privacyMode() === "local") return;
+  const reviewer = (await loadSettings()).reviewer;
+  if (!reviewer || !session.changes.size) return;
+  const clean = (s: string | null) => (s === null || !protecting() ? s : scrubOutgoing(s).text);
+  const files = [...session.changes.values()].map((c) => {
+    let after: string | null = null;
+    try {
+      after = existsSync(c.path) ? readFileSync(c.path, "utf8") : null;
+    } catch {
+      after = null;
+    }
+    return { path: c.path, before: clean(c.before), after: clean(after) };
+  });
+  send(win, { kind: "status", running: false, text: "Getting a second opinion…", chatId });
+  try {
+    const r = await secondOpinion({ reviewer, request: scrubOutgoing(request).text, files, cwd });
+    if (r) send(win, { kind: "note", chatId, running: false, text: `Second opinion · ${r.label}\n${r.text}` });
+    send(win, { kind: "status", running: false, text: "Done.", chatId });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    send(win, { kind: "note", chatId, running: false, text: `Second opinion could not run: ${msg.slice(0, 300)}` });
+  }
 }

@@ -11,6 +11,7 @@ import {
   answerApproval,
   changeBase,
   changedFiles,
+  chatState,
   findClaudeCli,
   forgetSession,
   keepChanges,
@@ -67,6 +68,10 @@ import {
   writeShell,
 } from "./features";
 import { loadSettings, migrateSettingsIfNeeded, patchSettings, type UiPrefs } from "./settings";
+import { buildBriefing } from "./briefing";
+import { loadOrders, saveOrders, type Orders } from "./orders";
+import { originsOf } from "./provenance";
+import { addWatch, closeWatches, initWatches, listWatches, removeChatWatches, removeWatch } from "./watch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.setPath("userData", path.join(app.getPath("appData"), "ClaudeDesk"));
@@ -317,6 +322,30 @@ app.whenReady().then(async () => {
   onNotificationClick(() => showWindow());
   createWindow();
   for (const run of pendingRuns()) resumePendingRun(win, run.chatId, run.workspace || workspace);
+  // Watch and react: new errors in a watched log go to that chat, unless it is busy or waiting on the user.
+  initWatches((w, lines) => {
+    const state = chatState(w.chatId);
+    if (state.running || state.waiting) return false;
+    void rememberedChats().then((chats) => {
+      const chat = chats.find((c) => c.id === w.chatId);
+      const cwd = chat?.projectPath && existsSync(chat.projectPath) ? chat.projectPath : workspace;
+      win?.webContents.send("claude:event", {
+        kind: "note",
+        chatId: w.chatId,
+        running: false,
+        text: `Watched log reported an error: ${path.basename(w.file)}`,
+      });
+      runClaude({
+        win,
+        chatId: w.chatId,
+        workspace: cwd,
+        prompt:
+          `ClaudeDesk is watching ${w.file} for this chat, and it just logged this:\n\n\`\`\`\n${lines}\n\`\`\`\n\n` +
+          "Find the cause. Fix it if the fix is clear and safe; otherwise explain what you found and what you need from me.",
+      });
+    });
+    return true;
+  });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -326,6 +355,7 @@ let flushingQuit = false;
 app.on("before-quit", (e) => {
   allowQuit = true;
   closeAllShells();
+  closeWatches();
   shutdownClaude();
   if (flushingQuit) return;
   flushingQuit = true;
@@ -746,6 +776,7 @@ ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: unknown; pinned?
 ipcMain.handle("chats:delete", async (_e, id: string) => {
   stopClaude(win, id);
   forgetSession(id);
+  removeChatWatches(id);
   try {
     deleteDirectHistory(id);
   } catch (err) {
@@ -777,3 +808,27 @@ ipcMain.handle("shell:close", (_e, id: string) => {
   return true;
 });
 ipcMain.handle("updates:check", () => checkForUpdate());
+
+// Standing orders, the "why" trail, the briefing, and watched logs.
+ipcMain.handle("orders:get", (_e, cwd: string) => loadOrders(cwd || workspace));
+ipcMain.handle("orders:set", (_e, cwd: string, next: Partial<Orders>) => saveOrders(cwd || workspace, next));
+ipcMain.handle("provenance:get", (_e, file: string) => (typeof file === "string" ? originsOf(file) : []));
+ipcMain.handle("briefing:get", (_e, sinceMs: number) =>
+  buildBriefing({
+    sinceMs: Number(sinceMs) || Date.now() - 3 * 86_400_000,
+    running: (id) => chatState(id).running,
+    waiting: (id) => chatState(id).waiting,
+    changes: (id) => changedFiles(id).length,
+  }),
+);
+ipcMain.handle("watch:list", (_e, chatId?: string) => listWatches(chatId));
+ipcMain.handle("watch:add", async (_e, chatId: string) => {
+  const result = await dialog.showOpenDialog(win!, {
+    title: "Watch a log file for errors",
+    defaultPath: workspace,
+    properties: ["openFile"],
+  });
+  if (result.canceled || !result.filePaths[0]) return listWatches(chatId);
+  return addWatch(chatId, result.filePaths[0]);
+});
+ipcMain.handle("watch:remove", (_e, chatId: string, file: string) => removeWatch(chatId, file));

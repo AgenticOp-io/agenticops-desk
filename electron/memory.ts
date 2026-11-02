@@ -1,8 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
 import { claudeMemoryDir } from "./memoryPath";
+import { ownerFromRemote } from "./pureFeatures";
 
 // Claude's long-term memory: plain markdown files that outlive every chat, CLI session and app restart.
 // global/ holds what applies everywhere (who the user is, how they like to work); projects/<slug>/ holds
@@ -22,11 +24,36 @@ function claudeProjectMemoryDir(workspace: string): string {
   return claudeMemoryDir(workspace, os.homedir(), existsSync);
 }
 
+// The owner of the repo's origin remote ("AgenticOp-io" for github.com/AgenticOp-io/x), so projects
+// from the same organization share a middle memory scope. Cached per folder; null without a remote.
+const ownerCache = new Map<string, string | null>();
+function orgOf(workspace: string): string | null {
+  const key = path.resolve(workspace).toLowerCase();
+  if (ownerCache.has(key)) return ownerCache.get(key)!;
+  let owner: string | null = null;
+  try {
+    const url = execFileSync("git", ["-C", workspace, "remote", "get-url", "origin"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    owner = ownerFromRemote(url);
+  } catch {
+    owner = null;
+  }
+  ownerCache.set(key, owner);
+  return owner;
+}
+
 export function memoryDirs(workspace: string) {
   const root = memoryRoot();
+  const org = orgOf(workspace);
   return {
     root,
     global: path.join(root, "global"),
+    org: org ? path.join(root, "orgs", org) : null,
+    orgName: org,
     project: claudeProjectMemoryDir(workspace),
   };
 }
@@ -52,8 +79,12 @@ function instructions(dirs: ReturnType<typeof memoryDirs>, workspace: string) {
 You have a long-term memory that survives across every chat, session and restart. Use it so you get better
 at working with this user over time: you should never need to be told the same thing twice.
 
-Two scopes, both plain markdown you read and write with your normal file tools:
-- Global (applies everywhere): ${dirs.global}
+Scopes, all plain markdown you read and write with your normal file tools:
+- Global (applies everywhere): ${dirs.global}${
+    dirs.org
+      ? `\n- Organization ${dirs.orgName} (every repo from this GitHub owner shares it: conventions, house style, shared gotchas): ${dirs.org}`
+      : ""
+  }
 - This project (${workspace}): ${dirs.project}
 
 Each scope has a ${INDEX} index (shown below) with one line per memory: \`- [Title](file.md) — hook\`.
@@ -92,7 +123,7 @@ exists before relying on it.
 ## Global memory index
 ${readIndex(dirs.global) || "(empty)"}
 
-## Project memory index
+${dirs.org ? `## Organization (${dirs.orgName}) memory index\n${readIndex(dirs.org) || "(empty)"}\n\n` : ""}## Project memory index
 ${readIndex(dirs.project) || "(empty)"}
 `;
 }
@@ -103,7 +134,11 @@ export function prepareMemory(workspace: string): { append: string; directories:
   try {
     ensureScope(dirs.global, "Global memory");
     ensureScope(dirs.project, "Project memory", `Project: ${workspace}\n\n`);
-    return { append: instructions(dirs, workspace), directories: [dirs.global, dirs.project] };
+    if (dirs.org) ensureScope(dirs.org, `Organization memory: ${dirs.orgName}`);
+    return {
+      append: instructions(dirs, workspace),
+      directories: [dirs.global, ...(dirs.org ? [dirs.org] : []), dirs.project],
+    };
   } catch (err) {
     console.error("ClaudeDesk could not prepare memory", err);
     return { append: "", directories: [] };

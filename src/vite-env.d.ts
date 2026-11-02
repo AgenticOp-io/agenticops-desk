@@ -41,8 +41,21 @@ export type PrivacyStatus = {
   pinned: Array<{ index: number; masked: string }>;
 };
 
+export type Orders = { rules: string[]; protect: string[]; checks: string[]; maxFixes: number };
+export type WatchInfo = { chatId: string; file: string; pattern: string };
+export type BriefingItem = {
+  chatId: string;
+  title: string;
+  project: string;
+  lastUsedAt: number;
+  state: "running" | "waiting" | "error" | "done";
+  asked: string;
+  answer: string;
+  changes: number;
+};
+
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan";
+  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan" | "note";
   todos?: Array<{ content: string; status: string }>;
   // "changes": files Claude edited in this chat that the user has not kept or undone yet.
   files?: string[];
@@ -168,6 +181,13 @@ declare global {
       closeShell: (id: string) => Promise<boolean>;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
       checkForUpdate: () => Promise<{ current: string; latest: string | null; url: string | null; note: string }>;
+      getOrders: (cwd: string) => Promise<Orders>;
+      setOrders: (cwd: string, next: Partial<Orders>) => Promise<Orders>;
+      originsOf: (file: string) => Promise<Array<{ chatId: string; prompt: string; at: number }>>;
+      briefing: (sinceMs: number) => Promise<BriefingItem[]>;
+      listWatches: (chatId?: string) => Promise<WatchInfo[]>;
+      addWatch: (chatId: string) => Promise<WatchInfo[]>;
+      removeWatch: (chatId: string, file: string) => Promise<WatchInfo[]>;
     };
   }
 }

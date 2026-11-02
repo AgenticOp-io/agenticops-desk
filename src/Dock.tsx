@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { Rules } from "./Extras";
 
-export type DockTab = "terminal" | "git" | "preview" | "notes";
+export type DockTab = "terminal" | "git" | "preview" | "notes" | "rules";
 
 export function Dock({
   tab,
@@ -18,6 +19,7 @@ export function Dock({
   if (tab === "terminal") return <Terminal workspace={workspace} />;
   if (tab === "git") return <GitPanel workspace={workspace} onStatus={onStatus} />;
   if (tab === "preview") return <Preview url={previewUrl} onUrl={onPreviewUrl} />;
+  if (tab === "rules") return <Rules workspace={workspace} onStatus={onStatus} />;
   return <Notes workspace={workspace} onStatus={onStatus} />;
 }
 

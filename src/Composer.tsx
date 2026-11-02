@@ -48,6 +48,47 @@ function readImage(file: File): Promise<ImageAttachment | null> {
   });
 }
 
+const STOP = new Set(
+  "about after again also because before being between could does doing don't every first from have into just like make maybe more most much need only other please really should since some still than that their them then there these they this those through until very want what when where which while will with would your".split(" "),
+);
+
+// Preview before sending: likely files and a similar earlier chat, from words in the message.
+// Local searches only (file names and saved chats); nothing is sent anywhere.
+function useSendPreview(value: string, activeChatId?: string, chatTitle?: (id: string) => string | undefined) {
+  const [files, setFiles] = useState<string[]>([]);
+  const [similar, setSimilar] = useState<{ id: string; title: string } | null>(null);
+  useEffect(() => {
+    const text = value.trim();
+    if (text.length < 20 || text.startsWith("/")) {
+      setFiles([]);
+      setSimilar(null);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      const words = [...new Set((text.match(/[A-Za-z_][\w.-]{3,}/g) ?? []).map((w) => w.toLowerCase()))].filter((w) => !STOP.has(w));
+      const keys = words.sort((a, b) => b.length - a.length).slice(0, 3);
+      if (!keys.length) return;
+      void Promise.all(keys.map((k) => window.desk.searchFiles(k))).then((lists) => {
+        if (!alive) return;
+        const hits = lists.flat().filter((h) => keys.some((k) => h.name.toLowerCase().includes(k)));
+        setFiles([...new Set(hits.map((h) => h.rel.replace(/\\/g, "/")))].slice(0, 4));
+      });
+      const phrase = keys.slice(0, 2).sort((a, b) => text.toLowerCase().indexOf(a) - text.toLowerCase().indexOf(b));
+      void window.desk.searchMessages(phrase[0]).then((ids) => {
+        if (!alive) return;
+        const id = ids.find((x) => x !== activeChatId && chatTitle?.(x));
+        setSimilar(id ? { id, title: chatTitle!(id)! } : null);
+      });
+    }, 600);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [value, activeChatId]);
+  return { files, similar, tokens: Math.ceil(value.length / 4) };
+}
+
 export const Composer = forwardRef<
   ComposerHandle,
   {
@@ -64,9 +105,14 @@ export const Composer = forwardRef<
     onCommand: (command: string) => void;
     onCatchUp: () => void;
     onStop: () => void;
+    // For the preview line: which earlier chat covered something similar.
+    activeChatId?: string;
+    chatTitle?: (id: string) => string | undefined;
+    onOpenChat?: (id: string) => void;
   }
 >(function Composer(props, ref) {
   const { value, onChange, running } = props;
+  const preview = useSendPreview(value, props.activeChatId, props.chatTitle);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -352,6 +398,17 @@ export const Composer = forwardRef<
           </span>
         )}
       </div>
+      {(preview.files.length > 0 || preview.similar) && (
+        <div className="send-preview">
+          {preview.files.length > 0 && <span title="Files whose names match words in your message">Likely files: {preview.files.join(", ")}</span>}
+          {preview.similar && (
+            <button type="button" className="link" title="An earlier chat mentioned the same thing" onClick={() => props.onOpenChat?.(preview.similar!.id)}>
+              Similar: “{preview.similar.title}”
+            </button>
+          )}
+          <span className="hint">~{preview.tokens.toLocaleString()} tokens</span>
+        </div>
+      )}
       <div className="row">
         <button className="btn" disabled={running} onClick={props.onCatchUp}>
           {running ? "Running…" : "Catch Claude up"}

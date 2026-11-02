@@ -13,6 +13,7 @@ export type UiPrefs = {
   activeFile: string;
   draft: string;
   theme: "dark" | "light";
+  reviewer: string;
   privacy: "standard" | "protect" | "local";
 };
 
@@ -31,6 +32,7 @@ export const defaultPrefs = (): UiPrefs => ({
   activeFile: "",
   draft: "",
   theme: "dark",
+  reviewer: "",
   privacy: "protect",
 });
 

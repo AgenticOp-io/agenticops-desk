@@ -170,4 +170,11 @@ contextBridge.exposeInMainWorld("desk", {
   },
   checkForUpdate: () =>
     ipcRenderer.invoke("updates:check") as Promise<{ current: string; latest: string | null; url: string | null; note: string }>,
+  getOrders: (cwd: string) => ipcRenderer.invoke("orders:get", cwd),
+  setOrders: (cwd: string, next: unknown) => ipcRenderer.invoke("orders:set", cwd, next),
+  originsOf: (file: string) => ipcRenderer.invoke("provenance:get", file),
+  briefing: (sinceMs: number) => ipcRenderer.invoke("briefing:get", sinceMs),
+  listWatches: (chatId?: string) => ipcRenderer.invoke("watch:list", chatId),
+  addWatch: (chatId: string) => ipcRenderer.invoke("watch:add", chatId),
+  removeWatch: (chatId: string, file: string) => ipcRenderer.invoke("watch:remove", chatId, file),
 });

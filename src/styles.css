@@ -1357,3 +1357,70 @@ select.pill { appearance: auto; }
   overflow: auto;
   border-color: var(--accent);
 }
+
+/* Work panel: larger, in a soft shaded box so it reads as background activity behind the reply. */
+.work {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+.work.live { background: color-mix(in srgb, #4ade80 7%, transparent); border-color: color-mix(in srgb, #4ade80 18%, transparent); }
+.work-toggle { font-size: calc(var(--window-font) * 0.9); width: 100%; text-align: left; }
+.work-list { margin-top: 6px; border-left-color: color-mix(in srgb, var(--text) 14%, transparent); }
+.work-list li { font-size: calc(var(--window-font) * 0.86); line-height: 1.55; margin: 3px 0; }
+.app[data-theme="light"] .work { background: #f4f4f5; border-color: #e4e4e7; }
+.app[data-theme="light"] .work.live { background: #f0fdf4; border-color: #bbf7d0; }
+
+/* Decisions inbox: a side panel, not a modal, so the app stays usable while it is open. */
+.inbox {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  bottom: 34px;
+  width: min(440px, 92vw);
+  z-index: 25;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.inbox-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.inbox-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.inbox-chat { font-size: 11px; color: var(--muted); }
+.inbox-summary { font-weight: 600; margin: 2px 0 4px; }
+.inbox-reason { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.inbox-detail { max-height: 110px; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.inbox-actions { display: flex; gap: 6px; align-items: center; }
+.inbox-button.has { color: #fbbf24; border-color: #fbbf24; }
+
+/* Standing orders (Rules dock tab) */
+.rules-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 12px; color: var(--muted); }
+.rules-field textarea { font-family: var(--font-mono); font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical; }
+.rules-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.rules-inline input { width: 56px; }
+
+/* Briefing */
+.briefing { width: min(720px, 94vw); max-height: 80vh; overflow: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.brief-row { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: transparent; color: inherit; cursor: pointer; }
+.brief-row:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.brief-top { display: flex; justify-content: space-between; gap: 8px; }
+.brief-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.state-waiting .brief-state { color: #fbbf24; }
+.state-error .brief-state { color: var(--danger); }
+.state-running .brief-state { color: #4ade80; }
+.brief-meta, .brief-asked { font-size: 12px; color: var(--muted); }
+.brief-answer { font-size: 13px; }
+
+/* Watched logs, the "why" line, second opinion, send preview */
+.watch-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 6px; border-radius: 999px; border: 1px solid #4ade8066; color: #4ade80; }
+.watch-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 2px; }
+.origin-line { margin-left: auto; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; cursor: pointer; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.origin-line:hover { color: var(--text); text-decoration: underline; }
+.bubble.system.second-opinion { white-space: pre-wrap; border-left: 3px solid #a78bfa; padding-left: 10px; }
+.send-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); padding: 2px 2px 0; }
+.send-preview .link { border: 0; background: transparent; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }
+.replay .palette-list { max-height: 50vh; }

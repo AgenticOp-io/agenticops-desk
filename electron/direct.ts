@@ -27,6 +27,7 @@ import {
   withHistory,
 } from "./claude";
 import { prepareMemory } from "./memory";
+import { loadOrders, ordersPrompt, protectedBy } from "./orders";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
@@ -268,6 +269,10 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
     if (name === "write_file" || name === "edit_file") {
       const file = resolveIn(ctx, input.path);
       const tool = name === "write_file" ? "Write" : "Edit";
+      const blockedBy = protectedBy(ctx.cwd, file);
+      if (blockedBy) {
+        return { text: `A standing order protects this path (${blockedBy}). Do not edit it; tell the user if the task needs it.`, error: true };
+      }
       const denied = await allowed(ctx, tool, { file_path: file, ...input }, id);
       if (denied) return { text: denied, error: true };
       snapshotFile(ctx.win, ctx.chatId, ctx.session, ctx.cwd, { file_path: file });
@@ -680,7 +685,8 @@ export function runDirect(opts: {
   const abort = new AbortController();
   session.abort = abort;
   const memory = prepareMemory(cwd);
-  const system = systemPrompt(cwd, privateAppend(memory.append));
+  const system = systemPrompt(cwd, privateAppend([memory.append, ordersPrompt(loadOrders(cwd))].filter(Boolean).join("\n\n")));
+  session.lastPrompt = opts.prompt;
   const prior = loadSaved(chatId);
   // Same provider: continue its native history. Otherwise hand over the visible transcript as text.
   const sameProvider = prior?.provider === opts.provider;

@@ -2,6 +2,7 @@ import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import { useEffect, useMemo, useRef } from "react";
 import type { CodeSnippet } from "./codeBlocks";
+import { OriginLine } from "./Extras";
 import { languageForFence, languageForPath } from "./monaco";
 
 type FileTab = { path: string; name: string; contents: string; dirty: boolean };
@@ -25,6 +26,7 @@ export function CodePane({
   onChangeFile,
   onSaveFile,
   onHide,
+  onOpenChat,
 }: {
   files: FileTab[];
   activePath: string | null;
@@ -41,6 +43,7 @@ export function CodePane({
   onChangeFile: (path: string, contents: string) => void;
   onSaveFile: (path: string) => void;
   onHide: () => void;
+  onOpenChat?: (chatId: string) => void;
 }) {
   const file = files.find((t) => t.path === activePath) ?? files[0] ?? null;
   const snippet = snippetId ? snippets.find((s) => s.id === snippetId) ?? null : null;
@@ -166,6 +169,7 @@ export function CodePane({
             </span>
           ))}
           {shownSnippet && <span className="readonly">read-only</span>}
+          {shownFile && onOpenChat && <OriginLine file={shownFile.path} onOpen={onOpenChat} />}
         </div>
       )}
       <div className="editor-body">

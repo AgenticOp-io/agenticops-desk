@@ -175,6 +175,7 @@ const TurnView = memo(function TurnView({
   onRewind,
   onRetry,
   onBranch,
+  onReplay,
 }: {
   turn: Turn;
   live: boolean;
@@ -182,6 +183,7 @@ const TurnView = memo(function TurnView({
   onRewind: (index: number) => void;
   onRetry: (index: number) => void;
   onBranch: (index: number) => void;
+  onReplay: (index: number) => void;
 }) {
   const waiting = live && turn.pieces.every((piece) => piece.kind !== "steps" && piece.kind !== "text");
   return (
@@ -193,6 +195,7 @@ const TurnView = memo(function TurnView({
             <button type="button" onClick={() => onRewind(turn.promptIndex!)}>Rewind</button>
             <button type="button" onClick={() => onRetry(turn.promptIndex!)}>Retry</button>
             <button type="button" onClick={() => onBranch(turn.promptIndex!)}>Branch</button>
+            <button type="button" title="Run this request again on another model, in a branch, to compare" onClick={() => onReplay(turn.promptIndex!)}>Replay on…</button>
           </div>
         </div>
       )}
@@ -231,7 +234,7 @@ const TurnView = memo(function TurnView({
           );
         }
         return (
-          <div key={`note-${pieceIndex}`} className="bubble system">
+          <div key={`note-${pieceIndex}`} className={`bubble system ${piece.text.startsWith("Second opinion") ? "second-opinion" : ""}`}>
             {piece.text}
           </div>
         );
@@ -248,6 +251,7 @@ export function Conversation({
   onRewind,
   onRetry,
   onBranch,
+  onReplay,
 }: {
   msgs: TranscriptMsg[];
   live: boolean;
@@ -255,15 +259,17 @@ export function Conversation({
   onRewind: (index: number) => void;
   onRetry: (index: number) => void;
   onBranch: (index: number) => void;
+  onReplay: (index: number) => void;
 }) {
   const turns = buildTurns(msgs);
   const [shown, setShown] = useState(PAGE);
-  const handlers = useRef({ onRewind, onRetry, onBranch });
-  handlers.current = { onRewind, onRetry, onBranch };
+  const handlers = useRef({ onRewind, onRetry, onBranch, onReplay });
+  handlers.current = { onRewind, onRetry, onBranch, onReplay };
   const call = useRef({
     rewind: (index: number) => handlers.current.onRewind(index),
     retry: (index: number) => handlers.current.onRetry(index),
     branch: (index: number) => handlers.current.onBranch(index),
+    replay: (index: number) => handlers.current.onReplay(index),
   });
   useEffect(() => {
     setShown((count) => (count >= turns.length - 1 ? turns.length : count));
@@ -289,6 +295,7 @@ export function Conversation({
             onRewind={call.current.rewind}
             onRetry={call.current.retry}
             onBranch={call.current.branch}
+            onReplay={call.current.replay}
           />
         );
       })}

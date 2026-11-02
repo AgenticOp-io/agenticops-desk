@@ -11,11 +11,12 @@ import { Explorer } from "./Explorer";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dock, type DockTab } from "./Dock";
 import { Help } from "./Help";
+import { Briefing, Inbox, WatchChips } from "./Extras";
 import { PrivacySettings } from "./PrivacySettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
-import type { ApprovalRequest, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, RunPhase, UsageInfo } from "./vite-env";
+import type { ApprovalRequest, BriefingItem, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
 
 type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string };
 type DragPayload = { kind: "project" | "chat"; key?: string; id?: string };
@@ -204,6 +205,27 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [briefing, setBriefing] = useState<BriefingItem[] | null>(null);
+  const [watches, setWatches] = useState<WatchInfo[]>([]);
+  const [replayFrom, setReplayFrom] = useState<{ chat: CursorChat; index: number } | null>(null);
+
+  // Morning briefing: after 8 hours away, show where every recent chat stands.
+  useEffect(() => {
+    const key = "claudedesk.lastSeen";
+    const last = Number(localStorage.getItem(key)) || 0;
+    if (last && Date.now() - last > 8 * 3_600_000) {
+      setTimeout(() => void window.desk.briefing(Date.now() - 3 * 86_400_000).then((items) => items.length && setBriefing(items)), 2000);
+    }
+    const mark = () => localStorage.setItem(key, String(Date.now()));
+    mark();
+    const timer = window.setInterval(mark, 60_000);
+    window.addEventListener("beforeunload", mark);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("beforeunload", mark);
+    };
+  }, []);
   const [dock, setDock] = useState<DockTab | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [todosByChat, setTodosByChat] = useState<Record<string, Array<{ content: string; status: string }>>>({});
@@ -470,6 +492,9 @@ export function App() {
       if (ev.kind === "todos" && ev.todos) {
         setTodosByChat((cur) => ({ ...cur, [chatId]: ev.todos ?? [] }));
       }
+      if (ev.kind === "note" && ev.text) {
+        patchThread(chatId, (m) => [...m, { role: "system", text: ev.text ?? "" }]);
+      }
       if (ev.kind === "plan" && ev.text) {
         setPlanByChat((cur) => ({ ...cur, [chatId]: ev.text ?? "" }));
       }
@@ -573,6 +598,13 @@ export function App() {
 
   // Changes live in the main process, so a chat opened later still shows what Claude changed in it.
   const activeChatId = activeChat?.id;
+  useEffect(() => {
+    if (!activeChatId) {
+      setWatches([]);
+      return;
+    }
+    void window.desk.listWatches(activeChatId).then(setWatches);
+  }, [activeChatId]);
   useEffect(() => {
     if (!activeChatId) return;
     setDiff(null);
@@ -708,10 +740,14 @@ export function App() {
   };
 
   const send = async (
-    extra: { images: ImageAttachment[]; mentions: string[]; text?: string } = { images: [], mentions: [] },
+    extra: { images: ImageAttachment[]; mentions: string[]; text?: string; chat?: CursorChat; model?: string } = {
+      images: [],
+      mentions: [],
+    },
   ) => {
     const typed = (extra.text ?? prompt).trim();
-    const chat = activeChat;
+    const chat = extra.chat ?? activeChat;
+    const useModel = extra.model ?? model;
     if ((!typed && !extra.images.length) || !chat) return;
     const guiding = Boolean(runningByChat[chat.id]);
     const text = typed || "(see attached image)";
@@ -724,8 +760,8 @@ export function App() {
     }
     const titled =
       chat.title === "New agent" || chat.title === "Untitled chat"
-        ? { ...chat, title: text.slice(0, 72), updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model }
-        : { ...chat, updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model };
+        ? { ...chat, title: text.slice(0, 72), updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model: useModel }
+        : { ...chat, updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model: useModel };
     setActiveChat(titled);
     setChats((all) => all.map((c) => (c.id === chat.id ? titled : c)));
     void window.desk.upsertChat(titled);
@@ -760,7 +796,7 @@ export function App() {
       chatId: chat.id,
       workspace: chat.projectPath || workspace,
       permissionMode: mode,
-      model: model || undefined,
+      model: useModel || undefined,
       images: extra.images.length ? extra.images : undefined,
     });
   };
@@ -877,7 +913,42 @@ export function App() {
     await window.desk.upsertChat(copy);
     await window.desk.saveThread(id, messages);
     setStatus(`Branched “${chat.title}”`);
+    return copy;
   };
+
+  // Replay: the same request on another model, in a branch, so the two answers can be compared.
+  const replayOn = async (value: string) => {
+    const from = replayFrom;
+    setReplayFrom(null);
+    if (!from) return;
+    const all = threadsRef.current[from.chat.id] ?? [];
+    const request = all[from.index]?.text ?? "";
+    if (!request) return;
+    const label = models.find((m) => m.value === value)?.displayName ?? (value || "default model");
+    const copy = await branchFrom({ ...from.chat, title: `${from.chat.title} · ${label}` }, all.slice(0, from.index));
+    setModel(value);
+    await send({ images: [], mentions: [], text: request, chat: copy, model: value });
+  };
+
+  // One handler for the floating card and the inbox.
+  const answerCard = (card: ApprovalRequest & { chatId: string }, decision: { allow: boolean; always?: boolean; answers?: Record<string, string> }) => {
+    setPendingApprovals((list) => list.filter((a) => a.requestId !== card.requestId));
+    void window.desk.answerApproval({ chatId: card.chatId, requestId: card.requestId, ...decision });
+  };
+
+  const openChatById = (id: string) => {
+    const chat = chatsRef.current.find((c) => c.id === id);
+    if (chat) void openChat(chat);
+  };
+
+  const showBriefing = () =>
+    void window.desk.briefing(Date.now() - 3 * 86_400_000).then((items) => setBriefing(items));
+
+  const watchLog = (chatId: string) =>
+    void window.desk.addWatch(chatId).then((list) => {
+      if (activeChatRef.current?.id === chatId) setWatches(list);
+      if (list.length) setStatus("Watching for errors. This chat reacts when one appears.");
+    });
 
   const rewindTo = async (index: number, resend: boolean) => {
     const chat = activeChatRef.current;
@@ -904,13 +975,16 @@ export function App() {
     else if (command === "plan") setMode("plan");
     else if (command === "auto") setMode("acceptEdits");
     else if (command === "catchup") void catchUp();
-    else if (command === "terminal" || command === "git" || command === "preview" || command === "notes") {
+    else if (command === "terminal" || command === "git" || command === "preview" || command === "notes" || command === "rules") {
       setDock((cur) => (cur === command ? null : command));
     } else if (command === "rename" && chat) renameChat(chat);
     else if (command === "pin" && chat) togglePin(chat);
     else if (command === "branch" && chat) void branchFrom(chat, threadsRef.current[chat.id] ?? []);
     else if (command === "theme") patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" });
     else if (command === "palette") setPaletteOpen(true);
+    else if (command === "inbox") setInboxOpen(true);
+    else if (command === "briefing") showBriefing();
+    else if (command === "watch" && chat) watchLog(chat.id);
   };
 
   const paletteActions: PaletteAction[] = [
@@ -922,6 +996,10 @@ export function App() {
     { id: "git", label: "Git", run: () => setDock("git") },
     { id: "preview", label: "Preview a page", run: () => setDock("preview") },
     { id: "notes", label: "Project instructions and MCP", run: () => setDock("notes") },
+    { id: "rules", label: "Standing orders: protected paths and checks", run: () => setDock("rules") },
+    { id: "inbox", label: "Decisions inbox", run: () => setInboxOpen(true) },
+    { id: "briefing", label: "Briefing: where every chat stands", run: () => showBriefing() },
+    { id: "watch", label: "Watch a log file for errors (this chat reacts)", run: () => activeChatRef.current && watchLog(activeChatRef.current.id) },
     { id: "theme", label: prefs.theme === "light" ? "Use dark theme" : "Use light theme", run: () => patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" }) },
     { id: "agent", label: "Agent mode", run: () => setMode("default") },
     { id: "plan", label: "Plan mode", run: () => setMode("plan") },
@@ -1135,6 +1213,16 @@ export function App() {
           {workspace ? baseName(workspace) : "No folder"}
         </span>
         <span className="grow" />
+        <button
+          className={`ghost inbox-button ${pendingApprovals.length ? "has" : ""}`}
+          onClick={() => setInboxOpen((v) => !v)}
+          title="Everything waiting on you, across all chats"
+        >
+          Inbox{pendingApprovals.length ? ` · ${pendingApprovals.length}` : ""}
+        </button>
+        <button className="ghost" onClick={showBriefing} title="Where every recent chat stands">
+          Briefing
+        </button>
         <button className="ghost" onClick={() => setShowHelp(true)} title="Help (F1)">
           Help
         </button>
@@ -1460,6 +1548,7 @@ export function App() {
               }
               onSaveFile={(p) => void saveTab(p)}
               onHide={() => patchPrefs({ showCode: false })}
+              onOpenChat={openChatById}
             />
             </Suspense>
           )}
@@ -1474,7 +1563,8 @@ export function App() {
                   {phaseWord(runProgress)}
                 </span>
               )}
-              {(["terminal", "git", "preview", "notes"] as DockTab[]).map((tab) => (
+              {activeChat && <WatchChips chatId={activeChat.id} watches={watches} onChange={setWatches} />}
+              {(["terminal", "git", "preview", "notes", "rules"] as DockTab[]).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -1531,6 +1621,9 @@ export function App() {
                 onBranch={(i) => {
                   if (activeChat) void branchFrom(activeChat, msgs.slice(0, i + 1));
                 }}
+                onReplay={(i) => {
+                  if (activeChat) setReplayFrom({ chat: activeChat, index: i });
+                }}
               />
             </div>
             <ChangesBar
@@ -1562,6 +1655,9 @@ export function App() {
               onCatchUp={() => void catchUp()}
               onCommand={runCommand}
               onStop={() => void window.desk.stopClaude(activeChat?.id)}
+              activeChatId={activeChat?.id}
+              chatTitle={(id) => chats.find((c) => c.id === id)?.title}
+              onOpenChat={openChatById}
             />
             {dock && workspace && (
               <Dock tab={dock} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} />
@@ -1666,6 +1762,15 @@ export function App() {
               >
                 Delete
               </button>
+              <button
+                onClick={() => {
+                  const id = menu.chatId!;
+                  setMenu(null);
+                  watchLog(id);
+                }}
+              >
+                Watch a log file…
+              </button>
               <button onClick={() => hideChat(menu.chatId!)}>Hide chat</button>
             </>
           ) : menu.projectKey ? (
@@ -1691,21 +1796,70 @@ export function App() {
         </div>
       )}
 
-      {pendingApprovals[0] && (
-        <PermissionDialog
-          card={pendingApprovals[0]}
-          waiting={pendingApprovals.length}
-          chatTitle={chats.find((c) => c.id === pendingApprovals[0].chatId)?.title}
-          onAnswer={(decision) => {
-            const card = pendingApprovals[0];
-            // Close the card right away. If the run behind it is already gone, the answer has nowhere to go,
-            // and a card that never closes would cover the whole window.
-            setPendingApprovals((list) => list.filter((a) => a.requestId !== card.requestId));
-            void window.desk.answerApproval({ chatId: card.chatId, requestId: card.requestId, ...decision });
+      {(() => {
+        // The floating card is for the chat you are in. Everything else waits in the inbox, so another
+        // chat's question never jumps in front of your work.
+        const here = pendingApprovals.filter((a) => a.chatId === activeChat?.id);
+        const card = here[0];
+        if (!card) return null;
+        return (
+          <PermissionDialog
+            card={card}
+            waiting={here.length}
+            chatTitle={chats.find((c) => c.id === card.chatId)?.title}
+            onAnswer={(decision) => answerCard(card, decision)}
+          />
+        );
+      })()}
+
+      {inboxOpen && (
+        <Inbox
+          cards={pendingApprovals}
+          chatTitle={(id) => chats.find((c) => c.id === id)?.title ?? "Chat"}
+          onAnswer={(card, decision) => answerCard(card, decision)}
+          onOpen={(id) => {
+            openChatById(id);
+            setInboxOpen(false);
           }}
+          onClose={() => setInboxOpen(false)}
         />
       )}
 
+      {briefing && (
+        <Briefing
+          items={briefing}
+          onOpen={(id) => {
+            openChatById(id);
+            setBriefing(null);
+          }}
+          onClose={() => setBriefing(null)}
+        />
+      )}
+
+      {replayFrom && (
+        <div className="modal" onClick={() => setReplayFrom(null)}>
+          <div className="palette replay" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-head">
+              <strong>Replay this request on…</strong>
+              <button className="ghost" onClick={() => setReplayFrom(null)}>
+                Cancel
+              </button>
+            </div>
+            <p className="settings-hint">It runs in a new branch, so you can compare the two answers side by side.</p>
+            <div className="palette-list">
+              <button className="list-item" onClick={() => void replayOn("")}>
+                <span className="list-title">Claude Code · default model</span>
+              </button>
+              {models.map((m) => (
+                <button key={m.value} className="list-item" onClick={() => void replayOn(m.value)}>
+                  <span className="list-title">{m.displayName}</span>
+                  <span className="list-sub">{m.group ?? "Claude Code"}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {showHelp && <Help onClose={() => setShowHelp(false)} />}
       {paletteOpen && <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />}
 
@@ -1805,6 +1959,23 @@ export function App() {
               </button>
             </div>
             <ProvidersSettings onChanged={() => void window.desk.listModels().then(setModels)} />
+            <div className="settings-label">Second opinion</div>
+            <label className="settings-row">
+              <span>After a run changes files, have this model check the change against your request</span>
+              <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
+                <option value="">Off</option>
+                {models
+                  .filter((m) => m.value.startsWith("direct:"))
+                  .map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.group?.replace(/^Direct · /, "")} · {m.displayName}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {!models.some((m) => m.value.startsWith("direct:")) && (
+              <p className="settings-hint">Add a provider key above (OpenAI, Gemini, Claude API…) to pick a reviewer.</p>
+            )}
             <p className="settings-hint">
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
               Drag items to reorder. Each folder shows two chats; use the project icon or more link for the rest.

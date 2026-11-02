@@ -17,6 +17,8 @@ export type UiPrefs = {
   activeFile: string;
   draft: string;
   theme: "dark" | "light";
+  // Direct model ("direct:<provider>:<model>") that reviews finished changes; empty turns it off.
+  reviewer: string;
   privacy: "standard" | "protect" | "local";
 };
 
@@ -35,6 +37,7 @@ const defaults = (): UiPrefs => ({
   activeFile: "",
   draft: "",
   theme: "dark",
+  reviewer: "",
   privacy: "protect",
 });
 
@@ -74,6 +77,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     activeFile: str(r.activeFile),
     draft: str(r.draft),
     theme: r.theme === "light" ? "light" : "dark",
+    reviewer: typeof r.reviewer === "string" && r.reviewer.startsWith("direct:") ? r.reviewer : "",
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
   };
 }
