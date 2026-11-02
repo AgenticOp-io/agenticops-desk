@@ -133,7 +133,7 @@ function PermissionDialog({
     });
   };
   return (
-    <div className="modal">
+    <div className="permit-dock">
       <div className="permit" role="dialog" aria-labelledby="permit-title">
         <h2 id="permit-title">{card.summary}</h2>
         <p className="reason">
@@ -831,8 +831,12 @@ export function App() {
     void window.desk.patchChat(chat.id, chat);
   };
 
-  const renameChat = (chat: CursorChat) => {
-    const title = window.prompt("Chat name", chat.title)?.trim();
+  // Electron has no window.prompt, so renaming edits the title in place in the sidebar.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const renameChat = (chat: CursorChat) => setRenamingId(chat.id);
+  const commitRename = (chat: CursorChat, raw: string) => {
+    setRenamingId(null);
+    const title = raw.trim();
     if (!title || title === chat.title) return;
     storeChat({ ...chat, title });
   };
@@ -1259,7 +1263,7 @@ export function App() {
                 return (
                   <button
                     type="button"
-                    draggable={!q}
+                    draggable={!q && renamingId !== c.id}
                     className={`list-item nested ${activeChat?.id === c.id ? "active" : ""} ${runningByChat[c.id] ? `running phase-${progressByChat[c.id]?.phase ?? "starting"}` : ""} ${dragging === `c:${c.id}` ? "dragging" : ""} ${dragOver === `c:${c.id}` ? "drag-over" : ""}`}
                     onDragStart={(e: DragEvent) => {
                       e.stopPropagation();
@@ -1289,11 +1293,53 @@ export function App() {
                     onContextMenu={(e) => openMenu(e, { projectKey: g.key, chatId: c.id, chatTitle: c.title })}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (renamingId === c.id) return;
                       void openChat(c);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      setRenamingId(c.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (renamingId === c.id) return;
+                      if (e.key === "F2") {
+                        e.preventDefault();
+                        setRenamingId(c.id);
+                      }
+                      if (e.key === "Delete") {
+                        e.preventDefault();
+                        void removeChat(c);
+                      }
                     }}
                   >
                     <span className="row-icon chat"><Glyph name="chat" /></span>
-                    <span className="list-title">{c.pinned ? "★ " : ""}{c.title}</span>
+                    {renamingId === c.id ? (
+                      <input
+                        className="rename-input"
+                        autoFocus
+                        defaultValue={c.title}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") commitRename(c, e.currentTarget.value);
+                          if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        onBlur={(e) => commitRename(c, e.currentTarget.value)}
+                      />
+                    ) : (
+                      <span className="list-title">{c.pinned ? "★ " : ""}{c.title}</span>
+                    )}
+                    <span
+                      className="row-more"
+                      role="button"
+                      tabIndex={-1}
+                      title="Rename, pin, branch, delete or hide"
+                      onClick={(e) => openMenu(e, { projectKey: g.key, chatId: c.id, chatTitle: c.title })}
+                    >
+                      ⋯
+                    </span>
                     <span className="list-sub">
                       {runningByChat[c.id] ? phaseWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
                     </span>
@@ -1652,6 +1698,9 @@ export function App() {
           chatTitle={chats.find((c) => c.id === pendingApprovals[0].chatId)?.title}
           onAnswer={(decision) => {
             const card = pendingApprovals[0];
+            // Close the card right away. If the run behind it is already gone, the answer has nowhere to go,
+            // and a card that never closes would cover the whole window.
+            setPendingApprovals((list) => list.filter((a) => a.requestId !== card.requestId));
             void window.desk.answerApproval({ chatId: card.chatId, requestId: card.requestId, ...decision });
           }}
         />

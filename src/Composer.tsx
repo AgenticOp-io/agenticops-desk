@@ -76,6 +76,10 @@ export const Composer = forwardRef<
   const [pick, setPick] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [note, setNote] = useState("");
+  // Windows text suggestions (and other input methods) hold the last word as an unfinished composition.
+  // Enter then only finishes the word, so remember the Enter and send once the composition has landed.
+  const [sendAfterCompose, setSendAfterCompose] = useState(false);
+  const enterDuringCompose = useRef(false);
 
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -156,6 +160,12 @@ export const Composer = forwardRef<
     setNote("");
     setQuery(null);
   };
+
+  useEffect(() => {
+    if (!sendAfterCompose) return;
+    setSendAfterCompose(false);
+    send();
+  }, [sendAfterCompose]);
 
   const ctxPct = props.usage?.contextWindow
     ? Math.min(100, Math.round((props.usage.contextTokens / props.usage.contextWindow) * 100))
@@ -239,6 +249,13 @@ export const Composer = forwardRef<
           }}
           onClick={(e) => trackMention(e.currentTarget.value, e.currentTarget.selectionStart)}
           onBlur={() => setTimeout(() => setQuery(null), 150)}
+          onCompositionEnd={(e) => {
+            if (!enterDuringCompose.current) return;
+            enterDuringCompose.current = false;
+            // Latin text means a suggestion box, so the Enter was meant as "send". Asian input methods
+            // use Enter to pick characters, so those are left alone.
+            if (/^[\x00-\x7F]*$/.test(e.data ?? "")) setSendAfterCompose(true);
+          }}
           onPaste={(e) => {
             const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
             if (!files.length) return;
@@ -263,7 +280,11 @@ export const Composer = forwardRef<
                 return;
               }
             }
-            if (e.key !== "Enter" || e.nativeEvent.isComposing || e.shiftKey) return;
+            if (e.key !== "Enter" || e.shiftKey) return;
+            if (e.nativeEvent.isComposing || e.keyCode === 229) {
+              enterDuringCompose.current = true;
+              return;
+            }
             e.preventDefault();
             send();
           }}

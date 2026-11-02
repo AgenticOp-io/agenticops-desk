@@ -1309,3 +1309,51 @@ select.pill { appearance: auto; }
 .app[data-theme="light"] .ghost.on { background: #e4e4e7; color: #18181b; }
 .app[data-theme="light"] .work.live .work-toggle { color: #166534; }
 .app[data-theme="light"] .work-list { border-left-color: #e4e4e7; }
+
+/* Chat row: hover "⋯" menu and in-place rename */
+.list-item { position: relative; }
+.row-more {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  visibility: hidden;
+  cursor: pointer;
+}
+.list-item:hover .row-more,
+.list-item:focus-visible .row-more { visibility: visible; }
+.row-more:hover { color: #fff; background: #3a3a3a; }
+.rename-input {
+  width: calc(100% - 28px);
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: #111;
+  font-size: var(--item-font);
+  outline: none;
+}
+
+/* Permission card: floats over the app without a backdrop, so the chat and sidebar stay clickable
+   while a question waits, and it scrolls instead of pushing Allow / Deny off-screen. */
+.permit-dock {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: start center;
+  padding-top: 8vh;
+  pointer-events: none;
+}
+.permit-dock .permit {
+  pointer-events: auto;
+  max-height: 84vh;
+  overflow: auto;
+  border-color: var(--accent);
+}
