@@ -7,6 +7,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeWebStream } from "node:stream/web";
 import { app, net } from "electron";
+import { sdkVersionFrom } from "./pureFeatures";
 import { extractTarGzMember } from "./tarMember";
 
 // Packaged installs do not carry the 270 MB Claude Code binary. The first launch
@@ -33,11 +34,13 @@ function targetFor(musl: boolean): Target {
 }
 
 function sdkVersion(): string {
+  // The SDK's "exports" does not list ./package.json, so resolving it directly throws
+  // ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the main entry and walk up to the package folder instead.
   const req = createRequire(import.meta.url);
-  const pkgPath = req.resolve("@anthropic-ai/claude-agent-sdk/package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
-  if (!pkg.version) throw new Error("The Claude Agent SDK package has no version.");
-  return pkg.version;
+  const entry = req.resolve("@anthropic-ai/claude-agent-sdk");
+  const version = sdkVersionFrom(entry, (p) => (existsSync(p) ? readFileSync(p, "utf8") : null));
+  if (!version) throw new Error("Could not read the Claude Agent SDK version.");
+  return version;
 }
 
 // The binary shipped next to the SDK when this checkout was installed. Source runs use it and skip the download.

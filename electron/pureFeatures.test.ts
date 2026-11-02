@@ -30,3 +30,15 @@ test("line diff shows only the changed middle", () => {
   assert.ok(!d.includes("- a"));
   assert.equal(lineDiff("same", "same").split("\n").length >= 1, true);
 });
+
+test("SDK version is found by walking up from its entry file", async () => {
+  const { sdkVersionFrom } = await import("./pureFeatures.ts");
+  const path = await import("node:path");
+  const root = path.join("x", "node_modules", "@anthropic-ai", "claude-agent-sdk");
+  const files: Record<string, string> = {
+    [path.join(root, "package.json")]: JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.314" }),
+    [path.join(root, "dist", "package.json")]: JSON.stringify({ type: "module" }),
+  };
+  assert.equal(sdkVersionFrom(path.join(root, "dist", "index.js"), (f) => files[f] ?? null), "0.3.314");
+  assert.equal(sdkVersionFrom(path.join("y", "index.js"), () => null), null);
+});

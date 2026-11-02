@@ -1,3 +1,5 @@
+import path from "node:path";
+
 // Electron-free helpers for standing orders, org memory and the second opinion, so plain Node can test them.
 
 // "src/**" matches everything under src; "*.lock" matches a lock file in any folder; "a/b.ts" matches that file.
@@ -41,4 +43,24 @@ export function lineDiff(before: string, after: string): string {
   for (let i = start; i <= endB; i++) out.push(`+ ${b[i]}`);
   for (let i = endA + 1; i < Math.min(a.length, endA + 3); i++) out.push(`  ${a[i]}`);
   return out.join("\n");
+}
+
+// Walks up from a file inside the SDK to its package.json. Separate so it can be tested without Electron.
+export function sdkVersionFrom(entry: string, read: (file: string) => string | null): string | null {
+  let dir = path.dirname(entry);
+  for (let i = 0; i < 6; i++) {
+    const text = read(path.join(dir, "package.json"));
+    if (text) {
+      try {
+        const pkg = JSON.parse(text) as { name?: string; version?: string };
+        if (pkg.name === "@anthropic-ai/claude-agent-sdk" && pkg.version) return pkg.version;
+      } catch {
+        /* not this one */
+      }
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
 }
