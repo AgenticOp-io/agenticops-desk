@@ -34,6 +34,22 @@ export type ProviderStatus = {
   ready: boolean;
 };
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
+export type InstalledPlugin = { id: string; version?: string; scope?: string; enabled: boolean; installPath?: string };
+export type AvailablePlugin = { pluginId: string; name: string; description?: string; marketplaceName: string; installCount?: number };
+export type Marketplace = { name: string; source?: string; repo?: string; url?: string };
+export type PluginCommand = {
+  command: string;
+  plugin: string;
+  pluginId: string;
+  kind: "command" | "skill";
+  description: string;
+  enabled: boolean;
+};
+export type AutoStatus = {
+  order: Array<{ value: string; label: string; restingUntil?: number; reason?: string }>;
+  chats: Record<string, string>;
+};
+export type PluginResult = { ok: boolean; output: string; confirm?: { command: string; sha256: string } };
 export type PrivacyStatus = {
   mode: "standard" | "protect" | "local";
   stored: number;
@@ -55,7 +71,8 @@ export type BriefingItem = {
 };
 
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan" | "note";
+  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan" | "note" | "route";
+  model?: string;
   todos?: Array<{ content: string; status: string }>;
   // "changes": files Claude edited in this chat that the user has not kept or undone yet.
   files?: string[];
@@ -127,6 +144,19 @@ declare global {
       probeClaude: () => Promise<{ found: boolean; path: string; bundled: boolean }>;
       onSetup: (cb: (text: string) => void) => () => void;
       signIn: () => Promise<boolean>;
+      listPlugins: (refresh?: boolean) => Promise<{ installed: InstalledPlugin[]; available: AvailablePlugin[] }>;
+      listMarketplaces: () => Promise<Marketplace[]>;
+      addMarketplace: (source: string) => Promise<PluginResult>;
+      removeMarketplace: (name: string) => Promise<PluginResult>;
+      installPlugin: (id: string, acceptSha?: string) => Promise<PluginResult>;
+      uninstallPlugin: (id: string) => Promise<PluginResult>;
+      enablePlugin: (id: string, on: boolean) => Promise<PluginResult>;
+      updatePlugin: (id: string) => Promise<PluginResult>;
+      pluginDetails: (id: string) => Promise<string>;
+      pluginCommands: (all?: boolean) => Promise<PluginCommand[]>;
+      updateMarketplace: (name?: string) => Promise<PluginResult>;
+      autoStatus: () => Promise<AutoStatus>;
+      wakeAuto: (model?: string) => Promise<AutoStatus>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
       authStatus: () => Promise<{ ok: boolean; raw: string }>;

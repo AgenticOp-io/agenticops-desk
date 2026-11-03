@@ -12,11 +12,12 @@ import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dock, type DockTab } from "./Dock";
 import { Help } from "./Help";
 import { Briefing, Inbox, WatchChips } from "./Extras";
+import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
-import type { ApprovalRequest, BriefingItem, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
+import type { ApprovalRequest, BriefingItem, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
 
 type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string };
 type DragPayload = { kind: "project" | "chat"; key?: string; id?: string };
@@ -240,6 +241,13 @@ export function App() {
   );
   const [mode, setMode] = useState(() => localStorage.getItem("claudedesk.mode") || "default");
   const [model, setModel] = useState(() => localStorage.getItem("claudedesk.model") || "");
+  // Slash commands and skills from installed plugins, offered in the composer's "/" menu.
+  const [pluginCmds, setPluginCmds] = useState<PluginCommand[]>([]);
+  // Which AI the Auto model handed each chat's latest run to.
+  const [routeByChat, setRouteByChat] = useState<Record<string, string>>({});
+  useEffect(() => {
+    void window.desk.pluginCommands().then(setPluginCmds).catch(() => {});
+  }, []);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [usageByChat, setUsageByChat] = useState<Record<string, UsageInfo>>({});
   const [changesByChat, setChangesByChat] = useState<Record<string, string[]>>({});
@@ -491,6 +499,9 @@ export function App() {
       }
       if (ev.kind === "todos" && ev.todos) {
         setTodosByChat((cur) => ({ ...cur, [chatId]: ev.todos ?? [] }));
+      }
+      if (ev.kind === "route" && ev.text) {
+        setRouteByChat((cur) => ({ ...cur, [chatId]: ev.text ?? "" }));
       }
       if (ev.kind === "note" && ev.text) {
         patchThread(chatId, (m) => [...m, { role: "system", text: ev.text ?? "" }]);
@@ -968,6 +979,12 @@ export function App() {
     setStatus("Rewound this chat. Send continues from here.");
   };
 
+  // Opens Settings scrolled to one section (Plugins, Auto model).
+  const openSettingsAt = (id: string) => {
+    setShowSettings(true);
+    setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: "start" }), 50);
+  };
+
   const runCommand = (command: string) => {
     const chat = activeChatRef.current;
     if (command === "help") setShowHelp(true);
@@ -982,6 +999,8 @@ export function App() {
     else if (command === "branch" && chat) void branchFrom(chat, threadsRef.current[chat.id] ?? []);
     else if (command === "theme") patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" });
     else if (command === "palette") setPaletteOpen(true);
+    else if (command === "plugins") openSettingsAt("settings-plugins");
+    else if (command === "autopick") openSettingsAt("settings-auto");
     else if (command === "inbox") setInboxOpen(true);
     else if (command === "briefing") showBriefing();
     else if (command === "watch" && chat) watchLog(chat.id);
@@ -991,6 +1010,12 @@ export function App() {
     { id: "new", label: "New chat", hint: "Ctrl+N", run: () => newAgent() },
     { id: "help", label: "Help", hint: "F1", run: () => setShowHelp(true) },
     { id: "settings", label: "Settings", run: () => setShowSettings(true) },
+    { id: "plugins", label: "Plugins: browse and install", run: () => openSettingsAt("settings-plugins") },
+    { id: "auto", label: "Auto model: which AIs and in what order", run: () => openSettingsAt("settings-auto") },
+    { id: "auto-use", label: "Use the Auto model in this chat", run: () => {
+      setModel("auto");
+      if (activeChat) storeChat({ ...activeChat, model: "auto" });
+    } },
     { id: "files", label: "Open a file", hint: "Ctrl+P", run: () => setQuickOpen(true) },
     { id: "terminal", label: "Terminal", run: () => setDock("terminal") },
     { id: "git", label: "Git", run: () => setDock("git") },
@@ -1650,6 +1675,8 @@ export function App() {
                 if (activeChat) storeChat({ ...activeChat, model: m });
               }}
               models={models}
+              pluginCommands={pluginCmds}
+              routedTo={activeChat ? routeByChat[activeChat.id] : undefined}
               usage={activeChat ? usageByChat[activeChat.id] : undefined}
               onSend={(extra) => void send(extra)}
               onCatchUp={() => void catchUp()}
@@ -1976,6 +2003,8 @@ export function App() {
             {!models.some((m) => m.value.startsWith("direct:")) && (
               <p className="settings-hint">Add a provider key above (OpenAI, Gemini, Claude API…) to pick a reviewer.</p>
             )}
+            <AutoSettings models={models} chosen={prefs.autoModels} onChange={(autoModels) => patchPrefs({ autoModels })} />
+            <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
             <p className="settings-hint">
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
               Drag items to reorder. Each folder shows two chats; use the project icon or more link for the rest.

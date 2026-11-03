@@ -13,6 +13,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 3. [`electron/allows.ts`](./electron/allows.ts) — folder trust and the commands that still ask
 4. [`electron/memory.ts`](./electron/memory.ts) — memory folders and the system-prompt addendum
 5. [`electron/direct.ts`](./electron/direct.ts) and [`electron/providers.ts`](./electron/providers.ts) — the Direct engine and its provider keys
+6. [`electron/autoRoute.ts`](./electron/autoRoute.ts) — the Auto model; it watches events through `setSendFilter` in `claude.ts`, so failover only ever swallows an `error` that `shouldFailOver` (`pureFeatures.ts`) matches, plus that run's `done`
 
 ## Do
 

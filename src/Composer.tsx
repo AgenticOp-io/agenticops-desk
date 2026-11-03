@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import type { ImageAttachment, ModelOption, UsageInfo } from "./vite-env";
+import type { ImageAttachment, ModelOption, PluginCommand, UsageInfo } from "./vite-env";
 
 export const MODES = [
   { value: "default", label: "Agent", hint: "Edits and runs commands; risky actions still ask" },
@@ -22,6 +22,8 @@ const SLASH = [
   ["branch", "Branch this chat"],
   ["theme", "Switch light and dark"],
   ["palette", "Open the command palette"],
+  ["plugins", "Browse and install Claude Code plugins"],
+  ["autopick", "Choose which AIs the Auto model uses"],
 ] as const;
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -100,6 +102,9 @@ export const Composer = forwardRef<
     model: string;
     onModel: (m: string) => void;
     models: ModelOption[];
+    pluginCommands?: PluginCommand[];
+    // With the Auto model: the AI it handed this chat's latest run to.
+    routedTo?: string;
     usage?: UsageInfo;
     onSend: (extra: { images: ImageAttachment[]; mentions: string[] }) => void;
     onCommand: (command: string) => void;
@@ -188,6 +193,11 @@ export const Composer = forwardRef<
     : value.trim() === "/"
       ? [...SLASH]
       : [];
+  // Plugin commands and skills go to Claude Code as typed, so picking one only fills it in.
+  const pluginTyped = /^\/([\w:-]*)$/.exec(value.trim());
+  const pluginHits = pluginTyped
+    ? (props.pluginCommands ?? []).filter((c) => c.command.toLowerCase().includes(pluginTyped[1].toLowerCase())).slice(0, 8)
+    : [];
 
   const send = () => {
     if (slash && slashHits.some(([cmd]) => cmd === slash[1].toLowerCase()) && !slash[2]) {
@@ -247,8 +257,27 @@ export const Composer = forwardRef<
         </div>
       )}
       <div className="composer-input">
-        {slashHits.length > 0 && (
+        {(slashHits.length > 0 || pluginHits.length > 0) && (
           <div className="mention-pop">
+            {pluginHits.map((c) => (
+              <button
+                type="button"
+                key={`plugin:${c.command}`}
+                className="mention-item"
+                title={c.description}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(`/${c.command} `);
+                  areaRef.current?.focus();
+                }}
+              >
+                <span className="mention-name">/{c.command}</span>
+                <span className="mention-rel">
+                  {c.kind === "skill" ? "skill · " : ""}
+                  {c.description || `from ${c.plugin}`}
+                </span>
+              </button>
+            ))}
             {slashHits.map(([cmd, label]) => (
               <button
                 type="button"
@@ -368,6 +397,11 @@ export const Composer = forwardRef<
             </optgroup>
           ))}
         </select>
+        {props.model === "auto" && props.routedTo && (
+          <span className="route-chip" title="The AI Auto used for this chat's latest message">
+            → {props.routedTo}
+          </span>
+        )}
         <button type="button" className="pill" title="Attach images" onClick={() => fileRef.current?.click()}>
           Image
         </button>

@@ -14,6 +14,7 @@ export type UiPrefs = {
   draft: string;
   theme: "dark" | "light";
   reviewer: string;
+  autoModels: string[];
   privacy: "standard" | "protect" | "local";
 };
 
@@ -33,6 +34,7 @@ export const defaultPrefs = (): UiPrefs => ({
   draft: "",
   theme: "dark",
   reviewer: "",
+  autoModels: [],
   privacy: "protect",
 });
 

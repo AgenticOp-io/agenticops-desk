@@ -29,9 +29,31 @@ const SECTIONS: Section[] = [
       "Type in the box and press Enter or Send. Shift+Enter starts a new line. While a chat is already working, Send guides that run instead of starting over.",
       "Type @ to attach a file from the open folder. You can also paste or drop images (up to 10, each under 5 MB).",
       "Agent is the usual mode: Claude edits files and runs commands. Plan reads and writes a plan, and waits for you before changing anything. Auto-edit applies file edits without an extra prompt. The permission rules below still apply.",
-      "The model menu defaults to Claude Code, which uses your Claude sign-in. Models under Direct call that provider with the key you saved in Settings and are billed per token.",
+      "The model menu defaults to Claude Code, which uses your Claude sign-in. Models under Direct call that provider with the key you saved in Settings and are billed per token. Auto moves between them on its own (see The Auto model).",
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
       "The meter under the box is how full this chat’s context is, and a rough cost since this window opened.",
+    ],
+  },
+  {
+    id: "auto",
+    title: "The Auto model",
+    body: [
+      "Auto, at the top of the model menu, uses every AI you have set up: Claude Code with your sign-in, plus any provider with a key under Direct AI providers. Settings › Auto model can narrow that to the ones you pick, in your order. /autopick opens it.",
+      "Each message goes to the first AI on the list. If it hits a rate limit, runs out of quota or credit, has its key rejected, cannot be reached, or declines the request, the same message goes to the next one. A line in the chat says which AI failed and why. The one that failed rests for 5 minutes after a rate limit or quota error, or 1 minute otherwise. Settings shows which AIs are resting and can wake them early.",
+      "Errors about the work itself, such as a failing test or a standing-order check, do not switch AIs.",
+      "A chat keeps using the AI that last worked for it, so its context carries over. The label next to the model menu shows which AI answered. If an AI fails after it has already changed files, the next one is told which files so it does not redo the work.",
+      "With Local only privacy, Auto only uses Ollama on this computer. Stop ends the run without handing it to another AI.",
+    ],
+  },
+  {
+    id: "plugins",
+    title: "Plugins",
+    body: [
+      "Settings › Plugins (or /plugins) manages Claude Code plugins: slash commands, skills, agents, hooks and MCP servers that other people publish in marketplaces. It uses the same plugins as the Claude Code command line.",
+      "Recommended has one-click installs for Ponytail and Agent Skills. Browse searches every plugin in your marketplaces. Details shows what a plugin adds before you install it. Add a marketplace with owner/repo from GitHub, or a git address.",
+      "Installing always asks first. If a plugin runs a setup command when it installs, ClaudeDesk shows you that exact command and asks again.",
+      "Installed plugins can be turned off, updated or removed. Their commands and skills appear when you type / in the message box. Picking one fills it in, and Claude Code runs it when you send. Changes apply from each chat's next message. Plugins work in Claude Code chats, not Direct ones.",
+      "Graphify is a Python tool rather than a plugin. Copy commands gives the two lines to run in a terminal.",
     ],
   },
   {
@@ -110,7 +132,7 @@ const SECTIONS: Section[] = [
       "F1 or Ctrl+/ — this help",
       "Ctrl+Shift+P — command palette",
       "Esc — close help, settings, or the file finder",
-      "Type / in the message box for commands such as /plan, /terminal, /git, and /help.",
+      "Type / in the message box for commands such as /plan, /terminal, /git, /plugins and /help, and for the commands of installed plugins.",
     ],
   },
 ];

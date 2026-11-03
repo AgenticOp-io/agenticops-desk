@@ -56,7 +56,10 @@ export type ClaudeEvent = {
     | "models"
     | "todos"
     | "plan"
-    | "note";
+    | "note"
+    // Auto picked an AI for this chat's run; text is its name, model its value.
+    | "route";
+  model?: string;
   files?: string[];
   todos?: Array<{ content: string; status: string }>;
   usage?: UsageInfo;
@@ -226,7 +229,15 @@ export function send(win: BrowserWindow | null, event: ClaudeEvent) {
     return;
   }
   if (chatId) flushText(chatId);
+  if (sendFilter?.(win, event)) return;
   deliver(win, event);
+}
+
+// The Auto model watches a run's errors and end, so it can quietly hand a failed run to the next AI.
+// Returning true swallows the event.
+let sendFilter: ((win: BrowserWindow | null, event: ClaudeEvent) => boolean) | null = null;
+export function setSendFilter(fn: typeof sendFilter) {
+  sendFilter = fn;
 }
 
 function deliver(win: BrowserWindow | null, event: ClaudeEvent) {
@@ -850,7 +861,13 @@ const FALLBACK_MODELS: ModelOption[] = [
 
 export function listModels(): ModelOption[] {
   const claudeCode = (modelCache ?? FALLBACK_MODELS).map((m) => ({ ...m, group: "Claude Code" }));
-  return [...claudeCode, ...directModelOptions()];
+  const auto: ModelOption = {
+    value: "auto",
+    displayName: "Auto",
+    description: "Uses your enabled AIs and moves to the next one on a rate limit, quota, key or outage error",
+    group: "Auto",
+  };
+  return [auto, ...claudeCode, ...directModelOptions()];
 }
 
 function toOptions(list: ModelInfo[]): ModelOption[] {
@@ -1421,6 +1438,12 @@ export function runClaude(opts: {
         failed = "";
       }
     } finally {
+      // A run that threw never got its result message, so its inbox is still open; the next message
+      // must start a new run, not be "steered" into this dead one.
+      if (session.inbox === inbox) {
+        inbox.close();
+        session.inbox = undefined;
+      }
       if (!q || session.query !== q) {
         if (session.stopping && !session.query) {
           session.stopping = false;

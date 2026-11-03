@@ -19,6 +19,8 @@ export type UiPrefs = {
   theme: "dark" | "light";
   // Direct model ("direct:<provider>:<model>") that reviews finished changes; empty turns it off.
   reviewer: string;
+  // Models the Auto choice may use, in order ("default" is Claude Code's own model). Empty means all ready ones.
+  autoModels: string[];
   privacy: "standard" | "protect" | "local";
 };
 
@@ -38,6 +40,7 @@ const defaults = (): UiPrefs => ({
   draft: "",
   theme: "dark",
   reviewer: "",
+  autoModels: [],
   privacy: "protect",
 });
 
@@ -78,6 +81,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     draft: str(r.draft),
     theme: r.theme === "light" ? "light" : "dark",
     reviewer: typeof r.reviewer === "string" && r.reviewer.startsWith("direct:") ? r.reviewer : "",
+    autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
   };
 }

@@ -4,7 +4,21 @@ import { existsSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
+import {
+  addMarketplace,
+  installPlugin,
+  listMarketplaces,
+  listPlugins,
+  pluginCommands,
+  pluginDetails,
+  removeMarketplace,
+  setPluginEnabled,
+  uninstallPlugin,
+  updateMarketplace,
+  updatePlugin,
+} from "./plugins";
 import { parseDirectModel, providerStatus, setProvider } from "./providers";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
@@ -669,37 +683,57 @@ ipcMain.handle(
           .filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i?.mediaType) && typeof i.data === "string")
           .slice(0, 10)
       : undefined;
-    const direct = typeof payload.model === "string" ? parseDirectModel(payload.model) : null;
-    if (direct) {
-      runDirect({
-        win,
-        chatId: payload.chatId,
-        workspace: cwd,
-        prompt: payload.prompt,
-        provider: direct.provider,
-        model: direct.model,
-        permissionMode: payload.permissionMode,
-        history: payload.history,
-        images,
-      });
-      return true;
-    }
-    runClaude({
-      win,
+    const run: AutoPayload = {
       chatId: payload.chatId,
       workspace: cwd,
       prompt: payload.prompt,
       resume: payload.resume,
       permissionMode: payload.permissionMode,
       history: payload.history,
-      model: typeof payload.model === "string" && /^[\w.\-[\]]{1,80}$/.test(payload.model) ? payload.model : undefined,
       images,
-    });
+    };
+    if (payload.model === AUTO) await runAuto(win, run);
+    else startRun(typeof payload.model === "string" ? payload.model : "", run);
     return true;
   },
 );
 
+// Starts one run on one model: "direct:<provider>:<model>" goes to the Direct engine, anything else to Claude Code.
+function startRun(model: string, run: AutoPayload) {
+  const direct = parseDirectModel(model);
+  if (direct) {
+    runDirect({ win, ...run, provider: direct.provider, model: direct.model });
+    return;
+  }
+  runClaude({
+    win,
+    ...run,
+    model: model !== CLAUDE_DEFAULT && /^[\w.\-[\]]{1,80}$/.test(model) ? model : undefined,
+  });
+}
+initAuto(startRun);
+
 ipcMain.handle("claude:models", () => listModels());
+
+// Claude Code plugins (marketplaces, install, enable), run through the bundled Claude Code.
+ipcMain.handle("plugins:list", (_e, refresh?: boolean) => listPlugins(Boolean(refresh)));
+ipcMain.handle("plugins:marketplaces", () => listMarketplaces());
+ipcMain.handle("plugins:addMarketplace", (_e, source: string) => addMarketplace(String(source ?? "")));
+ipcMain.handle("plugins:removeMarketplace", (_e, name: string) => removeMarketplace(String(name ?? "")));
+ipcMain.handle("plugins:install", (_e, id: string, acceptSha?: string) => installPlugin(String(id ?? ""), acceptSha));
+ipcMain.handle("plugins:uninstall", (_e, id: string) => uninstallPlugin(String(id ?? "")));
+ipcMain.handle("plugins:enable", (_e, id: string, on: boolean) => setPluginEnabled(String(id ?? ""), Boolean(on)));
+ipcMain.handle("plugins:update", (_e, id: string) => updatePlugin(String(id ?? "")));
+ipcMain.handle("plugins:details", (_e, id: string) => pluginDetails(String(id ?? "")));
+ipcMain.handle("plugins:commands", (_e, all?: boolean) => pluginCommands(Boolean(all)));
+ipcMain.handle("plugins:updateMarketplace", (_e, name?: string) => updateMarketplace(typeof name === "string" ? name : undefined));
+
+// The Auto model: which AIs it would try now, which are resting, and a way to wake them.
+ipcMain.handle("auto:status", () => autoStatus());
+ipcMain.handle("auto:wake", (_e, model?: string) => {
+  wakeAuto(typeof model === "string" ? model : undefined);
+  return autoStatus();
+});
 ipcMain.handle("claude:changes", (_e, chatId: string) => changedFiles(chatId));
 ipcMain.handle("claude:changeBase", (_e, chatId: string, filePath: string) => changeBase(chatId, filePath));
 ipcMain.handle("claude:revert", (_e, chatId: string, paths?: string[]) => revertChanges(win, chatId, paths));
@@ -746,6 +780,7 @@ ipcMain.handle("fs:delete", async (_e, target: string) => {
 });
 
 ipcMain.handle("claude:stop", (_e, chatId?: string) => {
+  cancelAuto(chatId);
   stopClaude(win, chatId);
   return true;
 });
@@ -776,6 +811,7 @@ ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: unknown; pinned?
 ipcMain.handle("chats:delete", async (_e, id: string) => {
   stopClaude(win, id);
   forgetSession(id);
+  forgetAuto(id);
   removeChatWatches(id);
   try {
     deleteDirectHistory(id);

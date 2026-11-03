@@ -1,6 +1,6 @@
 {
   "name": "claudedesk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "author": "AgenticOp-io",
   "description": "Windows desktop frontend for the Claude Code CLI, laid out like Cursor.",

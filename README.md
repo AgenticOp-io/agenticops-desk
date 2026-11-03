@@ -7,6 +7,10 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 - **Claude Code** (default): the official Claude Code agent, through [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). A packaged app downloads the binary for that computer on first launch. Running from source uses the copy `npm install` already fetched. Uses your Claude sign-in and subscription. No separate CLI install is needed.
 - **Direct**: ClaudeDesk's own agent loop calling a model API with your key: the Claude API, OpenAI, OpenRouter, Google Gemini, or local models through Ollama. Billed per token by that provider. It has file, search and PowerShell tools, and uses the same approvals, change review and memory.
 
+**Auto** in the same menu uses all of these, or the ones you pick in **Settings → Auto model**, in your order. When one hits a rate limit, runs out of quota, has its key rejected, is unreachable or declines, the message moves to the next one and the failed one rests for a few minutes.
+
+**Plugins** (**Settings → Plugins**, or `/plugins`) browses, installs, updates and turns off Claude Code plugins from any marketplace, with one-click installs for Ponytail and Agent Skills. Their commands and skills show up in the composer's `/` menu.
+
 ## Status
 
 **Private, in daily use.** Windows only for now.
@@ -64,6 +68,8 @@ The builds are not code-signed. Windows SmartScreen asks once ("More info → Ru
 | `electron/claudeBinary.ts` | Downloads the Claude Code binary for this computer and checks npm's fingerprint |
 | `electron/direct.ts` | Direct engine: own tool loop for the Claude API and OpenAI-compatible providers |
 | `electron/providers.ts` | Provider presets and API keys (encrypted with Windows' safeStorage) |
+| `electron/autoRoute.ts` | The Auto model: picks an AI per run and fails over to the next on provider errors |
+| `electron/plugins.ts` | Claude Code plugins and marketplaces, through the bundled `claude plugin` commands |
 | `electron/allows.ts` | Folder trust and the commands that still ask |
 | `electron/memory.ts` | Memory folders and system-prompt addendum |
 | `electron/library.ts` | Projects, chats and saved threads (`%APPDATA%\ClaudeDesk`) |
