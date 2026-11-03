@@ -7,7 +7,8 @@ test("project folder names keep only letters and digits", () => {
   assert.equal(encodeProjectPath("C:\\Users\\user\\my_app.v2"), "C--Users-user-my-app-v2");
 });
 
-test("the memory folder uses a lowercase drive and prefers a folder that already exists", () => {
+// Drive letters only exist on Windows; path.resolve on Linux or macOS treats "C:\..." as a relative name.
+test("the memory folder uses a lowercase drive and prefers a folder that already exists", { skip: process.platform !== "win32" }, () => {
   const home = "C:\\Users\\user";
   const workspace = "C:\\Users\\user\\projects\\my-app";
   const projects = path.join(home, ".claude", "projects");
