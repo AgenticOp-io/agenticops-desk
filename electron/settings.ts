@@ -1,6 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { serialized, writeJsonAtomic } from "./jsonStore";
 
 export type UiPrefs = {
   windowFont: number;
@@ -86,32 +87,6 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
   };
 }
 
-export async function migrateSettingsIfNeeded() {
-  const dest = settingsFile();
-  try {
-    await fs.access(dest);
-    return;
-  } catch {
-    /* missing */
-  }
-  const appData = app.getPath("appData");
-  const olds = [
-    path.join(appData, "Electron", "settings.json"),
-    path.join(appData, "claudedesk", "settings.json"),
-  ];
-  for (const old of olds) {
-    if (path.normalize(old) === path.normalize(dest)) continue;
-    try {
-      await fs.access(old);
-      await fs.mkdir(path.dirname(dest), { recursive: true });
-      await fs.copyFile(old, dest);
-      return;
-    } catch {
-      /* try next */
-    }
-  }
-}
-
 export async function loadSettings(): Promise<UiPrefs> {
   try {
     const raw = JSON.parse(await fs.readFile(settingsFile(), "utf8")) as Partial<UiPrefs>;
@@ -121,16 +96,13 @@ export async function loadSettings(): Promise<UiPrefs> {
   }
 }
 
-export async function saveSettings(prefs: UiPrefs): Promise<UiPrefs> {
-  const next = normalize(prefs);
-  await fs.mkdir(path.dirname(settingsFile()), { recursive: true });
-  await fs.writeFile(settingsFile(), JSON.stringify(next, null, 2), "utf8");
-  return next;
-}
-
-export async function patchSettings(partial: Partial<UiPrefs>): Promise<UiPrefs> {
-  const cur = await loadSettings();
-  const next = { ...cur, ...partial };
-  if (!partial.lastWorkspace) next.lastWorkspace = cur.lastWorkspace;
-  return saveSettings(next);
+// One read-modify-write at a time, so two quick changes can't overwrite each other.
+export function patchSettings(partial: Partial<UiPrefs>): Promise<UiPrefs> {
+  return serialized("settings", async () => {
+    const cur = await loadSettings();
+    const next = normalize({ ...cur, ...partial });
+    if (!partial.lastWorkspace) next.lastWorkspace = cur.lastWorkspace;
+    await writeJsonAtomic(settingsFile(), next);
+    return next;
+  });
 }

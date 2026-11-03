@@ -1,6 +1,6 @@
 import type { BrowserWindow } from "electron";
 import { changedFiles, chatState, listModels, send, setSendFilter } from "./claude";
-import { autoOrder, coolDownMs, shouldFailOver } from "./pureFeatures";
+import { autoOrder, autoStep, coolDownMs } from "./pureFeatures";
 import { isLocalProvider, privacyMode } from "./privacy";
 import { parseDirectModel } from "./providers";
 import { loadSettings } from "./settings";
@@ -115,20 +115,18 @@ export function initAuto(fn: Dispatch) {
     const chatId = event.chatId;
     const run = chatId ? live.get(chatId) : undefined;
     if (!run || !chatId) return false;
-    if (event.kind === "error" && event.text && !run.failed && shouldFailOver(event.text) && run.queue.length) {
-      run.failed = event.text;
-      return true;
-    }
-    if (event.kind === "error") run.erred = true;
-    if (event.kind !== "done") return false;
-    if (!run.failed) {
+    const step = autoStep(run, event.kind, event.text);
+    if (step === "swallow") return true;
+    if (step === "pass") return false;
+    if (step === "finish") {
       live.delete(chatId);
       if (!run.erred && !/^Stopped/.test(event.text ?? "")) sticky.set(chatId, run.current);
       return false;
     }
     // This AI couldn't take it: rest it, tell the user, and hand the same message to the next one.
-    const reason = run.failed.split("\n")[0].slice(0, 160);
-    resting[run.current] = { until: Date.now() + coolDownMs(run.failed), reason };
+    const failed = run.failed ?? "";
+    const reason = failed.split("\n")[0].slice(0, 160);
+    resting[run.current] = { until: Date.now() + coolDownMs(failed), reason };
     if (sticky.get(chatId) === run.current) sticky.delete(chatId);
     const failedLabel = labelOf(run.current);
     const next = run.queue.shift()!;

@@ -47,6 +47,48 @@ test("Auto fails over only on provider trouble", async () => {
   assert.equal(coolDownMs("fetch failed"), 60_000);
 });
 
+test("Auto ignores numbers and words that only look like provider trouble", async () => {
+  const { shouldFailOver } = await import("./pureFeatures.ts");
+  assert.ok(!shouldFailOver("Standing-order check still fails after 3 fix attempts: npm run network-test"));
+  assert.ok(!shouldFailOver("SyntaxError in src/a.ts at line 503"));
+  assert.ok(shouldFailOver("Request failed with status 503"));
+});
+
+test("Auto hands over only after a hidden provider error", async () => {
+  const { autoStep } = await import("./pureFeatures.ts");
+  const run = { queue: ["next"] as string[], failed: undefined as string | undefined, erred: false };
+  assert.equal(autoStep(run, "line", "hi"), "pass");
+  assert.equal(autoStep(run, "error", "API Error: 429 rate_limit_error"), "swallow");
+  assert.equal(autoStep(run, "error", "API Error: 529 Overloaded"), "pass", "a second error is shown, not hidden");
+  assert.equal(autoStep(run, "done", "Done."), "handover");
+
+  const plain = { queue: ["next"], failed: undefined, erred: false };
+  assert.equal(autoStep(plain, "error", "tests failed"), "pass");
+  assert.equal(plain.erred, true);
+  assert.equal(autoStep(plain, "done", "Done."), "finish");
+
+  const last = { queue: [] as string[], failed: undefined, erred: false };
+  assert.equal(autoStep(last, "error", "429 Too Many Requests"), "pass", "nothing left to try, so the user sees it");
+  assert.equal(autoStep(last, "done", "Stopped."), "finish");
+});
+
+test("safe sync save writes, overwrites and leaves no temp file", async () => {
+  const { writeJsonAtomicSync } = await import("./jsonStore.ts");
+  const { mkdtempSync, readdirSync, readFileSync, rmSync } = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-json-"));
+  try {
+    const file = path.join(dir, "sub", "a.json");
+    writeJsonAtomicSync(file, { a: 1 });
+    writeJsonAtomicSync(file, { a: 2 }, false);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { a: 2 });
+    assert.deepEqual(readdirSync(path.dirname(file)), ["a.json"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Auto order: sticky first, resting last, unknown dropped", async () => {
   const { autoOrder } = await import("./pureFeatures.ts");
   const available = ["default", "direct:openai:gpt-5", "direct:ollama:qwen3"];

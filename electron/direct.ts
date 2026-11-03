@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app, type BrowserWindow } from "electron";
@@ -31,6 +31,7 @@ import { loadOrders, ordersPrompt, protectedBy } from "./orders";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 // The Direct engine: AgenticOps Desk's own agent loop, talking straight to a model API instead of Claude Code.
 // It reuses the chat session for approvals, folder trust, change snapshots and stop handling.
@@ -273,7 +274,7 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
       if (blockedBy) {
         return { text: `A standing order protects this path (${blockedBy}). Do not edit it; tell the user if the task needs it.`, error: true };
       }
-      const denied = await allowed(ctx, tool, { file_path: file, ...input }, id);
+      const denied = await allowed(ctx, tool, { ...input, file_path: file }, id);
       if (denied) return { text: denied, error: true };
       snapshotFile(ctx.win, ctx.chatId, ctx.session, ctx.cwd, { file_path: file });
       if (name === "write_file") {
@@ -336,7 +337,8 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
           continue;
         }
         text.split(/\r?\n/).forEach((line, i) => {
-          if (hits.length < 300 && re.test(line)) hits.push(`${path.relative(ctx.cwd, f)}:${i + 1}: ${line.trim().slice(0, 240)}`);
+          // shortcut: long lines skipped to bound regex time; a worker thread with a timeout is the full fix.
+          if (hits.length < 300 && line.length <= 2000 && re.test(line)) hits.push(`${path.relative(ctx.cwd, f)}:${i + 1}: ${line.trim().slice(0, 240)}`);
         });
       }
       return { text: hits.length ? hits.join("\n") : "No matches." };
@@ -440,12 +442,7 @@ function loadSaved(chatId: string): Saved | null {
 }
 
 function writeSaved(chatId: string, saved: Saved) {
-  const file = savedFile(chatId);
-  mkdirSync(path.dirname(file), { recursive: true });
-  // Write then rename, so a crash never leaves half a history file.
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(saved), "utf8");
-  renameSync(tmp, file);
+  writeJsonAtomicSync(savedFile(chatId), saved, false);
 }
 
 // ---------- pricing for the usage meter (USD per million tokens) ----------

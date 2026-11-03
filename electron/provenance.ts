@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 // The "why" trail: for each file Claude changed, which chat changed it and the instruction behind it.
 // Kept in app data (never in the repo), newest first, a few entries per file.
@@ -40,9 +41,7 @@ function flush() {
         .slice(0, keys.length - 5000)
         .forEach((k) => delete all[k]);
     }
-    mkdirSync(path.dirname(target()), { recursive: true });
-    writeFileSync(`${target()}.tmp`, JSON.stringify(all), "utf8");
-    renameSync(`${target()}.tmp`, target());
+    writeJsonAtomicSync(target(), all, false);
   } catch (err) {
     console.error("AgenticOps Desk could not save provenance", err);
   }

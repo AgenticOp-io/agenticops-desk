@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, openSync, readFileSync, readSync, closeSync, statSync, watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 // Watch and react: a chat follows a log file. When new lines contain an error, AgenticOps Desk sends them to
 // that chat so it starts investigating without being asked. Cool-down keeps a noisy log from looping.
@@ -29,9 +30,7 @@ function saved(): Watch[] {
 
 function persist() {
   const list = [...live.values()].map((l) => l.w);
-  mkdirSync(path.dirname(store()), { recursive: true });
-  writeFileSync(`${store()}.tmp`, JSON.stringify(list, null, 2), "utf8");
-  renameSync(`${store()}.tmp`, store());
+  writeJsonAtomicSync(store(), list);
 }
 
 function idOf(w: Pick<Watch, "chatId" | "file">) {

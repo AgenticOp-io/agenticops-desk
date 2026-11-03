@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
 import { permissionGateFor, type AllowEntry } from "./gate";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 export { riskKeys } from "./gate";
 export type { PermissionGate } from "./gate";
@@ -44,12 +45,8 @@ function load(): AllowBook {
 }
 
 function save() {
-  const target = file();
-  const tmp = `${target}.${process.pid}.tmp`;
   try {
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(tmp, JSON.stringify(load(), null, 2), "utf8");
-    renameSync(tmp, target);
+    writeJsonAtomicSync(file(), load());
   } catch (err) {
     console.error("AgenticOps Desk could not save remembered allows", err);
   }

@@ -1,6 +1,6 @@
 import { query, type ModelInfo, type PermissionResult, type PermissionUpdate, type Query, type SDKUserMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, Notification, shell } from "electron";
@@ -14,6 +14,7 @@ import { loadSettings } from "./settings";
 import { LOCAL_ONLY_MESSAGE, privacyMode, privacyVault, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { directModelOptions } from "./providers";
 import { commandTouchesSecretFile, isSecretFile, mapStrings, wrapCommand } from "./redact";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 export type ApprovalQuestion = {
   question: string;
@@ -160,12 +161,8 @@ function loadStore(): Record<string, StoredSession> {
 
 // Sync on purpose: this must land on disk even when the app is quitting.
 function persistStore() {
-  const file = storeFile();
-  const tmp = `${file}.${process.pid}.tmp`;
   try {
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(tmp, JSON.stringify(loadStore(), null, 2), "utf8");
-    renameSync(tmp, file);
+    writeJsonAtomicSync(storeFile(), loadStore());
   } catch (err) {
     console.error("AgenticOps Desk could not save Claude sessions", err);
   }

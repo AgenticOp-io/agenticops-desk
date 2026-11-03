@@ -52,7 +52,7 @@ The Windows setup imports Cursor projects and chats while it installs, and opens
 
 | Platform | Files |
 |----------|-------|
-| Windows x64 / ARM64 | `-setup.exe` installer, `-portable.exe` |
+| Windows (x64 and ARM64 in one file; it picks the right one) | `-win-setup.exe` installer, `-win-portable.exe` |
 | macOS Apple Silicon / Intel | `.dmg`, `.zip` |
 | Linux x64 / ARM64 | `.AppImage`, `.deb` |
 

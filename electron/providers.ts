@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app, safeStorage } from "electron";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 // AI providers the Direct engine can call without Claude Code. Keys are encrypted with Windows'
 // credential protection (safeStorage) and never leave the main process.
@@ -92,11 +93,7 @@ function load(): Stored {
 }
 
 function save() {
-  const target = file();
-  const tmp = `${target}.${process.pid}.tmp`;
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(tmp, JSON.stringify(load(), null, 2), "utf8");
-  renameSync(tmp, target);
+  writeJsonAtomicSync(file(), load());
 }
 
 function isProvider(id: string): id is ProviderId {

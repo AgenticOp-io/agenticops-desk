@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -38,6 +38,20 @@ export async function writeJsonAtomic(file: string, data: unknown, pretty = true
     // Windows can refuse the rename while something (e.g. antivirus) holds the target open.
     await fs.writeFile(file, text, "utf8");
     await fs.rm(tmp, { force: true });
+  }
+}
+
+// The same, for callers that must finish before returning (state saved on quit, in hooks).
+export function writeJsonAtomicSync(file: string, data: unknown, pretty = true) {
+  const text = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
+  mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${seq++}.tmp`;
+  writeFileSync(tmp, text, "utf8");
+  try {
+    renameSync(tmp, file);
+  } catch {
+    writeFileSync(file, text, "utf8");
+    rmSync(tmp, { force: true });
   }
 }
 

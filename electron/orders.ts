@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
 import { globToRegExp } from "./pureFeatures";
+import { writeJsonAtomicSync } from "./jsonStore";
 
 // Standing orders: per-project rules that AgenticOps Desk enforces instead of hoping the model follows them.
 // - rules: plain sentences added to the system prompt
@@ -44,10 +45,7 @@ export function saveOrders(workspace: string, next: Partial<Orders>): Orders {
     checks: list(next.checks),
     maxFixes: Math.min(10, Math.max(0, Number(next.maxFixes) || EMPTY.maxFixes)),
   };
-  const target = file(workspace);
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(`${target}.tmp`, JSON.stringify(merged, null, 2), "utf8");
-  renameSync(`${target}.tmp`, target);
+  writeJsonAtomicSync(file(workspace), merged);
   return merged;
 }
 

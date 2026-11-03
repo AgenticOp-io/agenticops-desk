@@ -30,6 +30,8 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit
+      - name: Test
+        run: npm test
       - name: Bundle
         # Monaco makes the bundle large; Node's default heap runs out on the runner.
         env:
@@ -39,6 +41,11 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder ${{ matrix.args }} --publish never
+      - name: Keep one Windows installer and one portable
+        # The all-in-one files carry x64 and ARM64 and pick the right one on the PC; the single-chip copies are dropped.
+        if: matrix.label == 'windows'
+        shell: bash
+        run: rm -f release/*-win-x64-*.exe release/*-win-arm64-*.exe
       - uses: actions/upload-artifact@v7
         with:
           name: AgenticOps-Desk-${{ matrix.label }}

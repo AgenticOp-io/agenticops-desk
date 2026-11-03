@@ -48,10 +48,26 @@ export function lineDiff(before: string, after: string): string {
 // Auto model: errors that mean "this AI can't take the job right now", so the next one should try.
 // Anything else (a tool failing, a bad request in the chat itself) stays with the user.
 const FAILOVER =
-  /\b(429|5\d\d)\b|rate.?limit|usage limit|overloaded|quota|credit balance|billing|insufficient|too many requests|capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network|timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
+  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|overloaded|quota|credit balance|billing|insufficient|too many requests|capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
 
 export function shouldFailOver(error: string): boolean {
   return FAILOVER.test(error);
+}
+
+// What Auto does with one event of a run it routes: let it through, hide a provider error so the next AI
+// can try, end the run, or hand the message over (the run ended after a hidden error).
+export function autoStep(
+  run: { queue: string[]; failed?: string; erred?: boolean },
+  kind: string,
+  text = "",
+): "pass" | "swallow" | "finish" | "handover" {
+  if (kind === "error" && text && !run.failed && run.queue.length && shouldFailOver(text)) {
+    run.failed = text;
+    return "swallow";
+  }
+  if (kind === "error") run.erred = true;
+  if (kind !== "done") return "pass";
+  return run.failed ? "handover" : "finish";
 }
 
 // Rate limits and quota errors last a while; anything else gets a short rest.

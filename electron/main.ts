@@ -57,7 +57,6 @@ import {
   loadThread,
   flushLibrary,
   libraryPending,
-  migrateLibraryIfNeeded,
   patchChat,
   searchMessages,
   rememberChats,
@@ -81,7 +80,7 @@ import {
   writeProjectDoc,
   writeShell,
 } from "./features";
-import { loadSettings, migrateSettingsIfNeeded, patchSettings, type UiPrefs } from "./settings";
+import { loadSettings, patchSettings, type UiPrefs } from "./settings";
 import { buildBriefing } from "./briefing";
 import { loadOrders, saveOrders, type Orders } from "./orders";
 import { originsOf } from "./provenance";
@@ -288,9 +287,7 @@ app.on("second-instance", () => {
 });
 
 async function importCursorOnInstall() {
-  await migrateLibraryIfNeeded();
   const result = await importCursorLibrary();
-  await migrateSettingsIfNeeded();
   const s = await loadSettings();
   if (!s.lastWorkspace && result.workspace && existsSync(result.workspace)) {
     await patchSettings({ lastWorkspace: result.workspace });
@@ -325,8 +322,6 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  await migrateLibraryIfNeeded();
-  await migrateSettingsIfNeeded();
   // Import from Cursor once. People without Cursor would otherwise rescan on every launch.
   const imported = existsSync(path.join(app.getPath("userData"), "cursor-import.json"));
   if (!imported && !(await rememberedChats()).length) {
