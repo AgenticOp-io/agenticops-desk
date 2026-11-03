@@ -11,8 +11,6 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **Plugins** (**Settings → Plugins**, or `/plugins`) browses, installs, updates and turns off Claude Code plugins from any marketplace, with one-click installs for Ponytail and Agent Skills. Their commands and skills show up in the composer's `/` menu.
 
-Formerly ClaudeDesk. The first launch of a renamed build moves `%APPDATA%\ClaudeDesk` to `%APPDATA%\AgenticOps Desk`; nothing else changes.
-
 ## Status
 
 **Private, in daily use.** Windows only for now.
@@ -32,7 +30,8 @@ Formerly ClaudeDesk. The first launch of a renamed build moves `%APPDATA%\Claude
 ## Run
 
 ```powershell
-cd $env:USERPROFILE\projects\claudedesk
+git clone https://github.com/AgenticOp-io/agenticops-desk.git
+cd agenticops-desk
 npm install
 npm run dev
 ```

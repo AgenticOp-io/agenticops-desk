@@ -196,10 +196,10 @@ export function commandTouchesSecretFile(command: string): string | null {
 export function wrapCommand(tool: "Bash" | "PowerShell", command: string): string {
   if (tool === "Bash") return `(\n${command}\n)\necho "[exit code: $?]"`;
   // The child starts in the process folder, not the PowerShell location, so carry the location over.
-  const child = `Set-Location -LiteralPath $env:CLAUDEDESK_LOC\n${command}\nif ($LASTEXITCODE) { exit $LASTEXITCODE }`;
+  const child = `Set-Location -LiteralPath $env:DESK_LOC\n${command}\nif ($LASTEXITCODE) { exit $LASTEXITCODE }`;
   const encoded = Buffer.from(child, "utf16le").toString("base64");
   return [
-    `$env:CLAUDEDESK_LOC = (Get-Location).ProviderPath`,
+    `$env:DESK_LOC = (Get-Location).ProviderPath`,
     `$__cd = (Get-Process -Id $PID).Path`,
     `& $__cd -NoProfile -NonInteractive -EncodedCommand ${encoded} 2>&1 | Out-String -Width 4096 -Stream`,
     `"[exit code: $LASTEXITCODE]"`,

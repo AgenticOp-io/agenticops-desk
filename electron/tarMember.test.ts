@@ -32,7 +32,7 @@ function member(name: string, body: string) {
 }
 
 test("extracts the named member and ignores the rest of the archive", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "claudedesk-tar-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "desk-tar-"));
   try {
     const tgz = path.join(dir, "pkg.tgz");
     const archive = Buffer.concat([
@@ -51,7 +51,7 @@ test("extracts the named member and ignores the rest of the archive", async () =
 });
 
 test("rejects an archive that does not contain the binary", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "claudedesk-tar-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "desk-tar-"));
   try {
     const tgz = path.join(dir, "pkg.tgz");
     const { writeFile } = await import("node:fs/promises");

@@ -1,6 +1,6 @@
-# Agent guidance — claudedesk
+# Agent guidance — agenticops-desk
 
-AgenticOps Desk (formerly ClaudeDesk; the repo is still `claudedesk`) is a **desktop workspace for AI coding agents**. Chats run on one of two engines: **Claude Code** (the default, through `@anthropic-ai/claude-agent-sdk`, using the user's Claude sign-in) or **Direct** (AgenticOps Desk's own agent loop in `electron/direct.ts`, calling the Claude API or an OpenAI-compatible provider with the user's API key). A source checkout uses the Claude Code binary in `node_modules`. A packaged app downloads the binary for that computer on first launch (`electron/claudeBinary.ts`).
+AgenticOps Desk is a **desktop workspace for AI coding agents**. Chats run on one of two engines: **Claude Code** (the default, through `@anthropic-ai/claude-agent-sdk`, using the user's Claude sign-in) or **Direct** (AgenticOps Desk's own agent loop in `electron/direct.ts`, calling the Claude API or an OpenAI-compatible provider with the user's API key). A source checkout uses the Claude Code binary in `node_modules`. A packaged app downloads the binary for that computer on first launch (`electron/claudeBinary.ts`).
 
 ## Mission
 
@@ -38,7 +38,7 @@ Chats often run inside AgenticOps Desk itself, started with `npm run dev` (`CLAU
 
 ## Remotes
 
-- `origin` → `AgenticOp-io/claudedesk` (private)
+- `origin` → `AgenticOp-io/agenticops-desk` (private)
 
 ## Git author
 

@@ -269,14 +269,14 @@ function restartWhenIdle() {
     }
     if (restartTimer) clearInterval(restartTimer);
     restartTimer = null;
-    process.send?.("claudedesk:restart");
+    process.send?.("desk:restart");
   };
   restartTimer = setInterval(check, 2000);
   check();
 }
 process.on("message", (msg) => {
-  if (msg !== "claudedesk:main-rebuilt") return;
-  process.send?.("claudedesk:ack");
+  if (msg !== "desk:main-rebuilt") return;
+  process.send?.("desk:ack");
   restartWhenIdle();
 });
 
@@ -578,7 +578,7 @@ ipcMain.handle("fs:list", async (_e, dir: string) => {
   return entries
     .filter(
       (e) =>
-        !["node_modules", ".git", "dist", "dist-electron", ".vite", ".claudedesk"].includes(e.name),
+        !["node_modules", ".git", "dist", "dist-electron", ".vite"].includes(e.name),
     )
     .map((e) => ({
       name: e.name,

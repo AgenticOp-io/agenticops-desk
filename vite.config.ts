@@ -21,7 +21,7 @@ const CSP = [
 
 function contentSecurityPolicy(): Plugin {
   return {
-    name: "claudedesk-csp",
+    name: "desk-csp",
     apply: "build",
     transformIndexHtml: () => [
       { tag: "meta", attrs: { "http-equiv": "Content-Security-Policy", content: CSP }, injectTo: "head-prepend" },
@@ -35,7 +35,7 @@ const electronApp = () => (process as NodeJS.Process & { electronApp?: ChildProc
 async function start(startup: Startup) {
   await startup();
   electronApp()?.on("message", (msg) => {
-    if (msg === "claudedesk:restart") void start(startup);
+    if (msg === "desk:restart") void start(startup);
   });
 }
 
@@ -47,10 +47,10 @@ function onMainRebuilt(startup: Startup) {
   if (!running || running.exitCode !== null || !running.send) return start(startup);
   let acked = false;
   const onAck = (msg: unknown) => {
-    if (msg === "claudedesk:ack") acked = true;
+    if (msg === "desk:ack") acked = true;
   };
   running.on("message", onAck);
-  running.send("claudedesk:main-rebuilt");
+  running.send("desk:main-rebuilt");
   setTimeout(() => {
     running.off("message", onAck);
     if (!acked && electronApp() === running) void start(startup);

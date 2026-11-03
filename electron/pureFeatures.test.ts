@@ -16,7 +16,7 @@ test("protected-path globs", () => {
 });
 
 test("org name from a git remote", () => {
-  assert.equal(ownerFromRemote("https://github.com/AgenticOp-io/claudedesk.git\n"), "AgenticOp-io");
+  assert.equal(ownerFromRemote("https://github.com/AgenticOp-io/agenticops-desk.git\n"), "AgenticOp-io");
   assert.equal(ownerFromRemote("git@github.com:AgenticOp-io/other-repo.git"), "AgenticOp-io");
   assert.equal(ownerFromRemote("ssh://git@gitlab.example.com/team/repo.git"), "team");
   assert.equal(ownerFromRemote("C:\\repos\\local"), null);

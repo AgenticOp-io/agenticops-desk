@@ -152,7 +152,7 @@ export function closeAllShells() {
   for (const id of [...shells.keys()]) closeShell(id);
 }
 
-const RELEASES = "repos/AgenticOp-io/claudedesk/releases/latest";
+const RELEASES = "repos/AgenticOp-io/agenticops-desk/releases/latest";
 
 export async function checkForUpdate(): Promise<{ current: string; latest: string | null; url: string | null; note: string }> {
   const current = app.getVersion();

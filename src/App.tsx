@@ -213,7 +213,7 @@ export function App() {
 
   // Morning briefing: after 8 hours away, show where every recent chat stands.
   useEffect(() => {
-    const key = "claudedesk.lastSeen";
+    const key = "desk.lastSeen";
     const last = Number(localStorage.getItem(key)) || 0;
     if (last && Date.now() - last > 8 * 3_600_000) {
       setTimeout(() => void window.desk.briefing(Date.now() - 3 * 86_400_000).then((items) => items.length && setBriefing(items)), 2000);
@@ -237,10 +237,10 @@ export function App() {
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
-    localStorage.getItem("claudedesk.sideView") === "files" ? "files" : "chats",
+    localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
-  const [mode, setMode] = useState(() => localStorage.getItem("claudedesk.mode") || "default");
-  const [model, setModel] = useState(() => localStorage.getItem("claudedesk.model") || "");
+  const [mode, setMode] = useState(() => localStorage.getItem("desk.mode") || "default");
+  const [model, setModel] = useState(() => localStorage.getItem("desk.model") || "");
   // Slash commands and skills from installed plugins, offered in the composer's "/" menu.
   const [pluginCmds, setPluginCmds] = useState<PluginCommand[]>([]);
   // Which AI the Auto model handed each chat's latest run to.
@@ -594,9 +594,9 @@ export function App() {
     return () => clearTimeout(t);
   }, [quickOpen, quickQuery]);
 
-  useEffect(() => localStorage.setItem("claudedesk.sideView", sideView), [sideView]);
-  useEffect(() => localStorage.setItem("claudedesk.mode", mode), [mode]);
-  useEffect(() => localStorage.setItem("claudedesk.model", model), [model]);
+  useEffect(() => localStorage.setItem("desk.sideView", sideView), [sideView]);
+  useEffect(() => localStorage.setItem("desk.mode", mode), [mode]);
+  useEffect(() => localStorage.setItem("desk.model", model), [model]);
 
   useEffect(() => {
     void window.desk.listModels().then((list) => {
@@ -693,7 +693,7 @@ export function App() {
   };
 
   const [chatWidth, setChatWidth] = useState(() => {
-    const saved = Number(localStorage.getItem("claudedesk.chatWidth"));
+    const saved = Number(localStorage.getItem("desk.chatWidth"));
     return saved >= 320 && saved <= 1200 ? saved : 460;
   });
 
@@ -710,7 +710,7 @@ export function App() {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
       document.body.classList.remove("resizing");
-      localStorage.setItem("claudedesk.chatWidth", String(latest));
+      localStorage.setItem("desk.chatWidth", String(latest));
     };
     document.body.classList.add("resizing");
     window.addEventListener("mousemove", move);

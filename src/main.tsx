@@ -15,6 +15,14 @@ import "katex/dist/katex.min.css";
 import { App } from "./App";
 import "./styles.css";
 
+// Saved choices from before the rename keep their values under the new key names.
+for (const key of Object.keys(localStorage)) {
+  if (!key.startsWith("claudedesk.")) continue;
+  const next = `desk.${key.slice("claudedesk.".length)}`;
+  if (localStorage.getItem(next) === null) localStorage.setItem(next, localStorage.getItem(key) ?? "");
+  localStorage.removeItem(key);
+}
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
