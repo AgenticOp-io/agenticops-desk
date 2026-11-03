@@ -81,7 +81,7 @@ const SECTIONS: Section[] = [
     id: "permissions",
     title: "Permissions",
     body: [
-      "The first time the agent needs to work in a folder, the app asks once. Allow means ordinary coding in that folder just runs: edits, tests, git (including push), delete, and network.",
+      "File edits inside the open folder never wait for you: they happen, then show on the change bar to review or undo. The first time the agent needs to run a command in a folder, the app asks once. Allow means ordinary coding in that folder just runs: tests, git (including push), delete, and network.",
       "Disk format, administrator commands (sudo or runas), and shutdown still ask, once each, and are remembered if you allow them.",
       "Questions and plan approvals always ask, even in a trusted folder. Allow on those does not by itself trust the folder. Deny never gets remembered.",
       "Sign in from Settings if the footer says you are not signed in.",

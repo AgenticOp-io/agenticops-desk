@@ -25,6 +25,23 @@ function commandOf(input: Record<string, unknown>) {
   return typeof command === "string" ? command : "";
 }
 
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+function editTarget(input: Record<string, unknown>) {
+  const p = input.file_path ?? input.notebook_path ?? input.path;
+  return typeof p === "string" ? p : "";
+}
+
+// Plain string check so this file stays free of Node and Electron. Rejects "..", other drives and siblings
+// that only share a prefix (C:\proj2 is not inside C:\proj).
+export function insideFolder(folder: string, target: string): boolean {
+  if (!target || /(^|[\\/])\.\.([\\/]|$)/.test(target)) return false;
+  const norm = (s: string) => s.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const root = norm(folder);
+  const file = /^[a-z]:|^\\\\|^\//i.test(target) ? norm(target) : `${root}\\${norm(target)}`;
+  return file.startsWith(`${root}\\`);
+}
+
 export type PermissionGate =
   | { ask: false }
   | { ask: true; kind: "question" }
@@ -55,6 +72,9 @@ export function permissionGateFor(
     };
   }
   if (trusted) return { ask: false };
+  // File edits inside the open folder never wait on the user: each file is snapshotted first, and the
+  // change bar lets the user review or undo it afterwards. Commands and edits elsewhere still ask once.
+  if (EDIT_TOOLS.has(toolName) && workspace && insideFolder(workspace, editTarget(input))) return { ask: false };
   const folder = workspace ? workspace.split(/[\\/]/).filter(Boolean).pop() : "this folder";
   return {
     ask: true,
