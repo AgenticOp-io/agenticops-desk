@@ -352,7 +352,7 @@ async function listComposerChats(): Promise<CursorChat[]> {
     }
     return chats;
   } catch (err) {
-    console.error("ClaudeDesk could not read Cursor chats", err);
+    console.error("AgenticOps Desk could not read Cursor chats", err);
     return [];
   }
 }
@@ -635,7 +635,7 @@ async function readComposerBubbles(id: string, slug: string): Promise<CursorChat
       files: [],
     };
   } catch (err) {
-    console.error("ClaudeDesk could not read a Cursor chat", err);
+    console.error("AgenticOps Desk could not read a Cursor chat", err);
     return null;
   }
 }

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, renameSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,7 +88,23 @@ import { originsOf } from "./provenance";
 import { addWatch, closeWatches, initWatches, listWatches, removeChatWatches, removeWatch } from "./watch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-app.setPath("userData", path.join(app.getPath("appData"), "ClaudeDesk"));
+app.setPath("userData", dataFolder());
+
+// The app was called ClaudeDesk before; its folder moves to the new name the first time this version starts.
+// If the old folder is in use (an older copy still running), keep using it this time and move it next launch.
+function dataFolder() {
+  const appData = app.getPath("appData");
+  const current = path.join(appData, "AgenticOps Desk");
+  const old = path.join(appData, "ClaudeDesk");
+  if (existsSync(current) || !existsSync(old)) return current;
+  try {
+    renameSync(old, current);
+    return current;
+  } catch (err) {
+    console.error("AgenticOps Desk could not move the old ClaudeDesk folder yet", err);
+    return old;
+  }
+}
 
 let win: BrowserWindow | null = null;
 let workspace = process.cwd();
@@ -114,10 +130,10 @@ function ensureTray() {
     buf[i * 4 + 3] = 255;
   }
   tray = new Tray(nativeImage.createFromBitmap(buf, { width: size, height: size }));
-  tray.setToolTip("ClaudeDesk is still working");
+  tray.setToolTip("AgenticOps Desk is still working");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Show ClaudeDesk", click: () => showWindow() },
+      { label: "Show AgenticOps Desk", click: () => showWindow() },
       {
         label: "Quit",
         click: () => {
@@ -164,7 +180,7 @@ function watchWorkspace() {
   }
 }
 
-// The window must only ever show ClaudeDesk: the preload gives the page full file, shell and git access.
+// The window must only ever show AgenticOps Desk: the preload gives the page full file, shell and git access.
 // Links (chat replies, the preview pane) open in the system browser instead of replacing the app.
 function isAppUrl(url: string) {
   const dev = process.env.VITE_DEV_SERVER_URL;
@@ -200,7 +216,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: "#181818",
-    title: "ClaudeDesk",
+    title: "AgenticOps Desk",
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -229,7 +245,7 @@ function createWindow() {
   }
 }
 
-// One ClaudeDesk per user: a second launch focuses the open window instead of sharing the same data files.
+// One AgenticOps Desk per user: a second launch focuses the open window instead of sharing the same data files.
 // The lock lives in userData, so this runs after userData is set (a test copy with its own folder is separate).
 async function claimSingleInstance(): Promise<boolean> {
   // After a dev hot restart the previous instance can still be exiting, so wait for it briefly.
@@ -242,13 +258,13 @@ async function claimSingleInstance(): Promise<boolean> {
 }
 
 // Dev only: vite.config.ts tells this process when the main-process code was rebuilt, instead of killing it.
-// Restart once no chat is running, so editing electron/ from inside a ClaudeDesk chat never cuts that chat off.
+// Restart once no chat is running, so editing electron/ from inside a AgenticOps Desk chat never cuts that chat off.
 let restartTimer: ReturnType<typeof setInterval> | null = null;
 function restartWhenIdle() {
   if (restartTimer) return;
   const check = () => {
     if (liveRunCount() > 0) {
-      if (win && !win.isDestroyed()) win.setTitle("ClaudeDesk (new code loads when running chats finish)");
+      if (win && !win.isDestroyed()) win.setTitle("AgenticOps Desk (new code loads when running chats finish)");
       return;
     }
     if (restartTimer) clearInterval(restartTimer);
@@ -297,7 +313,7 @@ app.whenReady().then(async () => {
       try {
         await importCursorOnInstall();
       } catch (err) {
-        console.error("ClaudeDesk could not import Cursor during install", err);
+        console.error("AgenticOps Desk could not import Cursor during install", err);
         code = 1;
       }
     }
@@ -317,7 +333,7 @@ app.whenReady().then(async () => {
     try {
       await importCursorOnInstall();
     } catch (err) {
-      console.error("ClaudeDesk could not import Cursor", err);
+      console.error("AgenticOps Desk could not import Cursor", err);
     }
   }
   const s = await loadSettings();
@@ -354,7 +370,7 @@ app.whenReady().then(async () => {
         chatId: w.chatId,
         workspace: cwd,
         prompt:
-          `ClaudeDesk is watching ${w.file} for this chat, and it just logged this:\n\n\`\`\`\n${lines}\n\`\`\`\n\n` +
+          `AgenticOps Desk is watching ${w.file} for this chat, and it just logged this:\n\n\`\`\`\n${lines}\n\`\`\`\n\n` +
           "Find the cause. Fix it if the fix is clear and safe; otherwise explain what you found and what you need from me.",
       });
     });
@@ -455,7 +471,7 @@ ipcMain.handle("cursor:chats", async (_e, projectPath?: string) => {
   try {
     scanned = await listCursorChats(projectPath);
   } catch (err) {
-    console.error("ClaudeDesk chat import failed", err);
+    console.error("AgenticOps Desk chat import failed", err);
     scanned = [];
   }
   const stored = await rememberedChats();
@@ -807,7 +823,7 @@ ipcMain.handle("claude:forget", (_e, chatId: string) => {
 ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: unknown; pinned?: unknown; mode?: unknown; model?: unknown; parentId?: unknown }) =>
   patchChat(id, patch),
 );
-// Deleting a chat stops it and removes everything ClaudeDesk kept for it.
+// Deleting a chat stops it and removes everything AgenticOps Desk kept for it.
 ipcMain.handle("chats:delete", async (_e, id: string) => {
   stopClaude(win, id);
   forgetSession(id);
@@ -816,7 +832,7 @@ ipcMain.handle("chats:delete", async (_e, id: string) => {
   try {
     deleteDirectHistory(id);
   } catch (err) {
-    console.error("ClaudeDesk could not remove direct history", err);
+    console.error("AgenticOps Desk could not remove direct history", err);
   }
   await deleteChat(id);
   return true;

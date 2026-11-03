@@ -59,7 +59,7 @@ export function permissionGateFor(
   return {
     ask: true,
     kind: "trust",
-    summary: `Let Claude work in ${folder}`,
+    summary: `Let the agent work in ${folder}`,
     note: "Edits, tests, git, and network just run after this. Disk format, administrator commands, and shutdown still ask.",
   };
 }

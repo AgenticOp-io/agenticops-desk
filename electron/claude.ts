@@ -167,7 +167,7 @@ function persistStore() {
     writeFileSync(tmp, JSON.stringify(loadStore(), null, 2), "utf8");
     renameSync(tmp, file);
   } catch (err) {
-    console.error("ClaudeDesk could not save Claude sessions", err);
+    console.error("AgenticOps Desk could not save Claude sessions", err);
   }
 }
 
@@ -247,8 +247,8 @@ function deliver(win: BrowserWindow | null, event: ClaudeEvent) {
   // The user stopped it themselves; no need to tell them.
   if (event.kind === "done" && /^Stopped/.test(event.text ?? "")) return;
   if (!Notification.isSupported()) return;
-  const body = event.kind === "approval" ? event.approval?.summary || "Claude needs you" : event.text || "Finished";
-  const note = new Notification({ title: "ClaudeDesk", body });
+  const body = event.kind === "approval" ? event.approval?.summary || "The agent needs you" : event.text || "Finished";
+  const note = new Notification({ title: "AgenticOps Desk", body });
   note.on("click", () => notificationClick?.());
   note.show();
 }
@@ -390,7 +390,7 @@ export function answerApproval(
         updatedInput: decision.answers ? { ...pending.input, answers: decision.answers } : pending.input,
         ...(decision.always && pending.suggestions?.length ? { updatedPermissions: pending.suggestions } : {}),
       }
-    : { behavior: "deny", message: decision.message || "The user denied this in ClaudeDesk." };
+    : { behavior: "deny", message: decision.message || "The user denied this in AgenticOps Desk." };
   if (!settleApproval(session, requestId, result)) return false;
   send(win, { kind: "approval_done", id: requestId, chatId, running: true });
   if (win && !win.isDestroyed() && ![...sessions.values()].some((s) => s.approvals.size)) win.flashFrame(false);
@@ -528,7 +528,7 @@ export async function probeClaude(onStatus?: (text: string) => void): Promise<{ 
     const managed = await ensureClaudeBinary(onStatus);
     if (managed) return { found: true, path: managed, bundled: true };
   } catch (err) {
-    onStatus?.(err instanceof Error ? err.message : "Could not download Claude Code.");
+    onStatus?.(err instanceof Error ? err.message : "Could not download the agent engine.");
   }
   const p = findClaudeCli();
   const js = findClaudeJs();
@@ -619,7 +619,7 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
         send(win, { kind: "status", text: "Getting ready…", sessionId, chatId, running: true, phase: "thinking" });
       } else if (subtype === "permission_denied") {
         const message = typeof msg.message === "string" ? msg.message : "Permission denied";
-        if (!/denied this in ClaudeDesk|Stopped before approval/i.test(message)) {
+        if (!/denied this in AgenticOps Desk|Stopped before approval/i.test(message)) {
           send(win, { kind: "error", text: message, sessionId, chatId, running: true });
         }
       }
@@ -845,7 +845,7 @@ export async function revertChanges(win: BrowserWindow | null, chatId: string, p
       }
       session.changes.delete(key);
     } catch (err) {
-      console.error("ClaudeDesk could not undo", entry.path, err);
+      console.error("AgenticOps Desk could not undo", entry.path, err);
     }
   }
   sendChanges(win, chatId, session);
@@ -991,7 +991,7 @@ export function shutdownClaude() {
     for (const pending of session.approvals.values()) {
       if (pending.settled) continue;
       pending.settled = true;
-      pending.resolve({ behavior: "deny", message: "ClaudeDesk is closing." });
+      pending.resolve({ behavior: "deny", message: "AgenticOps Desk is closing." });
     }
     session.approvals.clear();
     endRun(session);
@@ -1026,7 +1026,7 @@ export function resumePendingRun(win: BrowserWindow | null, chatId: string, fall
   // If the CLI never reported a session, the original prompt was never seen; send it again.
   const prompt =
     pending.started && stored.claudeSession
-      ? "ClaudeDesk was closed while you were working, which interrupted your previous run. Continue the task exactly where you left off; do not redo finished steps."
+      ? "AgenticOps Desk was closed while you were working, which interrupted your previous run. Continue the task exactly where you left off; do not redo finished steps."
       : pending.prompt;
   runClaude({ win, chatId, workspace: cwd, prompt, resume: true, permissionMode: pending.permissionMode });
   return true;
@@ -1193,7 +1193,7 @@ export function runClaude(opts: {
     ...process.env,
     FORCE_COLOR: "0",
     NO_COLOR: "1",
-    CLAUDE_AGENT_SDK_CLIENT_APP: "ClaudeDesk",
+    CLAUDE_AGENT_SDK_CLIENT_APP: "AgenticOps-Desk",
     ...(bash ? { CLAUDE_CODE_GIT_BASH_PATH: bash } : {}),
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
@@ -1362,7 +1362,7 @@ export function runClaude(opts: {
                 return {
                   decision: "block" as const,
                   reason:
-                    `ClaudeDesk standing order: \`${result.command}\` must pass before you finish, and it failed ` +
+                    `AgenticOps Desk standing order: \`${result.command}\` must pass before you finish, and it failed ` +
                     `(attempt ${session.fixAttempts} of ${orders.maxFixes}). Fix the cause, then finish. Output:\n` +
                     scrubOutgoing(result.output).text,
                 };
@@ -1430,7 +1430,7 @@ export function runClaude(opts: {
       if (resuming && /no conversation found/i.test(`${failed}\n${session.stderr ?? ""}`)) {
         session.claudeSession = undefined;
         patchStored(chatId, (s) => delete s.claudeSession);
-        failed = "The previous Claude Code session no longer exists. Send again to start a new one.";
+        failed = "The previous agent session no longer exists. Send again to start a new one.";
       } else if (!session.stopping && !shuttingDown) {
         const tail = (session.stderr ?? "").trim().slice(-500);
         if (tail && !failed.includes(tail)) failed = `${failed}\n${tail}`;

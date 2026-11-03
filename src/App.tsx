@@ -425,7 +425,7 @@ export function App() {
         setCli(await window.desk.probeClaude());
         const auth = await window.desk.authStatus();
         setAuthOk(auth.ok);
-        setStatus(auth.ok ? "Claude Code signed in" : "Not signed in to Claude. Open Settings to sign in.");
+        setStatus(auth.ok ? "Signed in" : "Not signed in. Open Settings to sign in.");
       } catch {
         setAuthOk(false);
       } finally {
@@ -512,7 +512,7 @@ export function App() {
       if (ev.kind === "done") {
         if (activeChatRef.current?.id !== chatId && typeof Notification !== "undefined") {
           const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "A chat";
-          new Notification("ClaudeDesk", { body: `${title} finished` });
+          new Notification("AgenticOps Desk", { body: `${title} finished` });
         }
         setPendingApprovals((list) => list.filter((a) => a.chatId !== chatId));
         setProgressByChat((p) => ({
@@ -848,7 +848,7 @@ export function App() {
     const chat = activeChat;
     if (!chat) return;
     await afterChangeAction(chat.id, await window.desk.revertChanges(chat.id, paths));
-    setStatus(paths?.length === 1 ? `Undid Claude's changes to ${baseName(paths[0])}` : "Undid Claude's changes");
+    setStatus(paths?.length === 1 ? `Undid the agent's changes to ${baseName(paths[0])}` : "Undid the agent's changes");
   };
 
   const catchUp = async () => {
@@ -860,7 +860,7 @@ export function App() {
       ...t,
       [chat.id]: [
         ...(t[chat.id] ?? []),
-        { role: "user", text: `Catch Claude Code up on “${chat.title}”.` },
+        { role: "user", text: `Catch the agent up on “${chat.title}”.` },
       ],
     }));
     markUsed(chat.id, cwd);
@@ -1032,10 +1032,10 @@ export function App() {
   ];
 
   const cliLabel = useMemo(() => {
-    if (!cli) return "Detecting Claude Code…";
-    if (!cli.found) return "Claude Code not found";
+    if (!cli) return "Starting the agent…";
+    if (!cli.found) return "Agent engine not found (see Settings)";
     const auth = authOk === null ? "" : authOk ? " · signed in" : " · not signed in";
-    return `Claude Code${cli.bundled ? "" : " · installed CLI"}${auth}`;
+    return `Agent ready${cli.bundled ? "" : " · installed CLI"}${auth}`;
   }, [cli, authOk]);
 
   const q = filter.trim().toLowerCase();
@@ -1531,7 +1531,7 @@ export function App() {
           </Windowed>
           {visibleGroups.length === 0 && (
             <div className="bubble system" style={{ margin: 10 }}>
-              {hiddenGroupList.length ? "All projects hidden. Right-click to unhide." : "No Cursor projects found."}
+              {hiddenGroupList.length ? "All projects hidden. Right-click to unhide." : "No projects yet. Use Add to open a folder."}
             </div>
           )}
           </>

@@ -58,7 +58,7 @@ test("rejects an archive that does not contain the binary", async () => {
     await writeFile(tgz, gzipSync(Buffer.concat([member("package/readme", "hi"), Buffer.alloc(1024)])));
     await assert.rejects(
       extractTarGzMember(tgz, path.join(dir, "out"), ["package/claude.exe"]),
-      /did not contain the Claude Code binary/,
+      /did not contain the agent engine/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

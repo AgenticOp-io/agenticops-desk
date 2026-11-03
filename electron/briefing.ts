@@ -1,6 +1,6 @@
 import { loadThread, rememberedChats } from "./library";
 
-// "While you were away": where every recently used chat stands, built from what ClaudeDesk already
+// "While you were away": where every recently used chat stands, built from what AgenticOps Desk already
 // saved. No model call, so it is instant and free.
 export type BriefingItem = {
   chatId: string;

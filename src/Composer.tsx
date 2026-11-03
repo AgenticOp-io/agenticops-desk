@@ -12,7 +12,7 @@ const SLASH = [
   ["agent", "Agent mode"],
   ["plan", "Plan mode"],
   ["auto", "Auto-edit mode"],
-  ["catchup", "Catch Claude up on this chat"],
+  ["catchup", "Catch the agent up on this chat"],
   ["terminal", "Open the terminal"],
   ["git", "Open git"],
   ["preview", "Open the page preview"],
@@ -22,7 +22,7 @@ const SLASH = [
   ["branch", "Branch this chat"],
   ["theme", "Switch light and dark"],
   ["palette", "Open the command palette"],
-  ["plugins", "Browse and install Claude Code plugins"],
+  ["plugins", "Browse and install plugins"],
   ["autopick", "Choose which AIs the Auto model uses"],
 ] as const;
 
@@ -316,7 +316,7 @@ export const Composer = forwardRef<
         )}
         <textarea
           ref={areaRef}
-          placeholder="Message Claude Code…  @ to add a file, paste or drop images"
+          placeholder="Message the agent…  @ to add a file, paste or drop images"
           value={value}
           onChange={(e) => {
             onChange(e.target.value);
@@ -421,7 +421,7 @@ export const Composer = forwardRef<
         {props.usage && (
           <span
             className="usage"
-            title={`Context: ${props.usage.contextTokens.toLocaleString()} of ${props.usage.contextWindow.toLocaleString()} tokens${props.usage.model ? ` · ${props.usage.model}` : ""}\nEstimated cost of this chat since ClaudeDesk started: $${props.usage.costUsd.toFixed(4)}`}
+            title={`Context: ${props.usage.contextTokens.toLocaleString()} of ${props.usage.contextWindow.toLocaleString()} tokens${props.usage.model ? ` · ${props.usage.model}` : ""}\nEstimated cost of this chat since AgenticOps Desk started: $${props.usage.costUsd.toFixed(4)}`}
           >
             <span className="usage-meter">
               <span style={{ width: `${ctxPct}%` }} className={ctxPct > 80 ? "hot" : ""} />
@@ -445,7 +445,7 @@ export const Composer = forwardRef<
       )}
       <div className="row">
         <button className="btn" disabled={running} onClick={props.onCatchUp}>
-          {running ? "Running…" : "Catch Claude up"}
+          {running ? "Running…" : "Catch up"}
         </button>
         <button className="btn primary" disabled={!value.trim() && !images.length} onClick={send}>
           {running ? "Guide" : "Send"}

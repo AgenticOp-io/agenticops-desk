@@ -79,7 +79,7 @@ const STALL_TIMEOUT_MS = 60_000;
 async function registryDist(pkg: string, version: string): Promise<Dist> {
   const url = `https://registry.npmjs.org/${pkg}/${version}`;
   const res = await net.fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "ClaudeDesk" },
+    headers: { Accept: "application/json", "User-Agent": "AgenticOps-Desk" },
     signal: AbortSignal.timeout(META_TIMEOUT_MS),
   });
   if (res.status === 404) throw new Error(`missing:${pkg}`);
@@ -103,14 +103,14 @@ async function downloadTarball(url: string, dest: string, onStatus?: (text: stri
   };
   let res: Response;
   try {
-    res = await net.fetch(url, { headers: { "User-Agent": "ClaudeDesk" }, signal: stall.signal });
+    res = await net.fetch(url, { headers: { "User-Agent": "AgenticOps-Desk" }, signal: stall.signal });
   } catch (err) {
     clearTimeout(timer);
-    throw stall.signal.aborted ? new Error("The Claude Code download timed out. Check the connection and try again.") : err;
+    throw stall.signal.aborted ? new Error("The agent engine download timed out. Check the connection and try again.") : err;
   }
   if (!res.ok || !res.body) {
     clearTimeout(timer);
-    throw new Error(`The Claude Code download failed (${res.status}).`);
+    throw new Error(`The agent engine download failed (${res.status}).`);
   }
   const total = Number(res.headers.get("content-length") || 0);
   const hash = createHash("sha512");
@@ -125,7 +125,7 @@ async function downloadTarball(url: string, dest: string, onStatus?: (text: stri
         const pct = total > 0 ? Math.min(99, Math.floor((received / total) * 100)) : -1;
         if (pct !== lastPct) {
           lastPct = pct;
-          onStatus(pct >= 0 ? `Downloading Claude Code… ${pct}%` : "Downloading Claude Code…");
+          onStatus(pct >= 0 ? `Downloading the agent engine… ${pct}%` : "Downloading the agent engine…");
         }
       }
       cb(null, chunk);
@@ -135,7 +135,7 @@ async function downloadTarball(url: string, dest: string, onStatus?: (text: stri
   try {
     await pipeline(Readable.fromWeb(web), hasher, createWriteStream(dest));
   } catch (err) {
-    throw stall.signal.aborted ? new Error("The Claude Code download stalled. Check the connection and try again.") : err;
+    throw stall.signal.aborted ? new Error("The agent engine download stalled. Check the connection and try again.") : err;
   } finally {
     clearTimeout(timer);
   }
@@ -163,17 +163,17 @@ async function fetchBinary(version: string, target: Target, onStatus?: (text: st
   const exe = path.join(dir, target.file);
   const partial = `${exe}.partial`;
   const tgz = path.join(dir, `.download-${process.pid}.tgz`);
-  onStatus?.("Downloading Claude Code…");
+  onStatus?.("Downloading the agent engine…");
   try {
     const dist = await registryDist(target.pkg, version);
     const got = await downloadTarball(dist.tarball, tgz, onStatus);
     if (got !== dist.integrity) {
-      throw new Error("The Claude Code download did not match npm's fingerprint. Nothing was installed.");
+      throw new Error("The agent engine download did not match npm's fingerprint. Nothing was installed.");
     }
-    onStatus?.("Installing Claude Code…");
+    onStatus?.("Installing the agent engine…");
     await extractTarGzMember(tgz, partial, [`package/${target.file}`, target.file]);
     const st = await fs.stat(partial);
-    if (st.size < 1024) throw new Error("The Claude Code download was empty.");
+    if (st.size < 1024) throw new Error("The agent engine download was empty.");
     await fs.rename(partial, exe);
     if (process.platform !== "win32") await fs.chmod(exe, 0o755);
     await fs.writeFile(`${exe}.sha512`, dist.integrity, "utf8");
@@ -204,7 +204,7 @@ export function ensureClaudeBinary(onStatus?: (text: string) => void): Promise<s
       } catch (err) {
         const missing = err instanceof Error && err.message.startsWith("missing:");
         if (!missing) throw err;
-        if (!musl) throw new Error(`No Claude Code build is published for ${primary.id}.`);
+        if (!musl) throw new Error(`No agent engine build is published for ${primary.id}.`);
         const glibc = targetFor(false);
         const glibcSaved = savedClaude(version, glibc);
         if (glibcSaved) return glibcSaved;
@@ -212,7 +212,7 @@ export function ensureClaudeBinary(onStatus?: (text: string) => void): Promise<s
           return await fetchBinary(version, glibc, onStatus);
         } catch (again) {
           if (again instanceof Error && again.message.startsWith("missing:")) {
-            throw new Error(`No Claude Code build is published for ${primary.id}.`);
+            throw new Error(`No agent engine build is published for ${primary.id}.`);
           }
           throw again;
         }

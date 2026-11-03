@@ -94,7 +94,7 @@ function Node({
           <Icon name={entry.isDir ? (open ? "folderOpen" : "folder") : "page"} />
         </span>
         {renaming ? <NameInput initial={entry.name} onDone={ctx.finishEdit} /> : <span className="tree-name">{entry.name}</span>}
-        {changed && <span className="tree-badge" title="Changed by Claude">M</span>}
+        {changed && <span className="tree-badge" title="Changed by the agent">M</span>}
       </div>
       {open && creating && (
         <div className="tree-item" style={{ ["--depth" as string]: depth + 1 }}>

@@ -51,7 +51,7 @@ function save() {
     writeFileSync(tmp, JSON.stringify(load(), null, 2), "utf8");
     renameSync(tmp, target);
   } catch (err) {
-    console.error("ClaudeDesk could not save remembered allows", err);
+    console.error("AgenticOps Desk could not save remembered allows", err);
   }
 }
 

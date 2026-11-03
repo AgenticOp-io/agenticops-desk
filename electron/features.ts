@@ -160,7 +160,7 @@ export async function checkForUpdate(): Promise<{ current: string; latest: strin
     "Installers are not code-signed. A signed setup needs a certificate, which this project does not have.";
   try {
     const res = await fetch(`https://api.github.com/${RELEASES}`, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "ClaudeDesk" },
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "AgenticOps-Desk" },
     });
     if (res.ok) {
       const data = (await res.json()) as { tag_name?: string; html_url?: string };

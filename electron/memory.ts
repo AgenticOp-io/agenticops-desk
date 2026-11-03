@@ -74,7 +74,7 @@ function readIndex(dir: string) {
 }
 
 function instructions(dirs: ReturnType<typeof memoryDirs>, workspace: string) {
-  return `# Persistent memory (ClaudeDesk)
+  return `# Persistent memory (AgenticOps Desk)
 
 You have a long-term memory that survives across every chat, session and restart. Use it so you get better
 at working with this user over time: you should never need to be told the same thing twice.
@@ -140,7 +140,7 @@ export function prepareMemory(workspace: string): { append: string; directories:
       directories: [dirs.global, ...(dirs.org ? [dirs.org] : []), dirs.project],
     };
   } catch (err) {
-    console.error("ClaudeDesk could not prepare memory", err);
+    console.error("AgenticOps Desk could not prepare memory", err);
     return { append: "", directories: [] };
   }
 }
@@ -157,7 +157,7 @@ export function memoryArgs(chatId: string, workspace: string): string[] {
     writeFileSync(file, prepared.append, "utf8");
     return ["--add-dir", dirs.project, "--append-system-prompt-file", file];
   } catch (err) {
-    console.error("ClaudeDesk could not prepare memory", err);
+    console.error("AgenticOps Desk could not prepare memory", err);
     return [];
   }
 }

@@ -16,7 +16,7 @@ test("format, administrator, and shutdown are separate risks", () => {
 test("an untrusted folder asks before any work", () => {
   const gate = permissionGateFor(undefined, "C:\\work\\demo", "Bash", { command: "npm test" });
   assert.equal(gate.ask, true);
-  if (gate.ask && gate.kind === "trust") assert.equal(gate.summary, "Let Claude work in demo");
+  if (gate.ask && gate.kind === "trust") assert.equal(gate.summary, "Let the agent work in demo");
   else assert.fail("expected a trust prompt");
 });
 

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, ren
 import path from "node:path";
 import { app } from "electron";
 
-// Watch and react: a chat follows a log file. When new lines contain an error, ClaudeDesk sends them to
+// Watch and react: a chat follows a log file. When new lines contain an error, AgenticOps Desk sends them to
 // that chat so it starts investigating without being asked. Cool-down keeps a noisy log from looping.
 export type Watch = { chatId: string; file: string; pattern: string };
 

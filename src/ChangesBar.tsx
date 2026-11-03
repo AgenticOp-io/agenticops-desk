@@ -27,7 +27,7 @@ export function ChangesBar({
     <div className="changes-bar">
       <div className="changes-head">
         <button type="button" className="changes-toggle" onClick={() => setOpen((v) => !v)}>
-          {open ? "▾" : "▸"} Claude changed {files.length} file{files.length === 1 ? "" : "s"}
+          {open ? "▾" : "▸"} The agent changed {files.length} file{files.length === 1 ? "" : "s"}
         </button>
         <span className="grow" />
         <button type="button" className="ghost" title="Show the changes in the editor" onClick={() => onReview(files[0])}>
@@ -37,7 +37,7 @@ export function ChangesBar({
           type="button"
           className="ghost danger-text"
           onClick={() => {
-            if (window.confirm(`Undo Claude's changes to ${files.length} file${files.length === 1 ? "" : "s"}?`)) onUndo();
+            if (window.confirm(`Undo the agent's changes to ${files.length} file${files.length === 1 ? "" : "s"}?`)) onUndo();
           }}
         >
           Undo all

@@ -104,7 +104,7 @@ function handover(run: Attempt, failedLabel: string): AutoPayload {
   return {
     ...run.payload,
     prompt:
-      `${run.payload.prompt}\n\n(ClaudeDesk: ${failedLabel} started on this and stopped partway. It had already changed these ` +
+      `${run.payload.prompt}\n\n(AgenticOps Desk: ${failedLabel} started on this and stopped partway. It had already changed these ` +
       `files, so look at their current state before continuing, and don't redo finished work:\n${list})`,
   };
 }

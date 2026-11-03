@@ -1,4 +1,4 @@
-# Creates "ClaudeDesk" shortcuts on the Desktop and in the Start menu that start the app with no terminal window.
+# Creates "AgenticOps Desk" shortcuts on the Desktop and in the Start menu that start the app with no terminal window.
 # Run again after moving the repo. Delete the two .lnk files to remove them.
 $repo = Split-Path -Parent $PSScriptRoot
 $conhost = Join-Path $env:SystemRoot "System32\conhost.exe"
@@ -10,13 +10,16 @@ $targets = @(
   (Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs")
 )
 foreach ($dir in $targets) {
-  $link = $shell.CreateShortcut((Join-Path $dir "ClaudeDesk.lnk"))
+  # Shortcuts from before the rename.
+  $old = Join-Path $dir "ClaudeDesk.lnk"
+  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old }
+  $link = $shell.CreateShortcut((Join-Path $dir "AgenticOps Desk.lnk"))
   $link.TargetPath = $conhost
   $link.Arguments = "--headless cmd.exe /d /c `"$runner`""
   $link.WorkingDirectory = $repo
   $link.WindowStyle = 7
   if (Test-Path $icon) { $link.IconLocation = "$icon,0" }
-  $link.Description = "ClaudeDesk (runs without a terminal window)"
+  $link.Description = "AgenticOps Desk (runs without a terminal window)"
   $link.Save()
-  Write-Output "Created $(Join-Path $dir 'ClaudeDesk.lnk')"
+  Write-Output "Created $(Join-Path $dir 'AgenticOps Desk.lnk')"
 }

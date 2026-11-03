@@ -100,8 +100,8 @@ export function Rules({ workspace, onStatus }: { workspace: string; onStatus: (t
   return (
     <div className="dock-body rules">
       <p className="settings-hint">
-        Standing orders for this folder. Unlike instructions, ClaudeDesk enforces them: protected paths are refused, and a
-        run that changed files is not done until every check passes (failures go back to Claude).
+        Standing orders for this folder. Unlike instructions, AgenticOps Desk enforces them: protected paths are refused, and a
+        run that changed files is not done until every check passes (failures go back to the agent).
       </p>
       <label className="rules-field">
         <span>Rules (one per line, added to every run)</span>

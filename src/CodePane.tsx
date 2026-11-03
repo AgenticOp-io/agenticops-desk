@@ -88,7 +88,7 @@ export function CodePane({
   }, [files]);
 
   const crumbs = useMemo(() => {
-    if (!shownFile) return shownSnippet ? ["Claude", shownSnippet.name] : [];
+    if (!shownFile) return shownSnippet ? ["Reply", shownSnippet.name] : [];
     return crumbsFor(shownFile.path, workspace);
   }, [shownFile, shownSnippet, workspace]);
 
@@ -136,7 +136,7 @@ export function CodePane({
             <div
               key={s.id}
               className={`editor-tab snippet ${!diff && shownSnippet?.id === s.id ? "active" : ""}`}
-              title="Code from Claude's reply (read-only)"
+              title="Code from the reply (read-only)"
               onClick={() => onSelectSnippet(s.id)}
             >
               <span className="editor-tab-name">{s.name}</span>
@@ -150,7 +150,7 @@ export function CodePane({
       {diff && (
         <div className="review-bar">
           <span>
-            {diff.created ? "New file from Claude" : "Changes by Claude"} · <strong>{crumbsFor(diff.path, workspace).join(" › ")}</strong>
+            {diff.created ? "New file from the agent" : "Changes by the agent"} · <strong>{crumbsFor(diff.path, workspace).join(" › ")}</strong>
           </span>
           <span className="grow" />
           <button type="button" className="btn danger" onClick={() => onDiffUndo(diff.path)}>
@@ -227,7 +227,7 @@ export function CodePane({
         ) : (
           <div className="editor-empty">
             <div>Open a file from Files or with Ctrl+P.</div>
-            <div>Code blocks in Claude's replies show up here as tabs.</div>
+            <div>Code blocks in replies show up here as tabs.</div>
           </div>
         )}
       </div>

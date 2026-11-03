@@ -5,7 +5,7 @@ import path from "node:path";
 import { app } from "electron";
 import { globToRegExp } from "./pureFeatures";
 
-// Standing orders: per-project rules that ClaudeDesk enforces instead of hoping the model follows them.
+// Standing orders: per-project rules that AgenticOps Desk enforces instead of hoping the model follows them.
 // - rules: plain sentences added to the system prompt
 // - protect: paths Claude may not edit (globs relative to the project, e.g. "migrations/**" or "*.lock")
 // - checks: commands that must pass before a run that changed files counts as finished; a failure goes
@@ -61,11 +61,11 @@ export function protectedBy(workspace: string, target: string, orders = loadOrde
 
 export function ordersPrompt(orders: Orders): string {
   if (!orders.rules.length && !orders.protect.length && !orders.checks.length) return "";
-  const parts = ["# Standing orders for this project (enforced by ClaudeDesk)"];
+  const parts = ["# Standing orders for this project (enforced by AgenticOps Desk)"];
   if (orders.rules.length) parts.push(...orders.rules.map((r) => `- ${r}`));
-  if (orders.protect.length) parts.push(`- Do not edit these paths; ClaudeDesk refuses the edit: ${orders.protect.join(", ")}`);
+  if (orders.protect.length) parts.push(`- Do not edit these paths; AgenticOps Desk refuses the edit: ${orders.protect.join(", ")}`);
   if (orders.checks.length) {
-    parts.push(`- When you finish a change, ClaudeDesk runs these and sends failures back to you: ${orders.checks.join(" ; ")}`);
+    parts.push(`- When you finish a change, AgenticOps Desk runs these and sends failures back to you: ${orders.checks.join(" ; ")}`);
   }
   return parts.join("\n");
 }

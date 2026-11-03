@@ -99,7 +99,7 @@ export function extractTarGzMember(tgzPath: string, dest: string, names: string[
         return;
       }
       if (!found || !out) {
-        fail(new Error("The download did not contain the Claude Code binary."));
+        fail(new Error("The download did not contain the agent engine."));
         return;
       }
       const stream = out;

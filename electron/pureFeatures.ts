@@ -48,7 +48,7 @@ export function lineDiff(before: string, after: string): string {
 // Auto model: errors that mean "this AI can't take the job right now", so the next one should try.
 // Anything else (a tool failing, a bad request in the chat itself) stays with the user.
 const FAILOVER =
-  /\b(429|5\d\d)\b|rate.?limit|usage limit|overloaded|quota|credit balance|billing|insufficient|too many requests|capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network|timed out|stalled|no claude code build|claude code (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
+  /\b(429|5\d\d)\b|rate.?limit|usage limit|overloaded|quota|credit balance|billing|insufficient|too many requests|capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network|timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
 
 export function shouldFailOver(error: string): boolean {
   return FAILOVER.test(error);

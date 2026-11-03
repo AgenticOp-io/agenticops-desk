@@ -154,8 +154,8 @@ function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text:
   );
 }
 
-// The preview page must never be able to reach ClaudeDesk itself: it is sandboxed without top-navigation,
-// and ClaudeDesk's own address is refused (same origin would let it lift the sandbox).
+// The preview page must never be able to reach AgenticOps Desk itself: it is sandboxed without top-navigation,
+// and AgenticOps Desk's own address is refused (same origin would let it lift the sandbox).
 function previewable(url: string) {
   try {
     const u = new URL(url);
@@ -178,7 +178,7 @@ function Preview({ url, onUrl }: { url: string; onUrl: (url: string) => void }) 
           if (!next) return;
           const full = /^https?:\/\//i.test(next) ? next : `http://${next}`;
           if (!previewable(full)) {
-            setError("That address can't be previewed here. ClaudeDesk's own page is blocked.");
+            setError("That address can't be previewed here. AgenticOps Desk's own page is blocked.");
             return;
           }
           setError("");
@@ -247,7 +247,7 @@ function Notes({ workspace, onStatus }: { workspace: string; onStatus: (text: st
         className="notes-edit"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder={name === ".mcp.json" ? '{ "mcpServers": { } }' : "Project instructions for Claude"}
+        placeholder={name === ".mcp.json" ? '{ "mcpServers": { } }' : "Project instructions for the agent"}
         spellCheck={false}
       />
     </div>

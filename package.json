@@ -3,7 +3,7 @@
   "version": "0.1.2",
   "private": true,
   "author": "AgenticOp-io",
-  "description": "Windows desktop frontend for the Claude Code CLI, laid out like Cursor.",
+  "description": "Desktop workspace for AI coding agents.",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -15,8 +15,8 @@
     "postinstall": "node scripts/patch-vite-electron.mjs"
   },
   "build": {
-    "appId": "io.claudedesk.app",
-    "productName": "ClaudeDesk",
+    "appId": "io.agenticop.desk",
+    "productName": "AgenticOps Desk",
     "asar": true,
     "files": [
       "dist/**/*",
@@ -36,16 +36,16 @@
       "signAndEditExecutable": false
     },
     "portable": {
-      "artifactName": "${productName}-${version}-win-${arch}-portable.${ext}"
+      "artifactName": "AgenticOps-Desk-${version}-win-${arch}-portable.${ext}"
     },
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "artifactName": "AgenticOps-Desk-${version}-${os}-${arch}.${ext}",
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "include": "build/installer.nsh",
-      "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}"
+      "artifactName": "AgenticOps-Desk-${version}-win-${arch}-setup.${ext}"
     },
     "mac": {
       "target": [
@@ -56,7 +56,7 @@
       "identity": "-"
     },
     "dmg": {
-      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+      "artifactName": "AgenticOps-Desk-${version}-mac-${arch}.${ext}"
     },
     "linux": {
       "target": [
@@ -65,7 +65,7 @@
       ],
       "category": "Development",
       "maintainer": "AgenticOp-io <opensource@agenticop.io>",
-      "synopsis": "Desktop frontend for Claude Code"
+      "synopsis": "Desktop workspace for AI coding agents"
     }
   },
   "dependencies": {

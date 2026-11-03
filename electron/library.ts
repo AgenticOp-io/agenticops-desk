@@ -73,7 +73,7 @@ export function flushLibrary(): Promise<void> {
   const snapshot = JSON.parse(JSON.stringify(memory)) as Library;
   flushing = writeJsonAtomic(libraryFile(), snapshot)
     .catch((err) => {
-      console.error("ClaudeDesk could not save the library", err);
+      console.error("AgenticOps Desk could not save the library", err);
       dirty = true;
     })
     .finally(() => {
@@ -425,13 +425,13 @@ export async function importCursorLibrary(): Promise<{ projects: number; chats: 
     projects = await listCursorProjects();
     await rememberProjects(projects);
   } catch (err) {
-    console.error("ClaudeDesk could not read Cursor projects", err);
+    console.error("AgenticOps Desk could not read Cursor projects", err);
   }
   try {
     chats = await listCursorChats();
     await rememberChats(chats);
   } catch (err) {
-    console.error("ClaudeDesk could not read Cursor chats", err);
+    console.error("AgenticOps Desk could not read Cursor chats", err);
   }
   const workspace =
     [...projects]

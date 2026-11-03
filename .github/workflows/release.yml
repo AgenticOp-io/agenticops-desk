@@ -1,6 +1,6 @@
 name: Release
 
-# Packages ClaudeDesk for Windows, macOS and Linux. The installers do not contain the
+# Packages AgenticOps Desk for Windows, macOS and Linux. The installers do not contain the
 # Claude Code binary; the app downloads the build for that computer on first launch.
 # One runner per operating system packages both chip types. Run it by hand, or push a
 # v* tag to also attach the files to a draft GitHub release.
@@ -41,7 +41,7 @@ jobs:
         run: npx electron-builder ${{ matrix.args }} --publish never
       - uses: actions/upload-artifact@v7
         with:
-          name: ClaudeDesk-${{ matrix.label }}
+          name: AgenticOps-Desk-${{ matrix.label }}
           if-no-files-found: error
           path: |
             release/*.exe
@@ -65,4 +65,4 @@ jobs:
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --title "ClaudeDesk ${GITHUB_REF_NAME}" --generate-notes
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --title "AgenticOps Desk ${GITHUB_REF_NAME}" --generate-notes

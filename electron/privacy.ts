@@ -60,7 +60,7 @@ export async function saveVault() {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  // Without encryption the vault stays in memory only: placeholders work until ClaudeDesk restarts.
+  // Without encryption the vault stays in memory only: placeholders work until AgenticOps Desk restarts.
   if (!vault || !safeStorage.isEncryptionAvailable()) return;
   const enc = safeStorage.encryptString(JSON.stringify(vault.toJSON())).toString("base64");
   await writeJsonAtomic(vaultFile(), { enc });
@@ -68,9 +68,9 @@ export async function saveVault() {
 
 const PLACEHOLDER_NOTE = `
 
-# Hidden secrets (ClaudeDesk Privacy Mode)
+# Hidden secrets (AgenticOps Desk Privacy Mode)
 
-Passwords, keys and tokens are replaced with placeholders like {{SECRET_3}} before you see them. The same value always has the same placeholder. Treat a placeholder as the real value: use it as-is in commands, edits and new files, and ClaudeDesk fills in the real value on the user's computer just before the tool runs. Never try to reveal, guess or decode a hidden value, and do not report placeholders as a bug. Key, certificate and credential files are blocked; ask the user to check those themselves.`;
+Passwords, keys and tokens are replaced with placeholders like {{SECRET_3}} before you see them. The same value always has the same placeholder. Treat a placeholder as the real value: use it as-is in commands, edits and new files, and AgenticOps Desk fills in the real value on the user's computer just before the tool runs. Never try to reveal, guess or decode a hidden value, and do not report placeholders as a bug. Key, certificate and credential files are blocked; ask the user to check those themselves.`;
 
 // The system-prompt addendum, scrubbed, with the placeholder note when Privacy Mode is on.
 export function privateAppend(append: string): string {

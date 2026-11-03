@@ -59,7 +59,7 @@ export function AutoSettings({
     <div className="auto-settings" id="settings-auto">
       <div className="settings-label">Auto model</div>
       <p className="settings-hint">
-        Pick "Auto" in the model menu and ClaudeDesk sends each message to the first AI below. When that AI hits a rate limit,
+        Pick "Auto" in the model menu and AgenticOps Desk sends each message to the first AI below. When that AI hits a rate limit,
         runs out of quota, rejects its key, is down, or declines, the same message goes to the next one, and the failed one
         rests for a while (5 minutes after a rate limit or quota error, otherwise 1). A chat stays with the AI that last
         worked for it. If an AI stops partway, the next one is told which files were already changed.
@@ -327,7 +327,7 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
           <div className="settings-hint">
             Builds a knowledge graph of a project (in graphify-out/) so Claude can answer questions that span files. It is a
             Python tool, not a plugin: install it in a terminal with <code>uv tool install graphifyy</code>, then{" "}
-            <code>graphify install --platform claude</code>. Its command then works in ClaudeDesk chats.
+            <code>graphify install --platform claude</code>. Its command then works in AgenticOps Desk chats.
           </div>
         </div>
         <button className="btn" onClick={() => void navigator.clipboard.writeText("uv tool install graphifyy && graphify install --platform claude")}>

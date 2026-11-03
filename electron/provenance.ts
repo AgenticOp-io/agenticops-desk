@@ -44,7 +44,7 @@ function flush() {
     writeFileSync(`${target()}.tmp`, JSON.stringify(all), "utf8");
     renameSync(`${target()}.tmp`, target());
   } catch (err) {
-    console.error("ClaudeDesk could not save provenance", err);
+    console.error("AgenticOps Desk could not save provenance", err);
   }
 }
 

@@ -5,7 +5,7 @@ import { ensureClaudeBinary } from "./claudeBinary";
 import { describeMarkdown, parseCliJson } from "./pureFeatures";
 
 // Claude Code plugins, managed through the bundled Claude Code's own `claude plugin ...` commands, so
-// ClaudeDesk and the CLI share one set of marketplaces and installed plugins (~/.claude/plugins).
+// AgenticOps Desk and the CLI share one set of marketplaces and installed plugins (~/.claude/plugins).
 
 export type InstalledPlugin = { id: string; version?: string; scope?: string; enabled: boolean; installPath?: string };
 export type AvailablePlugin = { pluginId: string; name: string; description?: string; marketplaceName: string; installCount?: number };
@@ -38,7 +38,7 @@ export async function listPlugins(refresh = false) {
   if (!refresh && catalog && Date.now() - catalog.at < 60_000) return catalog;
   const r = await claude(["plugin", "list", "--available", "--json"]);
   const data = parseCliJson<{ installed?: InstalledPlugin[]; available?: AvailablePlugin[] }>(r.out);
-  if (!data) throw new Error(r.out.slice(0, 400) || "Claude Code did not list plugins.");
+  if (!data) throw new Error(r.out.slice(0, 400) || "The agent engine did not list plugins.");
   catalog = { at: Date.now(), installed: data.installed ?? [], available: data.available ?? [] };
   return catalog;
 }
@@ -160,7 +160,7 @@ async function previewPlugin(id: string): Promise<string | null> {
     for (const a of agents) lines.push(`  agent ${a.slice(0, -3)}`);
     if (existsSync(path.join(dir, "hooks", "hooks.json"))) lines.push("  hooks (run automatically on Claude Code events)");
     if (existsSync(path.join(dir, ".mcp.json"))) lines.push("  MCP servers (.mcp.json)");
-    if (!found.length && !agents.length) lines.push("  nothing ClaudeDesk can list; see the source");
+    if (!found.length && !agents.length) lines.push("  nothing AgenticOps Desk can list; see the source");
   } else {
     lines.push("", "The plugin's files live in its own repository, so what it adds shows after installing.");
   }

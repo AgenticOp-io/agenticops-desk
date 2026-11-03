@@ -32,7 +32,7 @@ import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protec
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 
-// The Direct engine: ClaudeDesk's own agent loop, talking straight to a model API instead of Claude Code.
+// The Direct engine: AgenticOps Desk's own agent loop, talking straight to a model API instead of Claude Code.
 // It reuses the chat session for approvals, folder trust, change snapshots and stop handling.
 
 type Neutral = { name: string; description: string; properties: Record<string, unknown>; required: string[] };
@@ -531,7 +531,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
 
     if (message.stop_reason === "refusal") {
       messages.push({ role: "assistant", content: message.content });
-      throw new Error("Claude declined this request.");
+      throw new Error("The model declined this request.");
     }
     if (message.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: message.content });
@@ -724,7 +724,7 @@ export function runDirect(opts: {
       try {
         writeSaved(chatId, saved);
       } catch (err) {
-        console.error("ClaudeDesk could not save the direct chat", err);
+        console.error("AgenticOps Desk could not save the direct chat", err);
       }
       const stopped = abort.signal.aborted;
       if (session.abort === abort) session.abort = undefined;
