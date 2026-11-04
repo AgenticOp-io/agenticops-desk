@@ -95,6 +95,7 @@ const SECTIONS: Section[] = [
       "Code shows the editor. It loads the first time you open it. Ctrl+S saves the file you are editing. A dot on a tab means unsaved changes. Middle-click a tab to close it.",
       "Right-click a file to make a new file or folder, rename, delete, copy the path, reveal it in the system folder, or add it to the chat.",
       "Code blocks in a reply can be opened in the editor as a read-only snippet.",
+      "Quick edit: select some code (or just put the cursor on a line), press Ctrl+I or right-click › Edit with AI, type what to change, and press Enter. A small fast model rewrites only that part in a few seconds, without a full agent run. Ctrl+Z undoes it, and nothing is saved until you press Ctrl+S. With Local only, it uses your Ollama model.",
     ],
   },
   {
@@ -129,6 +130,7 @@ const SECTIONS: Section[] = [
       "Ctrl+P — open a file",
       "Ctrl+Shift+E — Chats or Files",
       "Ctrl+S — save the open file",
+      "Ctrl+I — quick edit the selected code in the editor",
       "F1 or Ctrl+/ — this help",
       "Ctrl+Shift+P — command palette",
       "Esc — close help, settings, or the file finder",

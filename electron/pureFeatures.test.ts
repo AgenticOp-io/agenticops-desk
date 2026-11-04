@@ -89,6 +89,14 @@ test("safe sync save writes, overwrites and leaves no temp file", async () => {
   }
 });
 
+test("quick edit keeps only the code inside a fence", async () => {
+  const { stripFence } = await import("./pureFeatures.ts");
+  assert.equal(stripFence("```ts\nconst a = 1;\n```"), "const a = 1;");
+  assert.equal(stripFence("```\r\n  x()\r\n```\n"), "  x()");
+  assert.equal(stripFence("  plain()  "), "  plain()  ");
+  assert.equal(stripFence("text ```not a fence``` here"), "text ```not a fence``` here");
+});
+
 test("Auto order: sticky first, resting last, unknown dropped", async () => {
   const { autoOrder } = await import("./pureFeatures.ts");
   const available = ["default", "direct:openai:gpt-5", "direct:ollama:qwen3"];

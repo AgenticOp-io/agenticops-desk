@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
+import { quickEdit, type QuickEditRequest } from "./quickEdit";
 import {
   addMarketplace,
   installPlugin,
@@ -725,6 +726,7 @@ function startRun(model: string, run: AutoPayload) {
 initAuto(startRun);
 
 ipcMain.handle("claude:models", () => listModels());
+ipcMain.handle("edit:quick", (_e, req: QuickEditRequest) => quickEdit(req));
 
 // Claude Code plugins (marketplaces, install, enable), run through the bundled Claude Code.
 ipcMain.handle("plugins:list", (_e, refresh?: boolean) => listPlugins(Boolean(refresh)));

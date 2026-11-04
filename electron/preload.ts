@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld("desk", {
       Array<{ value: string; displayName: string; description?: string; group?: string }>
     >,
   signIn: () => ipcRenderer.invoke("claude:login") as Promise<boolean>,
+  quickEdit: (req: unknown) => ipcRenderer.invoke("edit:quick", req),
   listPlugins: (refresh?: boolean) => ipcRenderer.invoke("plugins:list", refresh),
   listMarketplaces: () => ipcRenderer.invoke("plugins:marketplaces"),
   addMarketplace: (source: string) => ipcRenderer.invoke("plugins:addMarketplace", source),

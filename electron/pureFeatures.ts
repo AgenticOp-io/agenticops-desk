@@ -118,6 +118,12 @@ export function describeMarkdown(text: string): string {
   return (body.split(/\r?\n/).find((l) => l.trim()) ?? "").replace(/^#+\s*/, "").trim().slice(0, 140);
 }
 
+// Quick edit asks for bare code, but models often wrap it in a ``` fence anyway; keep only what is inside.
+export function stripFence(text: string): string {
+  const m = /^\s*```[\w+-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```\s*$/.exec(text);
+  return m ? m[1] : text;
+}
+
 // Walks up from a file inside the SDK to its package.json. Separate so it can be tested without Electron.
 export function sdkVersionFrom(entry: string, read: (file: string) => string | null): string | null {
   let dir = path.dirname(entry);

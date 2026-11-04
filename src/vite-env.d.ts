@@ -144,6 +144,14 @@ declare global {
       probeClaude: () => Promise<{ found: boolean; path: string; bundled: boolean }>;
       onSetup: (cb: (text: string) => void) => () => void;
       signIn: () => Promise<boolean>;
+      quickEdit: (req: {
+        file: string;
+        language: string;
+        before: string;
+        selection: string;
+        after: string;
+        instruction: string;
+      }) => Promise<{ text: string; model: string }>;
       listPlugins: (refresh?: boolean) => Promise<{ installed: InstalledPlugin[]; available: AvailablePlugin[] }>;
       listMarketplaces: () => Promise<Marketplace[]>;
       addMarketplace: (source: string) => Promise<PluginResult>;

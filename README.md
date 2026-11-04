@@ -2,12 +2,16 @@
 
 **Desktop workspace for AI coding agents**: projects and chats in a sidebar, many agents running at once, permission prompts in the app, and memory that carries over between chats.
 
+**Private by design.** Your code is never indexed or stored on a server of ours; there is no server of ours. Chats, memory and settings stay in `%APPDATA%\AgenticOps Desk`, and nothing is written into your repos. **Privacy Mode** (on by default) replaces passwords, keys and tokens with placeholders before anything reaches an AI, and puts the real values back only on your computer when a tool runs. **Local only** keeps every chat on an Ollama model on your machine, for code that must not leave it.
+
 Each chat runs on one of two engines, picked in the composer's model menu:
 
 - **Claude Code** (default): the official Claude Code agent, through [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). A packaged app downloads the binary for that computer on first launch. Running from source uses the copy `npm install` already fetched. Uses your Claude sign-in and subscription. No separate CLI install is needed.
 - **Direct**: AgenticOps Desk's own agent loop calling a model API with your key: the Claude API, OpenAI, OpenRouter, Google Gemini, or local models through Ollama. Billed per token by that provider. It has file, search and PowerShell tools, and uses the same approvals, change review and memory.
 
 **Auto** in the same menu uses all of these, or the ones you pick in **Settings → Auto model**, in your order. When one hits a rate limit, runs out of quota, has its key rejected, is unreachable or declines, the message moves to the next one and the failed one rests for a few minutes.
+
+**Quick edit** (**Ctrl+I** in the editor): select code, type what to change, and a small fast model rewrites just that part in seconds, without a full agent run. Ctrl+Z undoes it.
 
 **Plugins** (**Settings → Plugins**, or `/plugins`) browses, installs, updates and turns off Claude Code plugins from any marketplace, with one-click installs for Ponytail and Agent Skills. Their commands and skills show up in the composer's `/` menu.
 
@@ -77,7 +81,7 @@ The builds are not code-signed. Windows SmartScreen asks once ("More info → Ru
 | `electron/cursor.ts` | Cursor chat import and catch-up briefings |
 | `src/App.tsx` | Sidebar, chat pane, composer, approval cards, code pane |
 
-Keys: **Ctrl+Enter** sends, **Ctrl+N** new chat, **Ctrl+K** focuses the composer, **Ctrl+P** opens a file.
+Keys: **Enter** sends (Shift+Enter for a new line), **Ctrl+I** quick edit, **Ctrl+N** new chat, **Ctrl+K** focuses the composer, **Ctrl+P** opens a file.
 
 Agents working in this repo: read [`AGENTS.md`](./AGENTS.md).
 

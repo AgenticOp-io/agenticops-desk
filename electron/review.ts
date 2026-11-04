@@ -38,33 +38,45 @@ export async function secondOpinion(opts: {
   cwd: string;
   signal?: AbortSignal;
 }): Promise<{ label: string; text: string } | null> {
-  const pick = parseDirectModel(opts.reviewer);
-  if (!pick || !opts.files.length) return null;
+  if (!opts.files.length) return null;
+  const user = `The user asked:\n${opts.request.slice(0, 6000)}\n\nThe change:\n${describe(opts.files, opts.cwd)}`;
+  const r = await askDirect(opts.reviewer, SYSTEM, user, opts.signal);
+  if (!r) return null;
+  if (r.refused) return { label: r.label, text: "The reviewer declined to review this change." };
+  return r.text ? { label: r.label, text: r.text } : null;
+}
+
+// One question to one Direct model ("direct:<provider>:<model>"), no tools. Null when that model is not set up.
+export async function askDirect(
+  model: string,
+  system: string,
+  user: string,
+  signal?: AbortSignal,
+): Promise<{ label: string; text: string; refused?: boolean } | null> {
+  const pick = parseDirectModel(model);
+  if (!pick) return null;
   const preset = PRESETS[pick.provider];
   if (preset.needsKey && !providerKey(pick.provider)) return null;
-  const user = `The user asked:\n${opts.request.slice(0, 6000)}\n\nThe change:\n${describe(opts.files, opts.cwd)}`;
   const label = `${preset.label} · ${pick.model}`;
   if (preset.kind === "anthropic") {
     const client = new Anthropic({ apiKey: providerKey("anthropic") });
     const msg = await client.beta.messages.create(
       {
         model: pick.model,
-        max_tokens: 4000,
-        system: SYSTEM,
+        max_tokens: 8000,
+        system,
         messages: [{ role: "user", content: user }],
         ...(FALLBACK_MODELS.has(pick.model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
       },
-      { signal: opts.signal },
+      { signal },
     );
-    if (msg.stop_reason === "refusal") return { label, text: "The reviewer declined to review this change." };
-    const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
-    return text ? { label, text } : null;
+    if (msg.stop_reason === "refusal") return { label, text: "", refused: true };
+    return { label, text: msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim() };
   }
   const client = new OpenAI({ apiKey: providerKey(pick.provider) || "local", baseURL: providerBaseUrl(pick.provider) });
   const res = await client.chat.completions.create(
-    { model: pick.model, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: user }] },
-    { signal: opts.signal },
+    { model: pick.model, messages: [{ role: "system", content: system }, { role: "user", content: user }] },
+    { signal },
   );
-  const text = res.choices[0]?.message?.content?.trim() ?? "";
-  return text ? { label, text } : null;
+  return { label, text: res.choices[0]?.message?.content?.trim() ?? "" };
 }

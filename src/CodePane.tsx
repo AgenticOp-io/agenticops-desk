@@ -1,6 +1,6 @@
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CodeSnippet } from "./codeBlocks";
 import { OriginLine } from "./Extras";
 import { languageForFence, languageForPath } from "./monaco";
@@ -63,8 +63,70 @@ export function CodePane({
     if (shownFile?.dirty) onSaveFile(shownFile.path);
   };
 
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const editableRef = useRef(false);
+  editableRef.current = Boolean(shownFile);
+  // Quick edit: the selection (or the cursor's line) is rewritten from a one-line instruction.
+  const [ask, setAsk] = useState<{ range: monaco.IRange } | null>(null);
+  const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+
   const onMount: OnMount = (editor) => {
+    editorRef.current = editor;
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
+    editor.addAction({
+      id: "desk.quickEdit",
+      label: "Edit with AI…",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
+      contextMenuGroupId: "1_modification",
+      run: (ed) => {
+        const sel = ed.getSelection();
+        const model = ed.getModel();
+        if (!editableRef.current || !sel || !model) return;
+        const range = sel.isEmpty()
+          ? new monaco.Range(sel.startLineNumber, 1, sel.startLineNumber, model.getLineMaxColumn(sel.startLineNumber))
+          : sel;
+        setNote("");
+        setAsk({ range });
+      },
+    });
+  };
+
+  const runQuickEdit = async () => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model || !ask || !shownFile || !instruction.trim()) return;
+    const r = ask.range;
+    const selection = model.getValueInRange(r);
+    const end = model.getFullModelRange().getEndPosition();
+    setBusy(true);
+    try {
+      const out = await window.desk.quickEdit({
+        file: shownFile.path,
+        language,
+        before: model.getValueInRange(new monaco.Range(1, 1, r.startLineNumber, r.startColumn)),
+        selection,
+        after: model.getValueInRange(new monaco.Range(r.endLineNumber, r.endColumn, end.lineNumber, end.column)),
+        instruction,
+      });
+      // The user may have switched files or typed meanwhile; never write over code that moved.
+      if (editor.getModel() !== model || model.getValueInRange(r) !== selection) {
+        setNote("The code changed while waiting, so nothing was applied. Try again.");
+        return;
+      }
+      editor.pushUndoStop();
+      editor.executeEdits("quick-edit", [{ range: r, text: out.text }]);
+      editor.pushUndoStop();
+      setAsk(null);
+      setInstruction("");
+      setNote(`Edited by ${out.model}. Ctrl+Z undoes it; Ctrl+S saves.`);
+      editor.focus();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   // The diff editor keeps its models on unmount (disposing them first throws), so release them here.
@@ -173,6 +235,38 @@ export function CodePane({
         </div>
       )}
       <div className="editor-body">
+        {!diff && shownFile && (ask || note) && (
+          <div className="quick-edit">
+            {ask && (
+              <input
+                autoFocus
+                disabled={busy}
+                value={instruction}
+                placeholder={busy ? "Editing…" : "Change the selected code: e.g. add error handling (Enter to apply, Esc to cancel)"}
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void runQuickEdit();
+                  }
+                  if (e.key === "Escape") {
+                    setAsk(null);
+                    editorRef.current?.focus();
+                  }
+                }}
+              />
+            )}
+            {busy && <span className="quick-edit-note">Editing…</span>}
+            {!busy && note && (
+              <span className="quick-edit-note">
+                {note}{" "}
+                <button type="button" className="more-link" onClick={() => setNote("")}>
+                  OK
+                </button>
+              </span>
+            )}
+          </div>
+        )}
         {diff ? (
           <DiffEditor
             theme="vs-dark"
