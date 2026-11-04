@@ -146,6 +146,92 @@ export function parseSymbolHits(out: string, query: string, limit = 12) {
   return hits.sort((a, b) => Number(b.name.toLowerCase() === q) - Number(a.name.toLowerCase() === q) || a.name.length - b.name.length).slice(0, limit);
 }
 
+// host/owner/repo, lowercased, so the same remote matches on every computer.
+export function remoteKey(url: string): string | null {
+  const trimmed = url.trim().replace(/\.git$/i, "").replace(/\/+$/, "");
+  const https = /^(?:https?|ssh):\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/i.exec(trimmed);
+  const scp = /^git@([^:]+):([^/]+)\/([^/]+)$/i.exec(trimmed);
+  const hit = https
+    ? { host: https[1], owner: https[2], repo: https[3] }
+    : scp
+      ? { host: scp[1], owner: scp[2], repo: scp[3] }
+      : null;
+  if (!hit) return null;
+  const host = hit.host.toLowerCase();
+  const owner = hit.owner.replace(/[^\w.-]/g, "").toLowerCase();
+  const repo = hit.repo.replace(/[^\w.-]/g, "").toLowerCase();
+  if (!host || !owner || !repo) return null;
+  return `${host}/${owner}/${repo}`;
+}
+
+// Sync travels over https or ssh. A local path or cleartext http URL is rejected.
+export function allowedGitRemote(url: string): boolean {
+  const s = url.trim();
+  if (!remoteKey(s) || /[\s"'`]/.test(s) || s.startsWith("-")) return false;
+  return /^https:\/\//i.test(s) || /^git@/i.test(s) || /^ssh:\/\//i.test(s);
+}
+
+export type SyncProject = { remote: string; name: string; branch?: string };
+
+export type SyncChat = {
+  id: string;
+  title: string;
+  updatedAt: number;
+  lastUsedAt?: number;
+  projectRemote: string | null;
+  projectName: string;
+  slug?: string;
+  pinned?: boolean;
+  mode?: string;
+  model?: string;
+  parentId?: string;
+  size?: number;
+};
+
+// Layout and folder paths differ per computer. Everything else in settings can travel.
+const SYNC_PREFS = ["windowFont", "itemFont", "hiddenChats", "showCode", "theme", "reviewer", "autoModels", "autocomplete", "privacy"] as const;
+
+export function portablePrefs(prefs: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of SYNC_PREFS) if (key in prefs) out[key] = prefs[key];
+  return out;
+}
+
+export function mergeProjects(a: SyncProject[], b: SyncProject[]): SyncProject[] {
+  const map = new Map<string, SyncProject>();
+  for (const project of [...a, ...b]) {
+    const key = remoteKey(project.remote);
+    if (!key || !project.remote) continue;
+    const prev = map.get(key);
+    map.set(key, prev ? { remote: project.remote || prev.remote, name: project.name || prev.name, branch: project.branch || prev.branch } : project);
+  }
+  return [...map.values()];
+}
+
+export function mergeDeleted(a: string[], b: string[]): string[] {
+  return [...new Set([...a, ...b].filter((id) => typeof id === "string" && id.length > 0))];
+}
+
+// Newer updatedAt wins. A deleted id stays deleted on every computer.
+export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: string[]): SyncChat[] {
+  const gone = new Set(deleted);
+  const map = new Map<string, SyncChat>();
+  for (const chat of [...local, ...incoming]) {
+    if (!chat?.id || gone.has(chat.id)) continue;
+    const prev = map.get(chat.id);
+    if (!prev || (chat.updatedAt ?? 0) >= (prev.updatedAt ?? 0)) {
+      map.set(chat.id, {
+        ...prev,
+        ...chat,
+        title: chat.title || prev?.title || "",
+        projectRemote: chat.projectRemote || prev?.projectRemote || null,
+        projectName: chat.projectName || prev?.projectName || "",
+      });
+    }
+  }
+  return [...map.values()];
+}
+
 // Walks up from a file inside the SDK to its package.json. Separate so it can be tested without Electron.
 export function sdkVersionFrom(entry: string, read: (file: string) => string | null): string | null {
   let dir = path.dirname(entry);

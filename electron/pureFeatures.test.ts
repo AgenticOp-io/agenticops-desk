@@ -138,6 +138,36 @@ test("plugin CLI output and command descriptions", async () => {
   assert.equal(describeMarkdown("Plain first line"), "Plain first line");
 });
 
+test("a git remote has one key on every computer", async () => {
+  const { allowedGitRemote, mergeChats, mergeDeleted, mergeProjects, portablePrefs, remoteKey } = await import("./pureFeatures.ts");
+  assert.equal(remoteKey("https://github.com/AgenticOp-io/agenticops-desk.git"), "github.com/agenticop-io/agenticops-desk");
+  assert.equal(remoteKey("git@github.com:AgenticOp-io/agenticops-desk.git"), "github.com/agenticop-io/agenticops-desk");
+  assert.equal(remoteKey("C:\\repos\\local"), null);
+  assert.equal(allowedGitRemote("https://github.com/AgenticOp-io/desk-sync.git"), true);
+  assert.equal(allowedGitRemote("http://github.com/AgenticOp-io/desk-sync.git"), false);
+  assert.equal(allowedGitRemote("git@github.com:AgenticOp-io/desk-sync.git"), true);
+  const prefs = portablePrefs({ theme: "light", lastWorkspace: "C:\\secret", openFiles: ["a"], windowFont: 18 });
+  assert.equal(prefs.theme, "light");
+  assert.equal(prefs.windowFont, 18);
+  assert.equal("lastWorkspace" in prefs, false);
+  assert.equal("openFiles" in prefs, false);
+  const older = { id: "a", title: "Old", updatedAt: 1, projectRemote: "https://github.com/o/r.git", projectName: "R" };
+  const newer = { id: "a", title: "New", updatedAt: 2, projectRemote: null, projectName: "" };
+  const merged = mergeChats([older], [newer], []);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].title, "New");
+  assert.equal(merged[0].projectRemote, "https://github.com/o/r.git");
+  assert.deepEqual(mergeChats([older], [newer], ["a"]), []);
+  assert.deepEqual(mergeDeleted(["a"], ["a", "b"]), ["a", "b"]);
+  const projects = mergeProjects(
+    [{ remote: "https://github.com/O/R.git", name: "R" }],
+    [{ remote: "git@github.com:o/r.git", name: "R2", branch: "dev" }],
+  );
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0].name, "R2");
+  assert.equal(projects[0].branch, "dev");
+});
+
 test("SDK version is found by walking up from its entry file", async () => {
   const { sdkVersionFrom } = await import("./pureFeatures.ts");
   const path = await import("node:path");

@@ -1,0 +1,101 @@
+import { useEffect, useState } from "react";
+
+type SyncView = {
+  url: string;
+  ok: boolean;
+  note: string;
+  projects: Array<{ remote: string; name: string; local: string | null }>;
+};
+
+export function SyncSettings({ onChanged }: { onChanged: () => void }) {
+  const [url, setUrl] = useState("");
+  const [view, setView] = useState<SyncView | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void window.desk.syncStatus().then((status) => {
+      setView(status);
+      setUrl(status.url);
+    });
+  }, []);
+
+  const apply = (status: SyncView) => {
+    setView(status);
+    setUrl(status.url);
+    if (status.ok) onChanged();
+  };
+
+  return (
+    <>
+      <div className="settings-label">Sync</div>
+      <p className="settings-hint">
+        A private git repository shared by your computers. Chats, memory and settings are pushed there. API keys stay on this
+        computer. Create an empty private repository and paste its address. Each project is remembered by its own git remote;
+        clone it here when you want the files.
+      </p>
+      <div className="provider-line">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://github.com/you/desk-sync.git"
+          spellCheck={false}
+        />
+      </div>
+      <div className="signin-row">
+        <button
+          className="btn"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void window.desk.setSyncUrl(url).then((status) => {
+              apply(status);
+              setBusy(false);
+            });
+          }}
+        >
+          Save and sync
+        </button>
+        <button
+          className="btn"
+          disabled={busy || !view?.url}
+          onClick={() => {
+            setBusy(true);
+            void window.desk.syncNow().then((status) => {
+              apply(status);
+              setBusy(false);
+            });
+          }}
+        >
+          Sync now
+        </button>
+      </div>
+      {view?.note && <p className="settings-hint">{view.note}</p>}
+      {view?.projects.map((project) => (
+        <div className="dock-row" key={project.remote}>
+          <span>
+            {project.name} {project.local ? "· on this computer" : "· not cloned here"}
+          </span>
+          {!project.local && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setBusy(true);
+                void window.desk.cloneSyncedProject(project.remote).then((result) => {
+                  setBusy(false);
+                  setView((cur) => (cur ? { ...cur, ok: result.ok, note: result.output } : cur));
+                  if (result.ok) {
+                    onChanged();
+                    void window.desk.syncStatus().then(setView);
+                  }
+                });
+              }}
+            >
+              Clone
+            </button>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}

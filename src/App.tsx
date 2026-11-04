@@ -14,6 +14,7 @@ import { Help } from "./Help";
 import { Briefing, Inbox, WatchChips } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
+import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
@@ -1901,6 +1902,15 @@ export function App() {
               </button>
             </div>
             <PrivacySettings mode={prefs.privacy} onMode={(privacy) => patchPrefs({ privacy })} />
+            <SyncSettings
+              onChanged={() => {
+                void window.desk.listCursorProjects().then(setProjects);
+                void window.desk.getWorkspace().then((ws) => {
+                  setWorkspace(ws);
+                  if (ws) void refreshTree(ws);
+                });
+              }}
+            />
             <label className="settings-row">
               <span>Theme</span>
               <select

@@ -29,6 +29,7 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 - **Permissions:** the first action in a folder asks once. After that, edits, tests, git and network commands run without a prompt. Disk format, administrator commands and shutdown still ask. Questions and plans always ask.
 - **Memory:** a global index under `%APPDATA%\AgenticOps Desk\memory` and the project's Claude Code memory folder go into every run.
 - **Imports:** chats and projects from the editor you used before show up in the sidebar and can be handed to the agent with **Catch up**.
+- **Sync:** Settings can point at an empty private git repository. Chats, memory and settings push there and come down on your other computers. API keys stay on each machine. Projects are remembered by their own git remote, and you clone one when you want it on this computer. The Git panel fetches, pulls, pushes, checks out a branch, and shows recent history.
 
 ## Requirements
 

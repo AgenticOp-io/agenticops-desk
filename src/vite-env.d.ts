@@ -220,7 +220,31 @@ declare global {
       searchMessages: (query: string) => Promise<string[]>;
       gitStatus: (cwd: string) => Promise<{ ok: boolean; branch: string; lines: string; diff: string }>;
       gitCommit: (cwd: string, message: string) => Promise<{ ok: boolean; output: string }>;
+      gitFetch: (cwd: string) => Promise<{ ok: boolean; output: string }>;
+      gitPull: (cwd: string) => Promise<{ ok: boolean; output: string }>;
+      gitPush: (cwd: string) => Promise<{ ok: boolean; output: string }>;
+      gitHistory: (cwd: string) => Promise<{ ok: boolean; output: string }>;
+      gitCheckout: (cwd: string, branch: string) => Promise<{ ok: boolean; output: string }>;
       gitPullRequest: (cwd: string, title: string, body: string) => Promise<{ ok: boolean; output: string }>;
+      syncStatus: () => Promise<{
+        url: string;
+        ok: boolean;
+        note: string;
+        projects: Array<{ remote: string; name: string; local: string | null }>;
+      }>;
+      setSyncUrl: (url: string) => Promise<{
+        url: string;
+        ok: boolean;
+        note: string;
+        projects: Array<{ remote: string; name: string; local: string | null }>;
+      }>;
+      syncNow: () => Promise<{
+        url: string;
+        ok: boolean;
+        note: string;
+        projects: Array<{ remote: string; name: string; local: string | null }>;
+      }>;
+      cloneSyncedProject: (remote: string) => Promise<{ ok: boolean; output: string; path?: string }>;
       readProjectDoc: (cwd: string, name: string) => Promise<string>;
       writeProjectDoc: (cwd: string, name: string, contents: string) => Promise<boolean>;
       openShell: (cwd: string) => Promise<{ id: string; backlog: string }>;

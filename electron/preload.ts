@@ -170,8 +170,37 @@ contextBridge.exposeInMainWorld("desk", {
   gitStatus: (cwd: string) =>
     ipcRenderer.invoke("git:status", cwd) as Promise<{ ok: boolean; branch: string; lines: string; diff: string }>,
   gitCommit: (cwd: string, message: string) => ipcRenderer.invoke("git:commit", cwd, message) as Promise<{ ok: boolean; output: string }>,
+  gitFetch: (cwd: string) => ipcRenderer.invoke("git:fetch", cwd) as Promise<{ ok: boolean; output: string }>,
+  gitPull: (cwd: string) => ipcRenderer.invoke("git:pull", cwd) as Promise<{ ok: boolean; output: string }>,
+  gitPush: (cwd: string) => ipcRenderer.invoke("git:push", cwd) as Promise<{ ok: boolean; output: string }>,
+  gitHistory: (cwd: string) => ipcRenderer.invoke("git:history", cwd) as Promise<{ ok: boolean; output: string }>,
+  gitCheckout: (cwd: string, branch: string) =>
+    ipcRenderer.invoke("git:checkout", cwd, branch) as Promise<{ ok: boolean; output: string }>,
   gitPullRequest: (cwd: string, title: string, body: string) =>
     ipcRenderer.invoke("git:pr", cwd, title, body) as Promise<{ ok: boolean; output: string }>,
+  syncStatus: () =>
+    ipcRenderer.invoke("sync:status") as Promise<{
+      url: string;
+      ok: boolean;
+      note: string;
+      projects: Array<{ remote: string; name: string; local: string | null }>;
+    }>,
+  setSyncUrl: (url: string) =>
+    ipcRenderer.invoke("sync:set", url) as Promise<{
+      url: string;
+      ok: boolean;
+      note: string;
+      projects: Array<{ remote: string; name: string; local: string | null }>;
+    }>,
+  syncNow: () =>
+    ipcRenderer.invoke("sync:now") as Promise<{
+      url: string;
+      ok: boolean;
+      note: string;
+      projects: Array<{ remote: string; name: string; local: string | null }>;
+    }>,
+  cloneSyncedProject: (remote: string) =>
+    ipcRenderer.invoke("sync:clone", remote) as Promise<{ ok: boolean; output: string; path?: string }>,
   readProjectDoc: (cwd: string, name: string) => ipcRenderer.invoke("project:read", cwd, name) as Promise<string>,
   writeProjectDoc: (cwd: string, name: string, contents: string) =>
     ipcRenderer.invoke("project:write", cwd, name, contents) as Promise<boolean>,

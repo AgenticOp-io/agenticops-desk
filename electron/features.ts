@@ -8,13 +8,29 @@ import { realStorePwsh } from "./claude";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
-function run(cmd: string, args: string[], cwd: string): Promise<{ ok: boolean; output: string }> {
+function run(cmd: string, args: string[], cwd: string, timeout = 60_000): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, windowsHide: true, timeout: 60_000, maxBuffer: 2_000_000 }, (err, stdout, stderr) => {
-      const output = `${stdout ?? ""}${stderr ?? ""}`.trim();
-      resolve({ ok: !err, output: output || (err ? String(err.message) : "") });
-    });
+    execFile(
+      cmd,
+      args,
+      { cwd, windowsHide: true, timeout, maxBuffer: 2_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      (err, stdout, stderr) => {
+        const output = `${stdout ?? ""}${stderr ?? ""}`.trim();
+        resolve({ ok: !err, output: output || (err ? String(err.message) : "") });
+      },
+    );
   });
+}
+
+// Git never waits for a password prompt; a missing login comes back as an error instead of a hung window.
+export function runGit(cwd: string, args: string[], timeout = 60_000) {
+  return run("git", args, cwd, timeout);
+}
+
+function branchName(branch: string) {
+  const name = branch.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$/.test(name) || name.includes("..") || name.endsWith("/")) return "";
+  return name;
 }
 
 export function gitStatus(cwd: string) {
@@ -36,6 +52,32 @@ export async function gitCommit(cwd: string, message: string) {
   const added = await run("git", ["add", "-A"], cwd);
   if (!added.ok) return added;
   return run("git", ["commit", "-m", text], cwd);
+}
+
+export function gitFetch(cwd: string) {
+  return runGit(cwd, ["fetch", "--prune"], 120_000);
+}
+
+export function gitPull(cwd: string) {
+  return runGit(cwd, ["pull", "--ff-only"], 120_000);
+}
+
+export function gitPush(cwd: string) {
+  return runGit(cwd, ["push"], 120_000);
+}
+
+export async function gitHistory(cwd: string) {
+  const [branches, log] = await Promise.all([
+    runGit(cwd, ["branch", "-vv"]),
+    runGit(cwd, ["log", "-15", "--oneline", "--decorate"]),
+  ]);
+  return { ok: branches.ok || log.ok, output: [branches.output, log.output].filter(Boolean).join("\n\n") };
+}
+
+export function gitCheckout(cwd: string, branch: string) {
+  const name = branchName(branch);
+  if (!name) return Promise.resolve({ ok: false, output: "Branch name is not valid." });
+  return runGit(cwd, ["checkout", name]);
 }
 
 export function gitPullRequest(cwd: string, title: string, body: string) {

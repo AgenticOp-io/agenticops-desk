@@ -57,8 +57,7 @@ import {
   deleteChat,
   deletedChatIds,
   loadThread,
-  flushLibrary,
-  libraryPending,
+  onLibraryFlush,
   patchChat,
   searchMessages,
   rememberChats,
@@ -70,12 +69,18 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
+import { cloneSyncedProject, scheduleDeskSync, setSyncUrl, syncApplying, syncNow, syncStatus } from "./deskSync";
 import {
   checkForUpdate,
   closeAllShells,
   closeShell,
+  gitCheckout,
   gitCommit,
+  gitFetch,
+  gitHistory,
+  gitPull,
   gitPullRequest,
+  gitPush,
   gitStatus,
   openShell,
   readProjectDoc,
@@ -348,8 +353,13 @@ app.whenReady().then(async () => {
     }
   }
   watchWorkspace();
+  onLibraryFlush(() => {
+    if (!syncApplying()) scheduleDeskSync();
+  });
   onNotificationClick(() => showWindow());
   createWindow();
+  setTimeout(() => void syncNow(), 5000);
+  setInterval(() => void syncNow(), 3 * 60_000);
   for (const run of pendingRuns()) resumePendingRun(win, run.chatId, run.workspace || workspace);
   // Watch and react: new errors in a watched log go to that chat, unless it is busy or waiting on the user.
   initWatches((w, lines) => {
@@ -389,7 +399,10 @@ app.on("before-quit", (e) => {
   if (flushingQuit) return;
   flushingQuit = true;
   e.preventDefault();
-  void Promise.allSettled([libraryPending() ? flushLibrary() : null, saveVault()]).finally(() => app.quit());
+  void Promise.allSettled([
+    saveVault(),
+    Promise.race([syncNow(), new Promise((resolve) => setTimeout(resolve, 20_000))]),
+  ]).finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
@@ -410,6 +423,7 @@ ipcMain.handle("settings:get", () => loadSettings());
 ipcMain.handle("settings:set", async (_e, prefs: Partial<UiPrefs>) => {
   const next = await patchSettings(prefs);
   setPrivacyMode(next.privacy);
+  scheduleDeskSync();
   return next;
 });
 ipcMain.handle("privacy:status", () => privacyStatus());
@@ -526,7 +540,9 @@ ipcMain.handle("cursor:chat", async (_e, slug: string, id: string) => {
 });
 ipcMain.handle("cursor:touch", (_e, chatId: string, projectPath?: string | null) => touchChat(chatId, projectPath));
 ipcMain.handle("cursor:upsert", (_e, chat: Parameters<typeof upsertChat>[0]) => upsertChat(chat));
-ipcMain.handle("thread:save", (_e, chatId: string, messages: unknown[]) => saveThread(chatId, messages));
+ipcMain.handle("thread:save", (_e, chatId: string, messages: unknown[]) =>
+  saveThread(chatId, messages).then(() => scheduleDeskSync()),
+);
 ipcMain.handle("thread:load", (_e, chatId: string) => loadThread(chatId));
 ipcMain.handle(
   "cursor:catchup",
@@ -861,7 +877,28 @@ ipcMain.handle("chats:delete", async (_e, id: string) => {
 ipcMain.handle("chats:search", (_e, query: string) => searchMessages(query));
 ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
 ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(cwd, message));
+ipcMain.handle("git:fetch", (_e, cwd: string) => gitFetch(cwd));
+ipcMain.handle("git:pull", (_e, cwd: string) => gitPull(cwd));
+ipcMain.handle("git:push", (_e, cwd: string) => gitPush(cwd));
+ipcMain.handle("git:history", (_e, cwd: string) => gitHistory(cwd));
+ipcMain.handle("git:checkout", (_e, cwd: string, branch: string) => gitCheckout(cwd, branch));
 ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(cwd, title, body));
+ipcMain.handle("sync:status", () => syncStatus());
+ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
+ipcMain.handle("sync:now", () => syncNow());
+ipcMain.handle("sync:clone", async (_e, remote: string) => {
+  const result = await dialog.showOpenDialog(win!, {
+    title: "Folder to clone into",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) return { ok: false, output: "Clone cancelled.", path: "" };
+  const cloned = await cloneSyncedProject(String(remote ?? ""), result.filePaths[0]);
+  if (cloned.ok && cloned.path) {
+    await addProject(cloned.path);
+    setWorkspace(cloned.path);
+  }
+  return cloned;
+});
 ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc(cwd, name));
 ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(cwd, name, contents));
 ipcMain.handle("shell:open", (e, cwd: string) =>

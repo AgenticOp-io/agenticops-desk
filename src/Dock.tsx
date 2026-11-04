@@ -92,6 +92,8 @@ function Terminal({ workspace }: { workspace: string }) {
 
 function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text: string) => void }) {
   const [info, setInfo] = useState<{ branch: string; lines: string; diff: string } | null>(null);
+  const [history, setHistory] = useState("");
+  const [branch, setBranch] = useState("");
   const [message, setMessage] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -100,10 +102,19 @@ function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text:
   const refresh = () => {
     if (!workspace) return;
     void window.desk.gitStatus(workspace).then((s) => setInfo(s));
+    void window.desk.gitHistory(workspace).then((s) => setHistory(s.output));
   };
   useEffect(() => {
     refresh();
   }, [workspace]);
+
+  const run = (label: string, work: Promise<{ ok: boolean; output: string }>) => {
+    void work.then((result) => {
+      setOut(result.output);
+      onStatus(result.ok ? label : `${label} did not finish`);
+      refresh();
+    });
+  };
 
   return (
     <div className="dock-body git-panel">
@@ -113,7 +124,25 @@ function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text:
           Refresh
         </button>
       </div>
+      <div className="dock-row">
+        <button type="button" className="btn" onClick={() => run("Fetched", window.desk.gitFetch(workspace))}>
+          Fetch
+        </button>
+        <button type="button" className="btn" onClick={() => run("Pulled", window.desk.gitPull(workspace))}>
+          Pull
+        </button>
+        <button type="button" className="btn" onClick={() => run("Pushed", window.desk.gitPush(workspace))}>
+          Push
+        </button>
+      </div>
       <pre className="term-out small">{info ? `${info.lines}\n\n${info.diff}` : "Reading git status…"}</pre>
+      {history && <pre className="term-out small">{history}</pre>}
+      <div className="dock-row">
+        <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Branch name" spellCheck={false} />
+        <button type="button" className="btn" disabled={!branch.trim()} onClick={() => run("Checked out", window.desk.gitCheckout(workspace, branch))}>
+          Checkout
+        </button>
+      </div>
       <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Commit message" />
       <div className="dock-row">
         <button
@@ -124,7 +153,6 @@ function GitPanel({ workspace, onStatus }: { workspace: string; onStatus: (text:
             void window.desk.gitCommit(workspace, message).then((r) => {
               setOut(r.output);
               onStatus(r.ok ? "Committed" : "Commit did not finish");
-              // Keep the message when the commit failed, so it can be fixed and retried.
               if (r.ok) setMessage("");
               refresh();
             })

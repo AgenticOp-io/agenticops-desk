@@ -62,6 +62,13 @@ export function libraryPending() {
   return dirty || flushing !== null || flushTimer !== null;
 }
 
+let flushed: () => void = () => {};
+
+// Desk sync listens here. The library does not import sync, so the two cannot call each other in a circle.
+export function onLibraryFlush(fn: () => void) {
+  flushed = fn;
+}
+
 export function flushLibrary(): Promise<void> {
   if (flushTimer) {
     clearTimeout(flushTimer);
@@ -78,8 +85,75 @@ export function flushLibrary(): Promise<void> {
     })
     .finally(() => {
       flushing = null;
+      flushed();
     });
   return flushing;
+}
+
+export type LibrarySlice = {
+  chats: CursorChat[];
+  deleted: string[];
+  projects: Array<{ path: string; name: string }>;
+};
+
+export function exportLibrarySlice(): Promise<LibrarySlice> {
+  return withLibrary((lib) => ({
+    chats: lib.chats.map((chat) => ({ ...chat })),
+    deleted: [...lib.deleted],
+    projects: lib.added.map((row) => ({ path: row.path, name: row.name || path.basename(row.path) })),
+  }));
+}
+
+// Writes merged chats and checkouts back. Unchanged data does not schedule another sync.
+export function importSyncedLibrary(chats: CursorChat[], deleted: string[], projectPaths: string[]) {
+  return withLibrary(async (lib) => {
+    let changed = false;
+    for (const id of deleted) {
+      if (!id || lib.deleted.includes(id)) continue;
+      lib.deleted.push(id);
+      changed = true;
+    }
+    const gone = new Set(lib.deleted);
+    const before = lib.chats.length;
+    lib.chats = lib.chats.filter((chat) => !gone.has(chat.id));
+    if (lib.chats.length !== before) changed = true;
+    for (const chat of chats) {
+      if (!chat.id || gone.has(chat.id)) continue;
+      const index = lib.chats.findIndex((row) => row.id === chat.id);
+      if (index < 0) {
+        lib.chats.push(chat);
+        changed = true;
+        continue;
+      }
+      const prev = lib.chats[index];
+      if ((chat.updatedAt ?? 0) < (prev.updatedAt ?? 0)) continue;
+      const title = prev.titleLocked ? prev.title : chat.title;
+      const next = {
+        ...prev,
+        ...chat,
+        title,
+        titleLocked: prev.titleLocked,
+        projectPath: chat.projectPath || prev.projectPath,
+      };
+      if (JSON.stringify(next) !== JSON.stringify(prev)) {
+        lib.chats[index] = next;
+        changed = true;
+      }
+    }
+    for (const dir of projectPaths) {
+      if (!dir || !existsSync(dir)) continue;
+      const key = keyOf(dir);
+      if (lib.removed.includes(key)) {
+        lib.removed = lib.removed.filter((item) => item !== key);
+        changed = true;
+      }
+      if (!lib.added.some((row) => keyOf(row.path) === key)) {
+        lib.added.push({ path: path.normalize(dir), name: path.basename(dir), slug: slugFromPath(dir), addedAt: Date.now() });
+        changed = true;
+      }
+    }
+    if (changed) remember(lib);
+  });
 }
 
 // Every library read-modify-write goes through here so concurrent IPC calls can't drop each other's changes.
