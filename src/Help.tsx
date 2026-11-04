@@ -27,7 +27,7 @@ const SECTIONS: Section[] = [
     title: "Sending a message",
     body: [
       "Type in the box and press Enter or Send. Shift+Enter starts a new line. While a chat is already working, Send guides that run instead of starting over.",
-      "Type @ to attach a file from the open folder. You can also paste or drop images (up to 10, each under 5 MB).",
+      "Type @ to attach a file from the open folder, or a function, class or type by name (@handleLogin points the agent at its file and line; this needs a git repository). You can also paste or drop images (up to 10, each under 5 MB).",
       "Agent is the usual mode: the agent edits files and runs commands. Plan reads and writes a plan, and waits for you before changing anything. Auto-edit applies file edits without an extra prompt. The permission rules below still apply.",
       "The model menu's first entry is the default engine, which uses the account you signed in with under Settings. Models under Direct call that provider with the key you saved in Settings and are billed per token. Auto moves between them on its own (see The Auto model).",
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
@@ -96,6 +96,7 @@ const SECTIONS: Section[] = [
       "Right-click a file to make a new file or folder, rename, delete, copy the path, reveal it in the system folder, or add it to the chat.",
       "Code blocks in a reply can be opened in the editor as a read-only snippet.",
       "Quick edit: select some code (or just put the cursor on a line), press Ctrl+I or right-click › Edit with AI, type what to change, and press Enter. A small fast model rewrites only that part in a few seconds, without a full agent run. Ctrl+Z undoes it, and nothing is saved until you press Ctrl+S. With Local only, it uses your Ollama model.",
+      "Autocomplete: pick a fast model under Settings › Editor autocomplete (a Claude API key with Haiku, or a local Ollama model). After a short pause in typing, grey text suggests the next lines; Tab accepts, and typing on ignores it. Each pause is one call to that model, so it is off until you choose one.",
     ],
   },
   {
@@ -115,6 +116,8 @@ const SECTIONS: Section[] = [
     body: [
       "Terminal, Git, Preview, and Instructions sit under the message box. Git shows the branch and changes, commits tracked files, and can open a pull request with GitHub’s gh command. Preview loads a web address. Instructions edits CLAUDE.md, AGENTS.md, and the project’s .mcp.json for connected tools.",
       "When the agent writes a plan or a task list, they show above the messages.",
+      "Rules holds standing orders for the folder: rules added to every run, protected paths the agent may not edit, and checks that must pass. A team can commit .agenticops/orders.json in the repo with the same rules and protected paths, so everyone gets them; checks in that file are ignored, so a cloned repo can never run commands on its own.",
+      "Second opinion (Settings): after a run changes files, a model from another provider checks the change against what you asked. If it raises concerns, they go back to the agent to fix, up to two rounds, and both sides show in the chat.",
       "If you close the window while a chat is still working, AgenticOps Desk hides to the tray and keeps going. Quit from the tray icon stops it. A notice appears when a chat finishes in the background or needs you and the window is not in front.",
       "Settings can switch to a light theme and check GitHub for a newer release. Installers are not code-signed; signing needs a certificate.",
     ],

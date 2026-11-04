@@ -27,6 +27,7 @@ export function CodePane({
   onSaveFile,
   onHide,
   onOpenChat,
+  autocomplete = "",
 }: {
   files: FileTab[];
   activePath: string | null;
@@ -44,6 +45,8 @@ export function CodePane({
   onSaveFile: (path: string) => void;
   onHide: () => void;
   onOpenChat?: (chatId: string) => void;
+  // Direct model for ghost-text autocomplete; empty turns it off.
+  autocomplete?: string;
 }) {
   const file = files.find((t) => t.path === activePath) ?? files[0] ?? null;
   const snippet = snippetId ? snippets.find((s) => s.id === snippetId) ?? null : null;
@@ -66,6 +69,8 @@ export function CodePane({
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const editableRef = useRef(false);
   editableRef.current = Boolean(shownFile);
+  const fileRef = useRef<string | null>(null);
+  fileRef.current = shownFile?.path ?? null;
   // Quick edit: the selection (or the cursor's line) is rewritten from a one-line instruction.
   const [ask, setAsk] = useState<{ range: monaco.IRange } | null>(null);
   const [instruction, setInstruction] = useState("");
@@ -128,6 +133,33 @@ export function CodePane({
       setBusy(false);
     }
   };
+
+  // Ghost-text autocomplete: after a short pause in typing, the chosen fast model suggests the next lines; Tab accepts.
+  useEffect(() => {
+    if (!autocomplete) return;
+    const sub = monaco.languages.registerInlineCompletionsProvider({ pattern: "**" }, {
+      provideInlineCompletions: async (model, position, _ctx, token) => {
+        // Only the editable file on screen, never read-only reply snippets or the diff view.
+        const file = editableRef.current ? fileRef.current : null;
+        if (!file || model !== editorRef.current?.getModel()) return { items: [] };
+        // Wait for a pause, so a burst of typing costs one request, not one per key.
+        await new Promise((r) => setTimeout(r, 600));
+        if (token.isCancellationRequested) return { items: [] };
+        const end = model.getFullModelRange().getEndPosition();
+        const text = await window.desk.completeAt({
+          model: autocomplete,
+          file,
+          language: model.getLanguageId(),
+          before: model.getValueInRange(new monaco.Range(1, 1, position.lineNumber, position.column)),
+          after: model.getValueInRange(new monaco.Range(position.lineNumber, position.column, end.lineNumber, end.column)),
+        });
+        if (token.isCancellationRequested || !text.trim()) return { items: [] };
+        return { items: [{ insertText: text, range: monaco.Range.fromPositions(position) }] };
+      },
+      disposeInlineCompletions: () => {},
+    });
+    return () => sub.dispose();
+  }, [autocomplete]);
 
   // The diff editor keeps its models on unmount (disposing them first throws), so release them here.
   const diffKey = diff ? `${diff.path}\n${diff.before.length}\n${diff.after.length}` : "";

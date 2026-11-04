@@ -124,6 +124,28 @@ export function stripFence(text: string): string {
   return m ? m[1] : text;
 }
 
+// Declarations "@name" can point at: functions, classes, types and top-level values in common languages.
+export const SYMBOL_KINDS = "function|class|interface|type|enum|def|fn|func|struct|trait|const|let|var";
+
+// Turns `git grep -n` lines ("path:line:text") into symbols whose name starts with the query, best first.
+export function parseSymbolHits(out: string, query: string, limit = 12) {
+  const q = query.toLowerCase();
+  const re = new RegExp(`(?:^|[^\\w$])(${SYMBOL_KINDS})\\s+\\*?([A-Za-z_$][\\w$]*)`);
+  const seen = new Set<string>();
+  const hits: Array<{ file: string; line: number; name: string; kind: string }> = [];
+  for (const row of out.split(/\r?\n/)) {
+    const m = /^(.+?):(\d+):(.*)$/.exec(row);
+    const d = m && re.exec(m[3]);
+    if (!m || !d || !d[2].toLowerCase().startsWith(q)) continue;
+    const key = `${m[1]}:${d[2]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    hits.push({ file: m[1], line: Number(m[2]), name: d[2], kind: d[1] });
+  }
+  // Exact names first, then shorter names.
+  return hits.sort((a, b) => Number(b.name.toLowerCase() === q) - Number(a.name.toLowerCase() === q) || a.name.length - b.name.length).slice(0, limit);
+}
+
 // Walks up from a file inside the SDK to its package.json. Separate so it can be tested without Electron.
 export function sdkVersionFrom(entry: string, read: (file: string) => string | null): string | null {
   let dir = path.dirname(entry);

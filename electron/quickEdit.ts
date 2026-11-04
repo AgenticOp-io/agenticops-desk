@@ -53,6 +53,23 @@ async function askClaudeCode(system: string, user: string): Promise<string> {
   throw new Error("The quick edit returned nothing.");
 }
 
+const COMPLETE_SYSTEM =
+  "You are an inline code completion engine. The user's cursor is at <CURSOR>. Reply with only the text to insert " +
+  "there: no explanation, no Markdown fence, nothing repeated from before or after the cursor. Finish the current line " +
+  "or the obvious next few lines (at most 8). If nothing useful fits, reply with nothing.";
+
+// Ghost-text autocomplete. Only Direct models: starting Claude Code per pause in typing would be far too slow.
+export async function completeAt(req: { model: string; file: string; language: string; before: string; after: string }): Promise<string> {
+  const d = parseDirectModel(req.model);
+  if (!d) return "";
+  if (privacyMode() === "local" && !isLocalProvider(d.provider)) return "";
+  const clean = (s: string) => scrubOutgoing(s).text;
+  const user = `File: ${req.file} (${req.language})\n\n${clean(req.before.slice(-3000))}<CURSOR>${clean(req.after.slice(0, 1500))}`;
+  const r = await askDirect(req.model, COMPLETE_SYSTEM, user);
+  if (!r || r.refused) return "";
+  return restoreIncoming(stripFence(r.text));
+}
+
 export async function quickEdit(req: QuickEditRequest): Promise<{ text: string; model: string }> {
   const instruction = req.instruction.trim();
   if (!instruction) throw new Error("Type what to change.");

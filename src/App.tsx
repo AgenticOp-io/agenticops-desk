@@ -1574,6 +1574,7 @@ export function App() {
               onSaveFile={(p) => void saveTab(p)}
               onHide={() => patchPrefs({ showCode: false })}
               onOpenChat={openChatById}
+              autocomplete={prefs.autocomplete}
             />
             </Suspense>
           )}
@@ -1988,7 +1989,10 @@ export function App() {
             <ProvidersSettings onChanged={() => void window.desk.listModels().then(setModels)} />
             <div className="settings-label">Second opinion</div>
             <label className="settings-row">
-              <span>After a run changes files, have this model check the change against your request</span>
+              <span>
+                After a run changes files, this model checks the change against your request. Its concerns go back to the agent
+                to fix, up to two rounds.
+              </span>
               <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
                 <option value="">Off</option>
                 {models
@@ -2002,6 +2006,23 @@ export function App() {
             </label>
             {!models.some((m) => m.value.startsWith("direct:")) && (
               <p className="settings-hint">Add a provider key above (OpenAI, Gemini, Claude API…) to pick a reviewer.</p>
+            )}
+            <div className="settings-label">Editor autocomplete</div>
+            <label className="settings-row">
+              <span>Suggest the next lines as grey text while you type (Tab accepts). Each pause in typing is one call to this model.</span>
+              <select value={prefs.autocomplete} onChange={(e) => patchPrefs({ autocomplete: e.target.value })}>
+                <option value="">Off</option>
+                {models
+                  .filter((m) => m.value.startsWith("direct:"))
+                  .map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.group?.replace(/^Direct · /, "")} · {m.displayName}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {!models.some((m) => m.value.startsWith("direct:")) && (
+              <p className="settings-hint">Needs a Direct provider: a Claude API key (Haiku is fast and cheap) or a local Ollama model.</p>
             )}
             <AutoSettings models={models} chosen={prefs.autoModels} onChange={(autoModels) => patchPrefs({ autoModels })} />
             <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />

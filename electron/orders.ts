@@ -49,8 +49,30 @@ export function saveOrders(workspace: string, next: Partial<Orders>): Orders {
   return merged;
 }
 
+// A team can commit .agenticops/orders.json so everyone gets the same rules and protected paths. Read only.
+// Its checks are ignored: a cloned repo must not be able to run commands on this computer by itself.
+export function teamOrders(workspace: string): Pick<Orders, "rules" | "protect"> {
+  try {
+    const raw = JSON.parse(readFileSync(path.join(workspace, ".agenticops", "orders.json"), "utf8")) as Partial<Orders>;
+    return { rules: list(raw.rules), protect: list(raw.protect) };
+  } catch {
+    return { rules: [], protect: [] };
+  }
+}
+
+// What a run obeys: this computer's orders plus the repo's team orders.
+export function runOrders(workspace: string): Orders {
+  const own = loadOrders(workspace);
+  const team = teamOrders(workspace);
+  return {
+    ...own,
+    rules: [...new Set([...own.rules, ...team.rules])],
+    protect: [...new Set([...own.protect, ...team.protect])],
+  };
+}
+
 // The pattern that protects this file, or null when Claude may edit it.
-export function protectedBy(workspace: string, target: string, orders = loadOrders(workspace)): string | null {
+export function protectedBy(workspace: string, target: string, orders = runOrders(workspace)): string | null {
   if (!orders.protect.length || !target) return null;
   const rel = path.relative(workspace, path.resolve(workspace, target)).replace(/\\/g, "/");
   if (!rel || rel.startsWith("..")) return null;

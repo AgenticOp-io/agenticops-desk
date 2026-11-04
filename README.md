@@ -11,7 +11,13 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **Auto** in the same menu uses all of these, or the ones you pick in **Settings → Auto model**, in your order. When one hits a rate limit, runs out of quota, has its key rejected, is unreachable or declines, the message moves to the next one and the failed one rests for a few minutes.
 
-**Quick edit** (**Ctrl+I** in the editor): select code, type what to change, and a small fast model rewrites just that part in seconds, without a full agent run. Ctrl+Z undoes it.
+**Quick edit** (**Ctrl+I** in the editor): select code, type what to change, and a small fast model rewrites just that part in seconds, without a full agent run. Ctrl+Z undoes it. **Autocomplete** (opt-in, **Settings → Editor autocomplete**) suggests the next lines as grey text; Tab accepts.
+
+**AIs checking each other:** with a **Second opinion** model set, a model from another provider reviews every change against your request, and its concerns go back to the agent to fix (up to two rounds).
+
+**@ symbols:** `@handleLogin` in the message box points the agent at that function's file and line, not just a file.
+
+**Team rules:** commit `.agenticops/orders.json` (`{"rules": [...], "protect": [...]}`) and everyone working in the repo gets the same standing orders. The app only reads it, and ignores any `checks` in it, so a cloned repo cannot make it run commands.
 
 **Plugins** (**Settings → Plugins**, or `/plugins`) browses, installs, updates and turns off Claude Code plugins from any marketplace, with one-click installs for Ponytail and Agent Skills. Their commands and skills show up in the composer's `/` menu.
 
@@ -47,6 +53,15 @@ To run it without a terminal window, create the shortcuts once:
 ```
 
 That adds **AgenticOps Desk** to the Desktop and Start menu. It starts the same dev build hidden (output goes to `%APPDATA%\AgenticOps Desk\dev.log`), stops when you close the window, and a second launch just brings the open window forward.
+
+## Tests
+
+```powershell
+npm test                 # logic: permissions, privacy, Auto, parsers
+npx vite build; npm run smoke   # starts the built app with a throwaway data folder and clicks through it
+```
+
+CI runs both on every push. Setting `AGENTICOPS_DESK_DATA` points any run at a separate data folder.
 
 ## Installers
 

@@ -57,7 +57,14 @@ export type PrivacyStatus = {
   pinned: Array<{ index: number; masked: string }>;
 };
 
-export type Orders = { rules: string[]; protect: string[]; checks: string[]; maxFixes: number };
+export type Orders = {
+  rules: string[];
+  protect: string[];
+  checks: string[];
+  maxFixes: number;
+  // Read-only, from the repo's .agenticops/orders.json; only on what orders:get returns.
+  team?: { rules: string[]; protect: string[] };
+};
 export type WatchInfo = { chatId: string; file: string; pattern: string };
 export type BriefingItem = {
   chatId: string;
@@ -127,6 +134,8 @@ declare global {
       readFile: (filePath: string) => Promise<string>;
       writeFile: (filePath: string, contents: string) => Promise<boolean>;
       searchFiles: (query: string) => Promise<Array<{ name: string; path: string; rel: string }>>;
+      // Declarations named like the query (git repos only): "@handleLogin" → src/auth.ts line 12.
+      searchSymbols: (query: string) => Promise<Array<{ name: string; kind: string; line: number; path: string; rel: string }>>;
       pickFile: () => Promise<string | null>;
       revealInFolder: (filePath: string) => Promise<boolean>;
       listCursorProjects: () => Promise<CursorProject[]>;
@@ -144,6 +153,7 @@ declare global {
       probeClaude: () => Promise<{ found: boolean; path: string; bundled: boolean }>;
       onSetup: (cb: (text: string) => void) => () => void;
       signIn: () => Promise<boolean>;
+      completeAt: (req: { model: string; file: string; language: string; before: string; after: string }) => Promise<string>;
       quickEdit: (req: {
         file: string;
         language: string;

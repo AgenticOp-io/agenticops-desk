@@ -103,6 +103,13 @@ export function Rules({ workspace, onStatus }: { workspace: string; onStatus: (t
         Standing orders for this folder. Unlike instructions, AgenticOps Desk enforces them: protected paths are refused, and a
         run that changed files is not done until every check passes (failures go back to the agent).
       </p>
+      {orders?.team && (orders.team.rules.length > 0 || orders.team.protect.length > 0) && (
+        <p className="settings-hint" title={[...orders.team.rules, ...orders.team.protect.map((p) => `protected: ${p}`)].join("\n")}>
+          Also applied from this repo's .agenticops/orders.json: {orders.team.rules.length} rule
+          {orders.team.rules.length === 1 ? "" : "s"}, {orders.team.protect.length} protected path
+          {orders.team.protect.length === 1 ? "" : "s"}. Edit that file to change them for the whole team.
+        </p>
+      )}
       <label className="rules-field">
         <span>Rules (one per line, added to every run)</span>
         <textarea value={rules} onChange={(e) => setRules(e.target.value)} rows={3} placeholder="No new dependencies without asking" />

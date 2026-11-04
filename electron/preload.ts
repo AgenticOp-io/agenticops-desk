@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld("desk", {
   readFile: (filePath: string) => ipcRenderer.invoke("fs:read", filePath) as Promise<string>,
   writeFile: (filePath: string, contents: string) =>
     ipcRenderer.invoke("fs:write", filePath, contents) as Promise<boolean>,
+  searchSymbols: (query: string) => ipcRenderer.invoke("fs:symbols", query),
   searchFiles: (query: string) =>
     ipcRenderer.invoke("fs:search", query) as Promise<Array<{ name: string; path: string; rel: string }>>,
   pickFile: () => ipcRenderer.invoke("fs:pickFile") as Promise<string | null>,
@@ -106,6 +107,7 @@ contextBridge.exposeInMainWorld("desk", {
     >,
   signIn: () => ipcRenderer.invoke("claude:login") as Promise<boolean>,
   quickEdit: (req: unknown) => ipcRenderer.invoke("edit:quick", req),
+  completeAt: (req: unknown) => ipcRenderer.invoke("edit:complete", req),
   listPlugins: (refresh?: boolean) => ipcRenderer.invoke("plugins:list", refresh),
   listMarketplaces: () => ipcRenderer.invoke("plugins:marketplaces"),
   addMarketplace: (source: string) => ipcRenderer.invoke("plugins:addMarketplace", source),

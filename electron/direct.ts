@@ -27,7 +27,7 @@ import {
   withHistory,
 } from "./claude";
 import { prepareMemory } from "./memory";
-import { loadOrders, ordersPrompt, protectedBy } from "./orders";
+import { ordersPrompt, protectedBy, runOrders } from "./orders";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
@@ -682,7 +682,7 @@ export function runDirect(opts: {
   const abort = new AbortController();
   session.abort = abort;
   const memory = prepareMemory(cwd);
-  const system = systemPrompt(cwd, privateAppend([memory.append, ordersPrompt(loadOrders(cwd))].filter(Boolean).join("\n\n")));
+  const system = systemPrompt(cwd, privateAppend([memory.append, ordersPrompt(runOrders(cwd))].filter(Boolean).join("\n\n")));
   session.lastPrompt = opts.prompt;
   const prior = loadSaved(chatId);
   // Same provider: continue its native history. Otherwise hand over the visible transcript as text.

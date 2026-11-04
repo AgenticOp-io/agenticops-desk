@@ -27,7 +27,8 @@ const SLASH = [
 ] as const;
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-type Hit = { name: string; path: string; rel: string };
+// A file, or a declaration inside one (line and kind set) found by name.
+type Hit = { name: string; path: string; rel: string; line?: number; kind?: string };
 export type ComposerHandle = { focus: () => void; addMention: (abs: string, rel: string) => void };
 
 function compact(n: number) {
@@ -152,8 +153,8 @@ export const Composer = forwardRef<
   useEffect(() => {
     if (query === null) return;
     const t = setTimeout(() => {
-      void window.desk.searchFiles(query).then((h) => {
-        setHits(h.slice(0, 12));
+      void Promise.all([window.desk.searchFiles(query), window.desk.searchSymbols(query).catch(() => [])]).then(([files, symbols]) => {
+        setHits([...symbols.slice(0, 6), ...files].slice(0, 12));
         setPick(0);
       });
     }, 80);
@@ -169,10 +170,12 @@ export const Composer = forwardRef<
     const el = areaRef.current;
     if (!el) return;
     const caret = el.selectionStart;
-    const before = value.slice(0, caret).replace(/@([^\s@]*)$/, `@${hit.rel.replace(/\\/g, "/")} `);
+    // A symbol is mentioned as "@file:line", and the agent is told which declaration that is.
+    const key = `${hit.rel.replace(/\\/g, "/")}${hit.line ? `:${hit.line}` : ""}`;
+    const before = value.slice(0, caret).replace(/@([^\s@]*)$/, () => `@${key} `);
     const next = before + value.slice(caret);
     onChange(next);
-    setMentions((m) => ({ ...m, [hit.rel.replace(/\\/g, "/")]: hit.path }));
+    setMentions((m) => ({ ...m, [key]: hit.line ? `${hit.path}:${hit.line} (${hit.kind} ${hit.name})` : hit.path }));
     setQuery(null);
     requestAnimationFrame(() => {
       el.focus();
@@ -300,7 +303,7 @@ export const Composer = forwardRef<
             {hits.map((h, i) => (
               <button
                 type="button"
-                key={h.path}
+                key={h.line ? `${h.path}:${h.line}` : h.path}
                 className={`mention-item ${i === pick ? "active" : ""}`}
                 onMouseEnter={() => setPick(i)}
                 onMouseDown={(e) => {
@@ -309,7 +312,7 @@ export const Composer = forwardRef<
                 }}
               >
                 <span className="mention-name">{h.name}</span>
-                <span className="mention-rel">{h.rel}</span>
+                <span className="mention-rel">{h.line ? `${h.kind} · ${h.rel}:${h.line}` : h.rel}</span>
               </button>
             ))}
           </div>

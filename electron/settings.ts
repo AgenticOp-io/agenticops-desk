@@ -22,6 +22,8 @@ export type UiPrefs = {
   reviewer: string;
   // Models the Auto choice may use, in order ("default" is Claude Code's own model). Empty means all ready ones.
   autoModels: string[];
+  // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
+  autocomplete: string;
   privacy: "standard" | "protect" | "local";
 };
 
@@ -42,6 +44,7 @@ const defaults = (): UiPrefs => ({
   theme: "dark",
   reviewer: "",
   autoModels: [],
+  autocomplete: "",
   privacy: "protect",
 });
 
@@ -82,6 +85,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     draft: str(r.draft),
     theme: r.theme === "light" ? "light" : "dark",
     reviewer: typeof r.reviewer === "string" && r.reviewer.startsWith("direct:") ? r.reviewer : "",
+    autocomplete: typeof r.autocomplete === "string" && r.autocomplete.startsWith("direct:") ? r.autocomplete : "",
     autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
   };

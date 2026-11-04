@@ -97,6 +97,22 @@ test("quick edit keeps only the code inside a fence", async () => {
   assert.equal(stripFence("text ```not a fence``` here"), "text ```not a fence``` here");
 });
 
+test("symbols from git grep output", async () => {
+  const { parseSymbolHits } = await import("./pureFeatures.ts");
+  const out = [
+    "src/auth.ts:12:export async function handleLogin(req) {",
+    "src/auth.ts:40:  const handleLoginError = (e) => log(e);",
+    "src/ui.tsx:7:// calls handleLogin from the form",
+    "app/views.py:3:def handle_logout(request):",
+    "src/auth.ts:90:export function handleLogin() {}",
+    "weird line without numbers",
+  ].join("\n");
+  const hits = parseSymbolHits(out, "handlel");
+  assert.deepEqual(hits.map((h) => `${h.name}@${h.line}:${h.kind}`), ["handleLogin@12:function", "handleLoginError@40:const"]);
+  assert.deepEqual(parseSymbolHits(out, "handle_").map((h) => h.name), ["handle_logout"]);
+  assert.deepEqual(parseSymbolHits(out, "handlelogin")[0].name, "handleLogin");
+});
+
 test("Auto order: sticky first, resting last, unknown dropped", async () => {
   const { autoOrder } = await import("./pureFeatures.ts");
   const available = ["default", "direct:openai:gpt-5", "direct:ollama:qwen3"];

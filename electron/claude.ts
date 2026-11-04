@@ -7,7 +7,7 @@ import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
-import { loadOrders, ordersPrompt, protectedBy, runChecks } from "./orders";
+import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
 import { loadSettings } from "./settings";
@@ -1103,7 +1103,7 @@ function storePwshAliasOnly(): boolean {
   return existsSync(path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe"));
 }
 
-export function runClaude(opts: {
+type RunOptions = {
   win: BrowserWindow | null;
   chatId: string;
   workspace: string;
@@ -1113,7 +1113,12 @@ export function runClaude(opts: {
   history?: HistoryMsg[];
   model?: string;
   images?: ImageAttachment[];
-}) {
+  // Set on runs the review loop starts: the user's original request and which fix round this is.
+  reviewRequest?: string;
+  reviewRound?: number;
+};
+
+export function runClaude(opts: RunOptions) {
   const chatId = opts.chatId;
   const session = sessionFor(chatId);
   if (privacyMode() === "local") {
@@ -1195,7 +1200,7 @@ export function runClaude(opts: {
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
   const memory = prepareMemory(cwd);
-  const orders = loadOrders(cwd);
+  const orders = runOrders(cwd);
   const standing = ordersPrompt(orders);
   void (async () => {
     let failed = "";
@@ -1471,13 +1476,19 @@ export function runClaude(opts: {
         chatId,
         text: failed ? "Stopped." : "Done.",
       });
-      if (!failed && !session.stopping) void reviewRun(opts.win, chatId, session, cwd, opts.prompt);
+      if (!failed && !session.stopping) void reviewRun(opts, session, cwd);
     }
   })();
 }
 
+const REVIEW_ROUNDS = 2;
+
 // Second opinion: a model from another provider checks the finished change against the request.
-async function reviewRun(win: BrowserWindow | null, chatId: string, session: Session, cwd: string, request: string) {
+// Concerns go back to the agent to fix, up to REVIEW_ROUNDS times, so two AIs settle it without the user.
+async function reviewRun(opts: RunOptions, session: Session, cwd: string) {
+  const { win, chatId } = opts;
+  const request = opts.reviewRequest ?? opts.prompt;
+  const round = opts.reviewRound ?? 0;
   if (privacyMode() === "local") return;
   const reviewer = (await loadSettings()).reviewer;
   if (!reviewer || !session.changes.size) return;
@@ -1496,6 +1507,21 @@ async function reviewRun(win: BrowserWindow | null, chatId: string, session: Ses
     const r = await secondOpinion({ reviewer, request: scrubOutgoing(request).text, files, cwd });
     if (r) send(win, { kind: "note", chatId, running: false, text: `Second opinion · ${r.label}\n${r.text}` });
     send(win, { kind: "status", running: false, text: "Done.", chatId });
+    // Only when the chat is still idle: a message the user sent meanwhile wins.
+    const idle = !session.query && !session.abort && !session.child;
+    if (r && /^concerns:/i.test(r.text) && round < REVIEW_ROUNDS && idle) {
+      send(win, { kind: "note", chatId, running: false, text: `Sending the concerns back to the agent (round ${round + 1} of ${REVIEW_ROUNDS})…` });
+      runClaude({
+        ...opts,
+        history: undefined,
+        images: undefined,
+        reviewRequest: request,
+        reviewRound: round + 1,
+        prompt:
+          `Another AI (${r.label}) reviewed your change against my request and raised these concerns. ` +
+          `Fix the ones that are real problems. If one is wrong, say why in one line and leave it.\n\n${r.text}`,
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     send(win, { kind: "note", chatId, running: false, text: `Second opinion could not run: ${msg.slice(0, 300)}` });

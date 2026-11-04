@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
-import { quickEdit, type QuickEditRequest } from "./quickEdit";
+import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
+import { parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
 import {
   addMarketplace,
   installPlugin,
@@ -83,7 +84,7 @@ import {
 } from "./features";
 import { loadSettings, patchSettings, type UiPrefs } from "./settings";
 import { buildBriefing } from "./briefing";
-import { loadOrders, saveOrders, type Orders } from "./orders";
+import { loadOrders, saveOrders, teamOrders, type Orders } from "./orders";
 import { originsOf } from "./provenance";
 import { addWatch, closeWatches, initWatches, listWatches, removeChatWatches, removeWatch } from "./watch";
 
@@ -93,6 +94,8 @@ app.setPath("userData", dataFolder());
 // The app was called ClaudeDesk before; its folder moves to the new name the first time this version starts.
 // If the old folder is in use (an older copy still running), keep using it this time and move it next launch.
 function dataFolder() {
+  // Tests run the app against a throwaway folder, never the user's real chats and settings.
+  if (process.env.AGENTICOPS_DESK_DATA) return path.resolve(process.env.AGENTICOPS_DESK_DATA);
   const appData = app.getPath("appData");
   const current = path.join(appData, "AgenticOps Desk");
   const old = path.join(appData, "ClaudeDesk");
@@ -545,6 +548,26 @@ ipcMain.handle(
   },
 );
 ipcMain.handle("fs:search", (_e, query: string) => searchWorkspaceFiles(workspace, query));
+
+// "@name" finds declarations through git grep: fast, and it skips ignored files. Folders that are not a
+// git repository get no symbols, only files.
+ipcMain.handle("fs:symbols", (_e, query: string) => {
+  const q = String(query ?? "");
+  if (!workspace || !/^[\w$]{2,60}$/.test(q)) return [];
+  const pattern = `(^|[^[:alnum:]_$])(${SYMBOL_KINDS})[[:space:]]+\\*?${q.replace(/\$/g, "\\$")}`;
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["-C", workspace, "grep", "-n", "-I", "-i", "-E", "--max-count=5", pattern],
+      { windowsHide: true, timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
+      (_err, stdout) => {
+        resolve(
+          parseSymbolHits(stdout ?? "", q).map((h) => ({ ...h, path: path.join(workspace, h.file), rel: h.file.replace(/\//g, path.sep) })),
+        );
+      },
+    );
+  });
+});
 const openedOutside = new Set<string>();
 
 function canon(filePath: string) {
@@ -727,6 +750,7 @@ initAuto(startRun);
 
 ipcMain.handle("claude:models", () => listModels());
 ipcMain.handle("edit:quick", (_e, req: QuickEditRequest) => quickEdit(req));
+ipcMain.handle("edit:complete", (_e, req: Parameters<typeof completeAt>[0]) => completeAt(req).catch(() => ""));
 
 // Claude Code plugins (marketplaces, install, enable), run through the bundled Claude Code.
 ipcMain.handle("plugins:list", (_e, refresh?: boolean) => listPlugins(Boolean(refresh)));
@@ -859,8 +883,8 @@ ipcMain.handle("shell:close", (_e, id: string) => {
 ipcMain.handle("updates:check", () => checkForUpdate());
 
 // Standing orders, the "why" trail, the briefing, and watched logs.
-ipcMain.handle("orders:get", (_e, cwd: string) => loadOrders(cwd || workspace));
-ipcMain.handle("orders:set", (_e, cwd: string, next: Partial<Orders>) => saveOrders(cwd || workspace, next));
+ipcMain.handle("orders:get", (_e, cwd: string) => ({ ...loadOrders(cwd || workspace), team: teamOrders(cwd || workspace) }));
+ipcMain.handle("orders:set", (_e, cwd: string, next: Partial<Orders>) => ({ ...saveOrders(cwd || workspace, next), team: teamOrders(cwd || workspace) }));
 ipcMain.handle("provenance:get", (_e, file: string) => (typeof file === "string" ? originsOf(file) : []));
 ipcMain.handle("briefing:get", (_e, sinceMs: number) =>
   buildBriefing({

@@ -15,6 +15,8 @@ export type UiPrefs = {
   theme: "dark" | "light";
   reviewer: string;
   autoModels: string[];
+  // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
+  autocomplete: string;
   privacy: "standard" | "protect" | "local";
 };
 
@@ -35,6 +37,7 @@ export const defaultPrefs = (): UiPrefs => ({
   theme: "dark",
   reviewer: "",
   autoModels: [],
+  autocomplete: "",
   privacy: "protect",
 });
 
