@@ -2,6 +2,12 @@ import path from "node:path";
 
 // Electron-free helpers for standing orders, org memory and the second opinion, so plain Node can test them.
 
+// A result only ends the run when no background task can still wake the agent; older CLIs never report idle or tasks.
+export function turnIsOver(msg: { type?: unknown; subtype?: unknown; state?: unknown }, backgroundTasks: number): boolean {
+  if (msg.type === "result") return backgroundTasks === 0;
+  return msg.type === "system" && msg.subtype === "session_state_changed" && msg.state === "idle";
+}
+
 // "src/**" matches everything under src; "*.lock" matches a lock file in any folder; "a/b.ts" matches that file.
 export function globToRegExp(glob: string): RegExp {
   const g = glob.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "/**");

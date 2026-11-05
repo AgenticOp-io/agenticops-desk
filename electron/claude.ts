@@ -7,6 +7,7 @@ import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
+import { turnIsOver } from "./pureFeatures";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
@@ -120,6 +121,8 @@ type Session = {
   engine?: "claude" | "direct";
   // Open while a Claude Code run can still take another instruction.
   inbox?: Inbox;
+  // Background agents and shells still running in this Claude Code run.
+  backgroundTasks?: number;
   // A steer waiting for the next Direct turn, applied before the following model call.
   guide?: string;
   // Files Claude edited in this chat, keyed by lower-case path, with their contents before the first edit
@@ -460,7 +463,7 @@ export function explainWork(name: string, input: unknown): { phase: RunPhase; te
   if (key === "webfetch") return { phase: "tool", text: "Fetching a web page" };
   if (key === "websearch") return { phase: "tool", text: pattern ? `Searching the web for ${clip(pattern, 48)}` : "Searching the web" };
   if (key === "todowrite") return { phase: "tool", text: "Updating the task list" };
-  if (key === "task") return { phase: "tool", text: "Working on a subtask" };
+  if (key === "task" || key === "agent") return { phase: "tool", text: "Starting an agent" };
   return { phase: "tool", text: file ? `${name} ${shortPath(file)}` : name };
 }
 
@@ -619,6 +622,13 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
         if (!/denied this in AgenticOps Desk|Stopped before approval/i.test(message)) {
           send(win, { kind: "error", text: message, sessionId, chatId, running: true });
         }
+      } else if (subtype === "background_tasks_changed") {
+        const count = Array.isArray(msg.tasks) ? msg.tasks.length : 0;
+        session.backgroundTasks = count;
+        if (count) {
+          const text = `${count} background task${count === 1 ? "" : "s"} running`;
+          send(win, { kind: "status", text, sessionId, chatId, running: true });
+        }
       }
       return;
     }
@@ -631,6 +641,13 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       const content = (msg.message as {
         content?: Array<{ type?: string; text?: string; name?: string; id?: string; input?: unknown }>;
       } | undefined)?.content;
+      // A subagent's text is for the main agent, which reports back; several at once would garble the reply.
+      if (msg.parent_tool_use_id) {
+        for (const b of content ?? []) {
+          if (b.type === "tool_use" && b.name) announceTool(win, chatId, session, b.name, b.input, b.id);
+        }
+        return;
+      }
       const text = content
         ?.filter((b) => b.type === "text" && b.text)
         .map((b) => b.text)
@@ -1163,6 +1180,7 @@ export function runClaude(opts: RunOptions) {
   session.announcedTools = new Set();
   session.decisions = new Map();
   session.stderr = "";
+  session.backgroundTasks = 0;
 
   const mode = chosenPermissionMode(opts.permissionMode);
   if (!resuming) session.claudeSession = undefined;
@@ -1196,6 +1214,7 @@ export function runClaude(opts: RunOptions) {
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: "AgenticOps-Desk",
+    CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
     ...(bash ? { CLAUDE_CODE_GIT_BASH_PATH: bash } : {}),
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
@@ -1424,7 +1443,8 @@ export function runClaude(opts: RunOptions) {
       for await (const msg of q) {
         if (session.query !== q) return;
         parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
-        if (msg.type === "result") session.inbox?.close();
+        // Keep the inbox open while background agents run, so a message then guides this run instead of stopping them.
+        if (turnIsOver(msg, session.backgroundTasks ?? 0)) session.inbox?.close();
       }
     } catch (err) {
       if (session.query !== q) return;

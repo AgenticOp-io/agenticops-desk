@@ -168,6 +168,15 @@ test("a git remote has one key on every computer", async () => {
   assert.equal(projects[0].branch, "dev");
 });
 
+test("a run stays open while background tasks can still report", async () => {
+  const { turnIsOver } = await import("./pureFeatures.ts");
+  assert.equal(turnIsOver({ type: "result" }, 0), true);
+  assert.equal(turnIsOver({ type: "result" }, 2), false);
+  assert.equal(turnIsOver({ type: "system", subtype: "session_state_changed", state: "idle" }, 2), true);
+  assert.equal(turnIsOver({ type: "system", subtype: "session_state_changed", state: "running" }, 0), false);
+  assert.equal(turnIsOver({ type: "assistant" }, 0), false);
+});
+
 test("SDK version is found by walking up from its entry file", async () => {
   const { sdkVersionFrom } = await import("./pureFeatures.ts");
   const path = await import("node:path");
