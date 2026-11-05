@@ -1,0 +1,12 @@
+{
+  "name": "cursor-sync",
+  "description": "Copy finished Cursor chats into a private git repository you control.",
+  "version": "0.1.1",
+  "author": {
+    "name": "AgenticOp-io",
+    "email": "opensource@agenticop.io"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/AgenticOp-io/cursor-sync",
+  "keywords": ["sync", "chats", "git"]
+}

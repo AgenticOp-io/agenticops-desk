@@ -230,18 +230,28 @@ declare global {
         url: string;
         ok: boolean;
         note: string;
+        cursor: "off" | "partial" | "full";
         projects: Array<{ remote: string; name: string; local: string | null }>;
       }>;
       setSyncUrl: (url: string) => Promise<{
         url: string;
         ok: boolean;
         note: string;
+        cursor: "off" | "partial" | "full";
+        projects: Array<{ remote: string; name: string; local: string | null }>;
+      }>;
+      setCursorIntegration: (mode: "off" | "partial" | "full") => Promise<{
+        url: string;
+        ok: boolean;
+        note: string;
+        cursor: "off" | "partial" | "full";
         projects: Array<{ remote: string; name: string; local: string | null }>;
       }>;
       syncNow: () => Promise<{
         url: string;
         ok: boolean;
         note: string;
+        cursor: "off" | "partial" | "full";
         projects: Array<{ remote: string; name: string; local: string | null }>;
       }>;
       cloneSyncedProject: (remote: string) => Promise<{ ok: boolean; output: string; path?: string }>;

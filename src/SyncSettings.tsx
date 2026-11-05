@@ -4,8 +4,15 @@ type SyncView = {
   url: string;
   ok: boolean;
   note: string;
+  cursor: "off" | "partial" | "full";
   projects: Array<{ remote: string; name: string; local: string | null }>;
 };
+
+const CURSOR_MODES = [
+  ["off", "Off"],
+  ["partial", "Archive"],
+  ["full", "Full"],
+] as const;
 
 export function SyncSettings({ onChanged }: { onChanged: () => void }) {
   const [url, setUrl] = useState("");
@@ -68,6 +75,31 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
         >
           Sync now
         </button>
+      </div>
+      <div className="settings-label">Cursor</div>
+      <p className="settings-hint">
+        Off leaves Cursor alone. Archive copies a finished Cursor chat into this repository and shows it here. Full also adds
+        chats from the repository to Cursor's list. Quit Cursor before choosing Full. A Cursor update can change that list, and a
+        restored chat can open empty; the messages stay in the desk.
+      </p>
+      <div className="signin-row">
+        {CURSOR_MODES.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={view?.cursor === id ? "ghost on" : "ghost"}
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void window.desk.setCursorIntegration(id).then((status) => {
+                apply(status);
+                setBusy(false);
+              });
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       {view?.note && <p className="settings-hint">{view.note}</p>}
       {view?.projects.map((project) => (

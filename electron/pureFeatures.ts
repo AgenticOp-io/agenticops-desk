@@ -195,7 +195,54 @@ export type SyncChat = {
 };
 
 // Layout and folder paths differ per computer. Everything else in settings can travel.
-const SYNC_PREFS = ["windowFont", "itemFont", "hiddenChats", "showCode", "theme", "reviewer", "autoModels", "autocomplete", "privacy"] as const;
+const SYNC_PREFS = ["windowFont", "itemFont", "hiddenChats", "showCode", "theme", "reviewer", "autoModels", "autocomplete", "privacy", "cursorIntegration"] as const;
+
+export type CursorMode = "off" | "partial" | "full";
+
+export function cursorMode(value: unknown): CursorMode {
+  return value === "partial" || value === "full" ? value : "off";
+}
+
+// Empties text copied from Cursor's own chat record so a new row does not carry the old chat.
+export function blankValue(value: unknown): unknown {
+  if (typeof value === "string") return "";
+  if (Array.isArray(value)) return value.map((item) => blankValue(item));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[key] = blankValue(item);
+    return out;
+  }
+  return value;
+}
+
+export type TranscriptMessage = { role: "user" | "assistant"; text: string };
+
+export function cursorTranscript(jsonl: string): { title: string; messages: TranscriptMessage[] } {
+  const messages: TranscriptMessage[] = [];
+  let title = "Cursor chat";
+  for (const line of jsonl.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let row: { role?: string; message?: { content?: Array<{ type?: string; text?: string }> } };
+    try {
+      row = JSON.parse(trimmed) as typeof row;
+    } catch {
+      continue;
+    }
+    const text = (row.message?.content ?? [])
+      .filter((block) => block?.type === "text" && typeof block.text === "string" && block.text.trim())
+      .map((block) => (block.text ?? "").trim())
+      .join("\n")
+      .slice(0, 12_000);
+    if (!text) continue;
+    if (row.role === "user") {
+      if (title === "Cursor chat") title = text.replace(/\s+/g, " ").slice(0, 80);
+      messages.push({ role: "user", text });
+    } else if (row.role === "assistant") messages.push({ role: "assistant", text });
+    if (messages.length >= 200) break;
+  }
+  return { title, messages };
+}
 
 export function portablePrefs(prefs: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

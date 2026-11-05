@@ -69,7 +69,7 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
-import { cloneSyncedProject, scheduleDeskSync, setSyncUrl, syncApplying, syncNow, syncStatus } from "./deskSync";
+import { cloneSyncedProject, scheduleDeskSync, setCursorIntegration, setSyncUrl, syncApplying, syncNow, syncStatus } from "./deskSync";
 import {
   checkForUpdate,
   closeAllShells,
@@ -885,6 +885,7 @@ ipcMain.handle("git:checkout", (_e, cwd: string, branch: string) => gitCheckout(
 ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(cwd, title, body));
 ipcMain.handle("sync:status", () => syncStatus());
 ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
+ipcMain.handle("sync:cursor", (_e, mode: string) => setCursorIntegration(String(mode ?? "")));
 ipcMain.handle("sync:now", () => syncNow());
 ipcMain.handle("sync:clone", async (_e, remote: string) => {
   const result = await dialog.showOpenDialog(win!, {

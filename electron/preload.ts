@@ -183,6 +183,7 @@ contextBridge.exposeInMainWorld("desk", {
       url: string;
       ok: boolean;
       note: string;
+      cursor: "off" | "partial" | "full";
       projects: Array<{ remote: string; name: string; local: string | null }>;
     }>,
   setSyncUrl: (url: string) =>
@@ -190,6 +191,15 @@ contextBridge.exposeInMainWorld("desk", {
       url: string;
       ok: boolean;
       note: string;
+      cursor: "off" | "partial" | "full";
+      projects: Array<{ remote: string; name: string; local: string | null }>;
+    }>,
+  setCursorIntegration: (mode: "off" | "partial" | "full") =>
+    ipcRenderer.invoke("sync:cursor", mode) as Promise<{
+      url: string;
+      ok: boolean;
+      note: string;
+      cursor: "off" | "partial" | "full";
       projects: Array<{ remote: string; name: string; local: string | null }>;
     }>,
   syncNow: () =>
@@ -197,6 +207,7 @@ contextBridge.exposeInMainWorld("desk", {
       url: string;
       ok: boolean;
       note: string;
+      cursor: "off" | "partial" | "full";
       projects: Array<{ remote: string; name: string; local: string | null }>;
     }>,
   cloneSyncedProject: (remote: string) =>

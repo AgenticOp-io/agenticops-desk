@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "node \"$env:CURSOR_PLUGIN_ROOT/scripts/export-chat.mjs\"",
+        "timeout": 90
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node \"$env:CURSOR_PLUGIN_ROOT/scripts/export-chat.mjs\"",
+        "timeout": 90
+      }
+    ]
+  }
+}

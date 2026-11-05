@@ -139,17 +139,35 @@ test("plugin CLI output and command descriptions", async () => {
 });
 
 test("a git remote has one key on every computer", async () => {
-  const { allowedGitRemote, mergeChats, mergeDeleted, mergeProjects, portablePrefs, remoteKey } = await import("./pureFeatures.ts");
+  const { allowedGitRemote, blankValue, cursorMode, cursorTranscript, mergeChats, mergeDeleted, mergeProjects, portablePrefs, remoteKey } = await import("./pureFeatures.ts");
   assert.equal(remoteKey("https://github.com/AgenticOp-io/agenticops-desk.git"), "github.com/agenticop-io/agenticops-desk");
   assert.equal(remoteKey("git@github.com:AgenticOp-io/agenticops-desk.git"), "github.com/agenticop-io/agenticops-desk");
   assert.equal(remoteKey("C:\\repos\\local"), null);
   assert.equal(allowedGitRemote("https://github.com/AgenticOp-io/desk-sync.git"), true);
   assert.equal(allowedGitRemote("http://github.com/AgenticOp-io/desk-sync.git"), false);
   assert.equal(allowedGitRemote("git@github.com:AgenticOp-io/desk-sync.git"), true);
-  const prefs = portablePrefs({ theme: "light", lastWorkspace: "C:\\secret", openFiles: ["a"], windowFont: 18 });
+  const prefs = portablePrefs({ theme: "light", lastWorkspace: "C:\\secret", openFiles: ["a"], windowFont: 18, cursorIntegration: "partial" });
   assert.equal(prefs.theme, "light");
   assert.equal(prefs.windowFont, 18);
+  assert.equal(prefs.cursorIntegration, "partial");
   assert.equal("lastWorkspace" in prefs, false);
+  assert.equal(cursorMode("full"), "full");
+  assert.equal(cursorMode("nope"), "off");
+  const blank = blankValue({ name: "secret", n: 1, nested: { a: "b" }, list: ["x"] }) as {
+    name: string;
+    n: number;
+    nested: { a: string };
+    list: string[];
+  };
+  assert.equal(blank.name, "");
+  assert.equal(blank.n, 1);
+  assert.equal(blank.nested.a, "");
+  assert.deepEqual(blank.list, [""]);
+  const transcript = cursorTranscript(
+    '{"role":"user","message":{"content":[{"type":"text","text":"Hello there"}]}}\n{"role":"assistant","message":{"content":[{"type":"text","text":"Hi"}]}}\n',
+  );
+  assert.equal(transcript.title, "Hello there");
+  assert.equal(transcript.messages.length, 2);
   assert.equal("openFiles" in prefs, false);
   const older = { id: "a", title: "Old", updatedAt: 1, projectRemote: "https://github.com/o/r.git", projectName: "R" };
   const newer = { id: "a", title: "New", updatedAt: 2, projectRemote: null, projectName: "" };

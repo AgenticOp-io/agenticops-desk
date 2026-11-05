@@ -18,6 +18,8 @@ export type UiPrefs = {
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
   privacy: "standard" | "protect" | "local";
+  /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
+  cursorIntegration: "off" | "partial" | "full";
 };
 
 export const defaultPrefs = (): UiPrefs => ({
@@ -39,6 +41,7 @@ export const defaultPrefs = (): UiPrefs => ({
   autoModels: [],
   autocomplete: "",
   privacy: "protect",
+  cursorIntegration: "off",
 });
 
 export function clamp(n: number, min: number, max: number) {

@@ -2,6 +2,7 @@ import { app } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serialized, writeJsonAtomic } from "./jsonStore";
+import { cursorMode } from "./pureFeatures";
 
 export type UiPrefs = {
   windowFont: number;
@@ -25,6 +26,8 @@ export type UiPrefs = {
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
   privacy: "standard" | "protect" | "local";
+  /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
+  cursorIntegration: "off" | "partial" | "full";
 };
 
 const defaults = (): UiPrefs => ({
@@ -46,6 +49,7 @@ const defaults = (): UiPrefs => ({
   autoModels: [],
   autocomplete: "",
   privacy: "protect",
+  cursorIntegration: "off",
 });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -88,6 +92,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     autocomplete: typeof r.autocomplete === "string" && r.autocomplete.startsWith("direct:") ? r.autocomplete : "",
     autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
+    cursorIntegration: cursorMode(r.cursorIntegration),
   };
 }
 

@@ -7,13 +7,16 @@ import { runGit } from "./features";
 import { writeJsonAtomic } from "./jsonStore";
 import { exportLibrarySlice, flushLibrary, importSyncedLibrary, libraryPending, type LibrarySlice } from "./library";
 import { memoryDirs } from "./memory";
+import { applyCursorLink, cursorArchiveChats, writeCursorArchiveThreads } from "./cursorLink";
 import {
   allowedGitRemote,
+  cursorMode,
   mergeChats,
   mergeDeleted,
   mergeProjects,
   portablePrefs,
   remoteKey,
+  type CursorMode,
   type SyncChat,
   type SyncProject,
 } from "./pureFeatures";
@@ -29,6 +32,7 @@ export type SyncView = {
   url: string;
   ok: boolean;
   note: string;
+  cursor: CursorMode;
   projects: Array<{ remote: string; name: string; local: string | null }>;
 };
 
@@ -89,8 +93,12 @@ async function writeCheckouts(map: Record<string, string>) {
   await writeJsonAtomic(checkoutFile(), map);
 }
 
-function emptyView(url: string, note = lastNote, ok = lastOk): SyncView {
-  return { url, ok, note, projects: [] };
+function emptyView(url: string, note = lastNote, ok = lastOk, cursor: CursorMode = "off"): SyncView {
+  return { url, ok, note, cursor, projects: [] };
+}
+
+async function modeNow(): Promise<CursorMode> {
+  return cursorMode((await loadSettings()).cursorIntegration);
 }
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
@@ -290,7 +298,13 @@ async function doSync(): Promise<SyncView> {
   const dir = syncDir();
   try {
     if (libraryPending()) await flushLibrary();
-    if (!url) return emptyView("", "Sync is off.", true);
+    let settings = await loadSettings();
+    let mode = cursorMode(settings.cursorIntegration);
+    if (!url) {
+      const link = await applyCursorLink({ mode, remote: "", syncDir: dir, restore: false, announce: false });
+      return emptyView("", link || "Sync is off.", true, mode);
+    }
+    await applyCursorLink({ mode, remote: url, syncDir: dir, restore: false, announce: false });
     const ready = await ensureRepo(dir, url);
     if (!ready.ok) return await viewOf(url, false, ready.output);
     const desk = await isDeskRepo(dir);
@@ -310,21 +324,39 @@ async function doSync(): Promise<SyncView> {
     }
     await writeCheckouts(checks);
 
+    await mergeSettings(dir);
+    settings = await loadSettings();
+    mode = cursorMode(settings.cursorIntegration);
     const incomingProjects = asProjects(await readJson(path.join(dir, "projects.json"), []));
+    const archived = mode === "off" ? [] : await cursorArchiveChats(dir);
     const incomingChats = asChats(await readJson(path.join(dir, "chats.json"), []));
     const incomingDeleted = await readJson<string[]>(path.join(dir, "deleted.json"), []);
     const projects = mergeProjects(localProjects, incomingProjects);
     const deleted = mergeDeleted(slice.deleted, Array.isArray(incomingDeleted) ? incomingDeleted : []);
     const previous = new Map(slice.chats.map((chat) => [chat.id, chat.updatedAt ?? 0]));
-    const merged = mergeChats(slice.chats.map((chat) => chatToSync(chat, remoteOf)), incomingChats, deleted);
+    const merged = mergeChats(
+      slice.chats.map((chat) => chatToSync(chat, remoteOf)),
+      [...incomingChats, ...archived.map((chat) => chatToSync(chat, remoteOf))],
+      deleted,
+    );
 
     const pathOf = new Map<string, string>();
     for (const [key, folder] of Object.entries(checks)) if (existsSync(folder)) pathOf.set(key, folder);
-    const localChats = merged.map((chat) => chatFromSync(chat, pathOf));
+    const archivedById = new Map(archived.map((chat) => [chat.id, chat]));
+    const localChats = merged.map((chat) => {
+      const row = chatFromSync(chat, pathOf);
+      const fromCursor = archivedById.get(chat.id);
+      if (!row.projectPath && fromCursor?.projectPath && existsSync(fromCursor.projectPath)) {
+        row.projectPath = fromCursor.projectPath;
+        row.projectName = fromCursor.projectName;
+        row.slug = fromCursor.slug;
+      }
+      return row;
+    });
     await importSyncedLibrary(localChats, deleted, [...pathOf.values()]);
+    if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(deleted));
     await mergeThreadFiles(dir, merged, previous, new Set(deleted));
     await mergeMemory(slice, remoteOf);
-    await mergeSettings(dir);
     await writeSnapshot(dir, projects, merged, deleted);
 
     const status = await runGit(dir, ["status", "--porcelain"]);
@@ -342,7 +374,16 @@ async function doSync(): Promise<SyncView> {
         if (!pushed.ok) return await viewOf(url, false, pushed.output);
       }
     }
-    return await viewOf(url, true, status.output ? "Synced." : "Already up to date.");
+    const link = await applyCursorLink({
+      mode,
+      remote: url,
+      syncDir: dir,
+     
+      restore: mode === "full",
+      announce: false,
+    });
+    const note = status.output ? "Synced." : "Already up to date.";
+    return await viewOf(url, true, link ? `${note} ${link}` : note);
   } catch (err) {
     return await viewOf(url, false, err instanceof Error ? err.message : String(err));
   } finally {
@@ -359,7 +400,7 @@ async function viewOf(url: string, ok: boolean, note: string): Promise<SyncView>
   } catch {
     projects = [];
   }
-  return { url, ok, note, projects };
+  return { url, ok, note, cursor: await modeNow(), projects };
 }
 
 async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<string, number>, deleted: Set<string>) {
@@ -453,18 +494,46 @@ export async function syncStatus(): Promise<SyncView> {
   const url = await config();
   const checks = await readCheckouts();
   const projects = existsSync(syncDir()) ? await projectList(syncDir(), checks) : [];
-  return { url, ok: lastOk, note: lastNote, projects };
+  return { url, ok: lastOk, note: lastNote, cursor: await modeNow(), projects };
+}
+
+export async function setCursorIntegration(mode: string): Promise<SyncView> {
+  const next = cursorMode(mode);
+  await patchSettings({ cursorIntegration: next });
+  const url = await config();
+  await applyCursorLink({
+    mode: next,
+    remote: url,
+    syncDir: syncDir(),
+   
+    restore: false,
+    announce: false,
+  });
+  if (next !== "off" && url) {
+    const view = await syncNow();
+    const lead = next === "partial"
+      ? "Finished Cursor chats are copied into the sync repository and shown here."
+      : "Full copies those chats and adds missing ones to Cursor's list.";
+    return { ...view, cursor: next, note: view.note ? `${lead} ${view.note}` : lead };
+  }
+  const status = await syncStatus();
+  const note = next === "off" ? "Cursor is left alone." : "Save a private repository address to archive Cursor chats.";
+  return { ...status, ok: true, cursor: next, note };
 }
 
 export async function setSyncUrl(next: string): Promise<SyncView> {
   const trimmed = next.trim();
+  const mode = await modeNow();
   if (trimmed && !allowedGitRemote(trimmed)) {
-    return emptyView(urlCache, "Use an https or git@ address of an empty private repository.", false);
+    return emptyView(urlCache, "Use an https or git@ address of an empty private repository.", false, mode);
   }
   urlCache = trimmed;
   loaded = true;
   await writeJsonAtomic(configFile(), { url: trimmed });
-  if (!trimmed) return emptyView("", "Sync is off.", true);
+  if (!trimmed) {
+    const link = await applyCursorLink({ mode, remote: "", syncDir: syncDir(), restore: false, announce: false });
+    return emptyView("", link || "Sync is off.", true, mode);
+  }
   return syncNow();
 }
 

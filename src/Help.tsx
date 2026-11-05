@@ -20,7 +20,7 @@ const SECTIONS: Section[] = [
       "Each folder shows two chats. The project icon, or the more link, shows the rest. Folders stay open or closed as you left them.",
       "Drag a project or a chat to reorder it. Right-click to hide one. Hidden items come back from Settings, or from the same right-click menu.",
       "Chats from the editor you used before are imported with the Windows setup, or the first time a portable copy starts with an empty list. Catch up hands one of those chats to the agent as a briefing. Nothing is written into the project folder.",
-      "Settings › Sync points at a private git repository. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project is remembered by its git remote; Clone puts that repository on this computer.",
+      "Settings › Sync points at a private git repository. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project is remembered by its git remote; Clone puts that repository on this computer. The same page chooses whether Cursor chats stay on that computer, are archived into the repository, or are also added back to Cursor's chat list.",
     ],
   },
   {
