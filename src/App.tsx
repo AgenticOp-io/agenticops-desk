@@ -235,6 +235,7 @@ export function App() {
   const [planByChat, setPlanByChat] = useState<Record<string, string>>({});
   const [bodyHits, setBodyHits] = useState<string[]>([]);
   const [updateNote, setUpdateNote] = useState("");
+  const [updateReady, setUpdateReady] = useState(false);
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -2051,16 +2052,24 @@ export function App() {
                 className="btn"
                 onClick={() =>
                   void window.desk.checkForUpdate().then((info) => {
+                    setUpdateReady(info.patch.ready);
                     setUpdateNote(
-                      info.latest
-                        ? `This copy is ${info.current}. Latest release is ${info.latest}. ${info.url ?? ""} ${info.note}`
-                        : `${info.note} This copy is ${info.current}.`,
+                      info.patch.note
+                        ? `This copy is ${info.current}. ${info.patch.note}`
+                        : info.latest
+                          ? `This copy is ${info.current}. Latest release is ${info.latest}. ${info.url ?? ""} ${info.note}`
+                          : `${info.note} This copy is ${info.current}.`,
                     );
                   })
                 }
               >
                 Check for updates
               </button>
+              {updateReady && (
+                <button className="btn" onClick={() => void window.desk.restartForUpdate()}>
+                  Restart to update
+                </button>
+              )}
             </div>
             {updateNote && <p className="settings-hint">{updateNote}</p>}
             <div className="settings-label">Claude Code</div>

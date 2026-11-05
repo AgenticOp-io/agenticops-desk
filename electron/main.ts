@@ -73,6 +73,7 @@ import {
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { carryProjectMemory } from "./memory";
+import { confirmPatch, updateCode } from "./patcher";
 import {
   cloneSyncedProject,
   refreshProjectRemotes,
@@ -251,7 +252,10 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
-  win.once("ready-to-show", () => win?.show());
+  win.once("ready-to-show", () => {
+    win?.show();
+    void confirmPatch();
+  });
   guardNavigation(win);
   win.on("close", (e) => {
     if (allowQuit || liveRunCount() === 0) return;
@@ -374,6 +378,8 @@ app.whenReady().then(async () => {
   createWindow();
   setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
   setInterval(() => void syncNow(), 3 * 60_000);
+  setTimeout(() => void checkAndPatch(), 30_000);
+  setInterval(() => void checkAndPatch(), 6 * 60 * 60_000);
   for (const run of pendingRuns()) resumePendingRun(win, run.chatId);
   // Watch and react: new errors in a watched log go to that chat, unless it is busy or waiting on the user.
   initWatches((w, lines) => {
@@ -1001,7 +1007,17 @@ ipcMain.handle("shell:close", (_e, id: string) => {
   closeShell(id);
   return true;
 });
-ipcMain.handle("updates:check", () => checkForUpdate());
+async function checkAndPatch() {
+  const info = await checkForUpdate();
+  const patch = await updateCode(info.latest);
+  if (patch.ready && win && !win.isDestroyed()) win.setTitle("AgenticOps Desk (update ready, restart to load it)");
+  return { ...info, patch };
+}
+ipcMain.handle("updates:check", () => checkAndPatch());
+ipcMain.handle("updates:restart", () => {
+  app.relaunch();
+  app.quit();
+});
 
 // Standing orders, the "why" trail, the briefing, and watched logs.
 ipcMain.handle("orders:get", (_e, cwd: string) => ({ ...loadOrders(cwd || workspace), team: teamOrders(cwd || workspace) }));

@@ -258,6 +258,25 @@ test("overlapping sync requests share one follow-up and then stop", async () => 
   await assert.rejects(Promise.all([failing(), failing()]));
 });
 
+test("a patch must be newer, match this install and stay in its folder", async () => {
+  const { isNewerVersion, patchRefusal, patchShell } = await import("./pureFeatures.ts");
+  assert.equal(isNewerVersion("v0.1.10", "0.1.9"), true);
+  assert.equal(isNewerVersion("0.1.6", "0.1.6"), false);
+  assert.equal(isNewerVersion("0.1.5", "0.2.0"), false);
+  const shell = patchShell("36.9.5", { sdk: "1" });
+  const here = { current: "0.1.6", shell, bad: [] as string[] };
+  const main = { path: "dist-electron/main.js", sha256: "a".repeat(64) };
+  const good = { version: "0.1.7", shell, tar: "", files: [main] };
+  assert.equal(patchRefusal(good, here), null);
+  assert.match(patchRefusal({ ...good, version: "0.1.6" }, here)!, /up to date/);
+  assert.match(patchRefusal(good, { ...here, bad: ["0.1.7"] })!, /failed/);
+  assert.match(patchRefusal({ ...good, shell: patchShell("37.0.0", { sdk: "1" }) }, here)!, /more than/);
+  assert.match(patchRefusal({ ...good, files: [] }, here)!, /entry/);
+  for (const p of ["../evil.js", "dist/../../evil.js", "dist\\..\\evil.js", "C:/evil.js", "node_modules/x.js", "boot/boot.mjs"]) {
+    assert.match(patchRefusal({ ...good, files: [main, { path: p, sha256: "a".repeat(64) }] }, here)!, /unsafe/, p);
+  }
+});
+
 test("a project folder has Cursor's transcript folder name", async () => {
   const { slugFromResolved } = await import("./pureFeatures.ts");
   assert.equal(slugFromResolved("C:\\Users\\user\\Downloads\\My_converter"), "c-Users-user-Downloads-My-converter");

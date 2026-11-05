@@ -265,6 +265,7 @@ declare global {
       locateProject: (projectId: string) => Promise<boolean>;
       projectCleanupPlan: () => Promise<CleanupProposal[]>;
       applyProjectCleanup: (merges: Array<{ from: string; to: string }>) => Promise<{ moved: number; backup: string }>;
+      restartForUpdate: () => Promise<void>;
       cloneSyncedProject: (remote: string, projectId: string) => Promise<{ ok: boolean; output: string; path?: string }>;
       readProjectDoc: (cwd: string, name: string) => Promise<string>;
       writeProjectDoc: (cwd: string, name: string, contents: string) => Promise<boolean>;
@@ -273,7 +274,7 @@ declare global {
       writeShell: (id: string, text: string) => Promise<boolean>;
       closeShell: (id: string) => Promise<boolean>;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
-      checkForUpdate: () => Promise<{ current: string; latest: string | null; url: string | null; note: string }>;
+      checkForUpdate: () => Promise<{ current: string; latest: string | null; url: string | null; note: string; patch: { ready: boolean; note: string } }>;
       getOrders: (cwd: string) => Promise<Orders>;
       setOrders: (cwd: string, next: Partial<Orders>) => Promise<Orders>;
       originsOf: (file: string) => Promise<Array<{ chatId: string; prompt: string; at: number }>>;

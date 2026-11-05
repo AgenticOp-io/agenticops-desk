@@ -231,7 +231,8 @@ contextBridge.exposeInMainWorld("desk", {
     return () => ipcRenderer.removeListener("shell:data", listener);
   },
   checkForUpdate: () =>
-    ipcRenderer.invoke("updates:check") as Promise<{ current: string; latest: string | null; url: string | null; note: string }>,
+    ipcRenderer.invoke("updates:check") as Promise<{ current: string; latest: string | null; url: string | null; note: string; patch: { ready: boolean; note: string } }>,
+  restartForUpdate: () => ipcRenderer.invoke("updates:restart") as Promise<void>,
   getOrders: (cwd: string) => ipcRenderer.invoke("orders:get", cwd),
   setOrders: (cwd: string, next: unknown) => ipcRenderer.invoke("orders:set", cwd, next),
   originsOf: (file: string) => ipcRenderer.invoke("provenance:get", file),

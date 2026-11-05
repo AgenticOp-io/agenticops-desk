@@ -77,6 +77,8 @@ The Windows setup imports Cursor projects and chats while it installs, and opens
 | macOS Apple Silicon / Intel | `.dmg`, `.zip` |
 | Linux x64 / ARM64 | `.AppImage`, `.deb` |
 
+**Code updates (Windows setup installs):** the app checks for a new release every six hours and when you press **Settings → Check for updates**. If only the app's own code changed, it downloads a small signed patch, builds it in a folder of its own and checks every file; it loads at the next start, or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it. A change to Electron or an installed package still needs the full installer, and so do portable copies, macOS and Linux. Updates only arrive once a release is published. Patches download through the GitHub CLI's sign-in (`gh auth login`) while the repository is private.
+
 The builds are not code-signed. Windows SmartScreen asks once ("More info → Run anyway"). On macOS, right-click the app and choose **Open** the first time, or run `xattr -cr /Applications/AgenticOps Desk.app`.
 
 `npm run build` makes the installers for the computer you run it on, in `release/`.

@@ -8,7 +8,7 @@ import { realStorePwsh } from "./claude";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
-function run(cmd: string, args: string[], cwd: string, timeout = 60_000): Promise<{ ok: boolean; output: string }> {
+export function run(cmd: string, args: string[], cwd: string, timeout = 60_000): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     execFile(
       cmd,

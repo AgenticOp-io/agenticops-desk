@@ -344,6 +344,33 @@ export function oneAtATime<T>(work: () => Promise<T>): () => Promise<T> {
   return call;
 }
 
+export function isNewerVersion(a: string, b: string): boolean {
+  const parts = (v: string) => v.replace(/^v/, "").split(".").map((n) => Number(n) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < 3; i += 1) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+  return false;
+}
+
+export type PatchManifest = { version: string; shell: string; tar: string; files: Array<{ path: string; sha256: string }> };
+
+// A patch only replaces code, so Electron and the installed packages have to be what it was built against.
+export function patchShell(electron: string, dependencies: Record<string, string>): string {
+  return `${electron}|${JSON.stringify(dependencies)}`;
+}
+
+// Why this signed manifest can't be applied, or null. Signed or not, nothing may write outside the patch's own folder.
+export function patchRefusal(manifest: PatchManifest, here: { current: string; shell: string; bad: string[] }): string | null {
+  if (!/^\d+\.\d+\.\d+$/.test(manifest.version) || !isNewerVersion(manifest.version, here.current)) return "This copy is already up to date.";
+  if (here.bad.includes(manifest.version)) return `Update ${manifest.version} failed to start here earlier.`;
+  if (manifest.shell !== here.shell) return "The update changes more than the app's own code.";
+  const entry = /^dist-electron\/main\.js$/;
+  const safe = (p: string) => /^(dist|dist-electron)\/[\w.@~+/-]+$/.test(p) && !p.split("/").includes("..");
+  const bad = manifest.files.find((f) => !safe(f.path) || !/^[a-f0-9]{64}$/.test(f.sha256));
+  if (bad) return `The update lists an unsafe file: ${bad.path}.`;
+  if (!manifest.files.some((f) => entry.test(f.path))) return "The update is missing the app's entry file.";
+  return null;
+}
+
 export function slugFromResolved(resolved: string): string {
   return resolved.replace(/^[A-Za-z]:/, (m) => m[0].toLowerCase()).replace(/[^A-Za-z0-9]+/g, "-");
 }

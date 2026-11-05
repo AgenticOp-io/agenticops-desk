@@ -46,6 +46,11 @@ jobs:
         if: matrix.label == 'windows'
         shell: bash
         run: rm -f release/*-win-x64-*.exe release/*-win-arm64-*.exe
+      - name: Build the code patch
+        if: matrix.label == 'windows'
+        env:
+          PATCH_SIGNING_KEY: ${{ secrets.PATCH_SIGNING_KEY }}
+        run: node scripts/make-patch.mjs
       - uses: actions/upload-artifact@v7
         with:
           name: AgenticOps-Desk-${{ matrix.label }}
@@ -56,6 +61,7 @@ jobs:
             release/*.zip
             release/*.AppImage
             release/*.deb
+            release/patch*
 
   release:
     name: Draft release
