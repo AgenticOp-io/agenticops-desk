@@ -169,21 +169,100 @@ test("a git remote has one key on every computer", async () => {
   assert.equal(transcript.title, "Hello there");
   assert.equal(transcript.messages.length, 2);
   assert.equal("openFiles" in prefs, false);
-  const older = { id: "a", title: "Old", updatedAt: 1, projectRemote: "https://github.com/o/r.git", projectName: "R" };
-  const newer = { id: "a", title: "New", updatedAt: 2, projectRemote: null, projectName: "" };
+  const older = { id: "a", title: "Old", updatedAt: 1, projectId: "p1", projectName: "R", slug: "", size: 0 };
+  const newer = { id: "a", title: "New", updatedAt: 2, projectId: null, projectName: "", slug: "", size: 0 };
   const merged = mergeChats([older], [newer], []);
   assert.equal(merged.length, 1);
   assert.equal(merged[0].title, "New");
-  assert.equal(merged[0].projectRemote, "https://github.com/o/r.git");
+  assert.equal(merged[0].projectId, "p1");
   assert.deepEqual(mergeChats([older], [newer], ["a"]), []);
   assert.deepEqual(mergeDeleted(["a"], ["a", "b"]), ["a", "b"]);
   const projects = mergeProjects(
-    [{ remote: "https://github.com/O/R.git", name: "R" }],
-    [{ remote: "git@github.com:o/r.git", name: "R2", branch: "dev" }],
+    [{ id: "p1", remotes: ["https://github.com/O/R.git"], name: "R" }],
+    [{ id: "p1", remotes: ["git@github.com:o/r.git", "https://github.com/N/R.git"], name: "R2" }],
   );
   assert.equal(projects.length, 1);
-  assert.equal(projects[0].name, "R2");
-  assert.equal(projects[0].branch, "dev");
+  // Each computer merges what came down with its own, so the result must not depend on who ran last.
+  assert.equal(projects[0].name, "R");
+  assert.deepEqual(projects[0].remotes, ["https://github.com/O/R.git", "https://github.com/N/R.git"]);
+  assert.deepEqual(mergeProjects(projects, [{ id: "p1", remotes: ["git@github.com:o/r.git"], name: "other-folder" }]), projects);
+});
+
+test("using a chat on an old computer does not undo a move", async () => {
+  const { mergeChats } = await import("./pureFeatures.ts");
+  const moved = { id: "a", title: "T", updatedAt: 5, projectId: "new", projectMovedAt: 5, projectName: "New", slug: "", size: 0 };
+  const used = { id: "a", title: "T2", updatedAt: 9, projectId: "old", projectName: "Old", slug: "", size: 0 };
+  for (const merged of [mergeChats([moved], [used], []), mergeChats([used], [moved], [])]) {
+    assert.equal(merged[0].projectId, "new");
+    assert.equal(merged[0].projectName, "New");
+    assert.equal(merged[0].title, "T2");
+    assert.equal(merged[0].updatedAt, 9);
+  }
+});
+
+test("synced projects attach by remote only when there is no doubt", async () => {
+  const { matchSyncedProjects } = await import("./pureFeatures.ts");
+  const remote = "https://github.com/o/r.git";
+  assert.deepEqual(matchSyncedProjects([{ id: "l", remotes: [remote] }], [{ id: "x", name: "R", remotes: ["git@github.com:o/r.git"] }]), { l: "x" });
+  // Two incoming projects on one remote: this computer's single clone could be either.
+  assert.deepEqual(
+    matchSyncedProjects([{ id: "l", remotes: [remote] }], [
+      { id: "x", name: "A", remotes: [remote] },
+      { id: "y", name: "B", remotes: [remote] },
+    ]),
+    {},
+  );
+  // Two local folders on one remote stay separate.
+  assert.deepEqual(matchSyncedProjects([{ id: "l", remotes: [remote] }, { id: "m", remotes: [remote] }], [{ id: "x", name: "R", remotes: [remote] }]), {});
+  // A project both sides already know is left alone.
+  assert.deepEqual(matchSyncedProjects([{ id: "x", remotes: [remote] }], [{ id: "x", name: "R", remotes: [remote] }]), {});
+  assert.deepEqual(matchSyncedProjects([{ id: "l" }], [{ id: "x", name: "R", remotes: [] }]), {});
+});
+
+test("cleanup proposes moved folders and only offers live duplicates", async () => {
+  const { cleanupProposals } = await import("./pureFeatures.ts");
+  const row = (id: string, p: string, exists: boolean, chats: number) => ({ id, name: id, path: p, exists, chats });
+  const plan = cleanupProposals([
+    row("gone", "C:\\Downloads\\AppOne", false, 42),
+    row("live", "C:\\products\\appone", true, 2),
+    row("a", "C:\\one\\apptwo", true, 13),
+    row("b", "C:\\two\\apptwo", true, 2),
+    row("empty", "C:\\Downloads\\appthree", false, 0),
+    row("target", "C:\\products\\appthree", true, 0),
+    row("alone", "C:\\Downloads\\solo", false, 9),
+    row("g1", "C:\\x\\twice", false, 1),
+    row("g2", "C:\\y\\twice", false, 1),
+  ]);
+  assert.deepEqual(plan.map((p) => [p.from.id, p.to.id, p.bothExist]), [
+    ["gone", "live", false],
+    ["b", "a", true],
+  ]);
+});
+
+test("overlapping sync requests share one follow-up and then stop", async () => {
+  const { oneAtATime } = await import("./pureFeatures.ts");
+  let runs = 0;
+  const sync = oneAtATime(async () => {
+    runs += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return runs;
+  });
+  const results = await Promise.all([sync(), sync(), sync()]);
+  assert.deepEqual(results, [1, 2, 2]);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(runs, 2);
+  assert.equal(await sync(), 3);
+  const failing = oneAtATime(async () => {
+    throw new Error("no");
+  });
+  await assert.rejects(Promise.all([failing(), failing()]));
+});
+
+test("a project folder has Cursor's transcript folder name", async () => {
+  const { slugFromResolved } = await import("./pureFeatures.ts");
+  assert.equal(slugFromResolved("C:\\Users\\user\\Downloads\\My_converter"), "c-Users-user-Downloads-My-converter");
+  assert.equal(slugFromResolved("C:\\Users\\user\\Downloads\\Some_Tool_1.2"), "c-Users-user-Downloads-Some-Tool-1-2");
+  assert.equal(slugFromResolved("C:\\Users\\user\\Downloads\\Data Extract"), "c-Users-user-Downloads-Data-Extract");
 });
 
 test("a run stays open while background tasks can still report", async () => {

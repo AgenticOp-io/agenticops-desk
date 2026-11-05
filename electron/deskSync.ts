@@ -5,15 +5,26 @@ import path from "node:path";
 import type { CursorChat } from "./cursor";
 import { runGit } from "./features";
 import { writeJsonAtomic } from "./jsonStore";
-import { exportLibrarySlice, flushLibrary, importSyncedLibrary, libraryPending, type LibrarySlice } from "./library";
-import { memoryDirs } from "./memory";
+import {
+  exportLibrarySlice,
+  fileNewChats,
+  flushLibrary,
+  importSyncedLibrary,
+  importSyncedProjects,
+  libraryPending,
+  rememberProjectRemotes,
+  type LibrarySlice,
+} from "./library";
+import { carryProjectMemory, memoryDirs } from "./memory";
 import { applyCursorLink, cursorArchiveChats, writeCursorArchiveThreads } from "./cursorLink";
 import {
   allowedGitRemote,
   cursorMode,
   mergeChats,
+  matchSyncedProjects,
   mergeDeleted,
   mergeProjects,
+  oneAtATime,
   portablePrefs,
   remoteKey,
   type CursorMode,
@@ -24,7 +35,7 @@ import { loadSettings, patchSettings, type UiPrefs } from "./settings";
 
 // The desk's own copy of chats, memory and settings. Project source stays in each project's repo.
 // shortcut: two computers editing the same chat at the same moment can conflict on that one file; the error is shown and nothing is force-pushed.
-// shortcut: a folder with no git remote stays on this computer.
+// A project travels by its permanent ID. Its folder is per computer, and its remotes are only a clue to which folder it is.
 
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
 
@@ -33,11 +44,9 @@ export type SyncView = {
   ok: boolean;
   note: string;
   cursor: CursorMode;
-  projects: Array<{ remote: string; name: string; local: string | null }>;
+  projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
 };
 
-let syncing: Promise<SyncView> | null = null;
-let queued = false;
 let applying = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let urlCache = "";
@@ -51,10 +60,6 @@ function configFile() {
 
 function syncDir() {
   return path.join(app.getPath("userData"), "desk-sync");
-}
-
-function checkoutFile() {
-  return path.join(app.getPath("userData"), "checkouts.json");
 }
 
 export function syncApplying() {
@@ -72,25 +77,6 @@ async function config(): Promise<string> {
     }
   }
   return urlCache;
-}
-
-async function readCheckouts(): Promise<Record<string, string>> {
-  try {
-    const raw = JSON.parse(await fs.readFile(checkoutFile(), "utf8")) as Record<string, unknown>;
-    const out: Record<string, string> = {};
-    if (raw && typeof raw === "object") {
-      for (const [key, value] of Object.entries(raw)) {
-        if (typeof value === "string" && value) out[key] = value;
-      }
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-async function writeCheckouts(map: Record<string, string>) {
-  await writeJsonAtomic(checkoutFile(), map);
 }
 
 function emptyView(url: string, note = lastNote, ok = lastOk, cursor: CursorMode = "off"): SyncView {
@@ -113,7 +99,7 @@ function asProjects(value: unknown): SyncProject[] {
   if (!Array.isArray(value)) return [];
   return value.filter((row): row is SyncProject => {
     const item = row as SyncProject;
-    return !!item && typeof item.remote === "string" && typeof item.name === "string";
+    return !!item && THREAD_ID.test(String(item.id)) && typeof item.name === "string" && Array.isArray(item.remotes);
   });
 }
 
@@ -125,15 +111,16 @@ function asChats(value: unknown): SyncChat[] {
   });
 }
 
-function chatToSync(chat: CursorChat, remoteOf: Map<string, string>): SyncChat {
-  const remote = chat.projectPath ? remoteOf.get(path.resolve(chat.projectPath).toLowerCase()) ?? null : null;
+function chatToSync(chat: CursorChat): SyncChat {
   return {
     id: chat.id,
     title: chat.title,
     updatedAt: chat.updatedAt ?? 0,
     lastUsedAt: chat.lastUsedAt,
-    projectRemote: remote,
-    projectName: chat.projectName,
+    projectId: chat.projectId ?? null,
+    projectMovedAt: chat.projectMovedAt,
+    // A filed chat takes its project's name on each computer; only an unfiled one carries its own.
+    projectName: chat.projectId ? "" : chat.projectName,
     slug: chat.slug,
     pinned: chat.pinned,
     mode: chat.mode,
@@ -143,13 +130,13 @@ function chatToSync(chat: CursorChat, remoteOf: Map<string, string>): SyncChat {
   };
 }
 
-function chatFromSync(chat: SyncChat, pathOf: Map<string, string>): CursorChat {
-  const key = chat.projectRemote ? remoteKey(chat.projectRemote) : null;
-  const projectPath = key ? pathOf.get(key) ?? null : null;
+function chatFromSync(chat: SyncChat): CursorChat {
   return {
     id: chat.id,
     slug: chat.slug || "",
-    projectPath,
+    projectId: chat.projectId ?? undefined,
+    projectMovedAt: chat.projectMovedAt,
+    projectPath: null,
     projectName: chat.projectName || "",
     title: chat.title || "Chat",
     updatedAt: chat.updatedAt || 0,
@@ -162,7 +149,7 @@ function chatFromSync(chat: SyncChat, pathOf: Map<string, string>): CursorChat {
   };
 }
 
-async function remoteOfPath(dir: string): Promise<string | null> {
+export async function remoteOfPath(dir: string): Promise<string | null> {
   if (!dir || !existsSync(dir)) return null;
   const res = await runGit(dir, ["remote", "get-url", "origin"]);
   if (!res.ok) return null;
@@ -170,9 +157,15 @@ async function remoteOfPath(dir: string): Promise<string | null> {
   return remoteKey(url) ? url : null;
 }
 
-async function branchOf(dir: string): Promise<string> {
-  const res = await runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  return res.ok ? res.output.split("\n")[0]?.trim() || "main" : "main";
+// Remembered while the folder exists: once it is moved or deleted, this is what can recognize it again.
+export async function refreshProjectRemotes() {
+  const { projects } = await exportLibrarySlice();
+  const found: Array<{ id: string; remote: string }> = [];
+  for (const project of projects) {
+    const remote = await remoteOfPath(project.path);
+    if (remote) found.push({ id: project.id, remote });
+  }
+  await rememberProjectRemotes(found);
 }
 
 // Copies a file only when the bytes differ, so a sync does not dirty the repo forever.
@@ -283,12 +276,12 @@ async function isDeskRepo(dir: string): Promise<{ ok: boolean; output: string }>
   return { ok: true, output: "" };
 }
 
-async function projectList(dir: string, checks: Record<string, string>): Promise<SyncView["projects"]> {
+async function projectList(dir: string): Promise<SyncView["projects"]> {
   const projects = asProjects(await readJson(path.join(dir, "projects.json"), []));
+  const local = new Map((await exportLibrarySlice()).projects.map((project) => [project.id, project.path]));
   return projects.map((project) => {
-    const key = remoteKey(project.remote) ?? "";
-    const local = key && checks[key] && existsSync(checks[key]) ? checks[key] : null;
-    return { remote: project.remote, name: project.name, local };
+    const folder = local.get(project.id);
+    return { id: project.id, remote: project.remotes.at(-1) ?? "", name: project.name, local: folder && existsSync(folder) ? folder : null };
   });
 }
 
@@ -310,54 +303,37 @@ async function doSync(): Promise<SyncView> {
     const desk = await isDeskRepo(dir);
     if (!desk.ok) return await viewOf(url, false, desk.output);
 
-    const slice = await exportLibrarySlice();
-    const remoteOf = new Map<string, string>();
-    const checks = await readCheckouts();
-    const localProjects: SyncProject[] = [];
-    for (const project of slice.projects) {
-      const remote = await remoteOfPath(project.path);
-      const key = remote ? remoteKey(remote) : null;
-      if (!remote || !key) continue;
-      remoteOf.set(path.resolve(project.path).toLowerCase(), remote);
-      checks[key] = project.path;
-      localProjects.push({ remote, name: project.name, branch: await branchOf(project.path) });
-    }
-    await writeCheckouts(checks);
-
     await mergeSettings(dir);
     settings = await loadSettings();
     mode = cursorMode(settings.cursorIntegration);
+
+    await refreshProjectRemotes();
     const incomingProjects = asProjects(await readJson(path.join(dir, "projects.json"), []));
+    const incomingMerges = await readJson<Record<string, string>>(path.join(dir, "project-merges.json"), {});
+    const matches = matchSyncedProjects((await exportLibrarySlice()).projects, incomingProjects);
+    const carried = await importSyncedProjects(incomingProjects, { ...incomingMerges, ...matches });
+    for (const pair of carried) await carryProjectMemory(pair.from, pair.to);
+
     const archived = mode === "off" ? [] : await cursorArchiveChats(dir);
+    await fileNewChats(archived);
+    const slice = await exportLibrarySlice();
+    const localProjects: SyncProject[] = slice.projects.map(({ id, name, remotes }) => ({ id, name, remotes }));
     const incomingChats = asChats(await readJson(path.join(dir, "chats.json"), []));
     const incomingDeleted = await readJson<string[]>(path.join(dir, "deleted.json"), []);
-    const projects = mergeProjects(localProjects, incomingProjects);
+    const projects = mergeProjects(incomingProjects.filter((project) => !slice.merged[project.id]), localProjects);
     const deleted = mergeDeleted(slice.deleted, Array.isArray(incomingDeleted) ? incomingDeleted : []);
     const previous = new Map(slice.chats.map((chat) => [chat.id, chat.updatedAt ?? 0]));
     const merged = mergeChats(
-      slice.chats.map((chat) => chatToSync(chat, remoteOf)),
-      [...incomingChats, ...archived.map((chat) => chatToSync(chat, remoteOf))],
+      slice.chats.map(chatToSync),
+      [...incomingChats, ...archived.map(chatToSync)],
       deleted,
     );
 
-    const pathOf = new Map<string, string>();
-    for (const [key, folder] of Object.entries(checks)) if (existsSync(folder)) pathOf.set(key, folder);
-    const archivedById = new Map(archived.map((chat) => [chat.id, chat]));
-    const localChats = merged.map((chat) => {
-      const row = chatFromSync(chat, pathOf);
-      const fromCursor = archivedById.get(chat.id);
-      if (!row.projectPath && fromCursor?.projectPath && existsSync(fromCursor.projectPath)) {
-        row.projectPath = fromCursor.projectPath;
-        row.projectName = fromCursor.projectName;
-        row.slug = fromCursor.slug;
-      }
-      return row;
-    });
-    await importSyncedLibrary(localChats, deleted, [...pathOf.values()]);
+    await importSyncedLibrary(merged.map(chatFromSync), deleted);
     if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(deleted));
     await mergeThreadFiles(dir, merged, previous, new Set(deleted));
-    await mergeMemory(slice, remoteOf);
-    await writeSnapshot(dir, projects, merged, deleted);
+    await mergeMemory(slice);
+    await writeSnapshot(dir, projects, merged, deleted, slice.merged);
 
     const status = await runGit(dir, ["status", "--porcelain"]);
     if (!status.ok) return await viewOf(url, false, status.output);
@@ -396,7 +372,7 @@ async function viewOf(url: string, ok: boolean, note: string): Promise<SyncView>
   lastNote = note;
   let projects: SyncView["projects"] = [];
   try {
-    if (existsSync(syncDir())) projects = await projectList(syncDir(), await readCheckouts());
+    if (existsSync(syncDir())) projects = await projectList(syncDir());
   } catch {
     projects = [];
   }
@@ -424,17 +400,14 @@ async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<st
   }
 }
 
-async function mergeMemory(slice: LibrarySlice, remoteOf: Map<string, string>) {
+async function mergeMemory(slice: LibrarySlice) {
   const root = path.join(app.getPath("userData"), "memory");
   const synced = path.join(syncDir(), "memory");
   await mergeTrees(path.join(root, "global"), path.join(synced, "global"));
   await mergeTrees(path.join(root, "orgs"), path.join(synced, "orgs"));
   for (const project of slice.projects) {
-    const remote = remoteOf.get(path.resolve(project.path).toLowerCase());
-    const key = remote ? remoteKey(remote) : null;
-    if (!key) continue;
-    const dirs = memoryDirs(project.path);
-    await mergeTrees(dirs.project, path.join(synced, "projects", key));
+    if (!project.path || !existsSync(project.path)) continue;
+    await mergeTrees(memoryDirs(project.path).project, path.join(synced, "projects", project.id));
   }
 }
 
@@ -458,10 +431,13 @@ async function mergeSettings(dir: string) {
   await writeJsonAtomic(file, { savedAt: Date.now(), prefs });
 }
 
-async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncChat[], deleted: string[]) {
-  await writeJsonAtomic(path.join(dir, "projects.json"), projects);
-  await writeJsonAtomic(path.join(dir, "chats.json"), chats);
-  await writeJsonAtomic(path.join(dir, "deleted.json"), deleted);
+async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncChat[], deleted: string[], projectMerges: Record<string, string>) {
+  await writeJsonAtomic(path.join(dir, "project-merges.json"), projectMerges);
+  // Sorted, so the files are identical whichever computer wrote them and nothing commits without a real change.
+  const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  await writeJsonAtomic(path.join(dir, "projects.json"), [...projects].sort(byId));
+  await writeJsonAtomic(path.join(dir, "chats.json"), [...chats].sort(byId));
+  await writeJsonAtomic(path.join(dir, "deleted.json"), [...deleted].sort());
 }
 
 export function scheduleDeskSync() {
@@ -474,26 +450,11 @@ export function scheduleDeskSync() {
   });
 }
 
-export function syncNow(): Promise<SyncView> {
-  if (syncing) {
-    queued = true;
-    return syncing.then(() => syncNow());
-  }
-  const run = doSync().finally(() => {
-    syncing = null;
-  });
-  syncing = run;
-  return run.then((view) => {
-    if (!queued) return view;
-    queued = false;
-    return syncNow();
-  });
-}
+export const syncNow = oneAtATime(doSync);
 
 export async function syncStatus(): Promise<SyncView> {
   const url = await config();
-  const checks = await readCheckouts();
-  const projects = existsSync(syncDir()) ? await projectList(syncDir(), checks) : [];
+  const projects = existsSync(syncDir()) ? await projectList(syncDir()) : [];
   return { url, ok: lastOk, note: lastNote, cursor: await modeNow(), projects };
 }
 
@@ -546,11 +507,5 @@ export async function cloneSyncedProject(remote: string, parent: string): Promis
   if (existsSync(dest)) return { ok: false, output: `${dest} already exists.` };
   const cloned = await runGit(parent, ["clone", remote, name], 300_000);
   if (!cloned.ok) return cloned;
-  const key = remoteKey(remote);
-  if (key) {
-    const checks = await readCheckouts();
-    checks[key] = dest;
-    await writeCheckouts(checks);
-  }
   return { ok: true, output: cloned.output || `Cloned into ${dest}`, path: dest };
 }

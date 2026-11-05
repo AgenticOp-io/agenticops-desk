@@ -177,21 +177,23 @@ export function allowedGitRemote(url: string): boolean {
   return /^https:\/\//i.test(s) || /^git@/i.test(s) || /^ssh:\/\//i.test(s);
 }
 
-export type SyncProject = { remote: string; name: string; branch?: string };
+// A project's ID never changes. Folders are per computer, so they stay out of the sync repository.
+export type SyncProject = { id: string; name: string; remotes: string[] };
 
 export type SyncChat = {
   id: string;
   title: string;
   updatedAt: number;
   lastUsedAt?: number;
-  projectRemote: string | null;
+  projectId: string | null;
+  projectMovedAt?: number;
   projectName: string;
-  slug?: string;
+  slug: string;
   pinned?: boolean;
   mode?: string;
   model?: string;
   parentId?: string;
-  size?: number;
+  size: number;
 };
 
 // Layout and folder paths differ per computer. Everything else in settings can travel.
@@ -250,37 +252,128 @@ export function portablePrefs(prefs: Record<string, unknown>): Record<string, un
   return out;
 }
 
+// A new remote goes last: after a repository changes owner, that is the address to clone. Known ones keep their
+// place and spelling, so two computers settle on the same list.
+export function mergeRemotes(a: string[] = [], b: string[] = []): string[] {
+  const map = new Map<string, string>();
+  for (const remote of [...a, ...b]) {
+    const key = remoteKey(remote);
+    if (key && !map.has(key)) map.set(key, remote);
+  }
+  return [...map.values()];
+}
+
+// The first name stands. A folder can have a different name on each computer, and last-wins would have them
+// overwrite each other on every sync.
 export function mergeProjects(a: SyncProject[], b: SyncProject[]): SyncProject[] {
   const map = new Map<string, SyncProject>();
   for (const project of [...a, ...b]) {
-    const key = remoteKey(project.remote);
-    if (!key || !project.remote) continue;
-    const prev = map.get(key);
-    map.set(key, prev ? { remote: project.remote || prev.remote, name: project.name || prev.name, branch: project.branch || prev.branch } : project);
+    if (!project.id) continue;
+    const prev = map.get(project.id);
+    map.set(project.id, {
+      id: project.id,
+      name: prev?.name || project.name || "",
+      remotes: mergeRemotes(prev?.remotes, project.remotes),
+    });
   }
   return [...map.values()];
+}
+
+// Pairs a local project that was never synced with the incoming one, when one remote says so without doubt.
+// Two folders on one remote stay apart; the user picks with Locate folder.
+export function matchSyncedProjects(local: Array<{ id: string; remotes?: string[] }>, incoming: SyncProject[]): Record<string, string> {
+  const keys = (remotes: string[] = []) => remotes.map(remoteKey).filter(Boolean);
+  const localIds = new Set(local.map((row) => row.id));
+  const incomingIds = new Set(incoming.map((row) => row.id));
+  const out: Record<string, string> = {};
+  for (const project of incoming) {
+    if (localIds.has(project.id)) continue;
+    for (const key of keys(project.remotes)) {
+      if (incoming.filter((row) => keys(row.remotes).includes(key)).length !== 1) continue;
+      const found = local.filter((row) => !incomingIds.has(row.id) && !out[row.id] && keys(row.remotes).includes(key));
+      if (found.length !== 1) continue;
+      out[found[0].id] = project.id;
+      break;
+    }
+  }
+  return out;
+}
+
+export type CleanupRow = { id: string; name: string; path: string; exists: boolean; chats: number };
+export type CleanupProposal = { from: CleanupRow; to: CleanupRow; bothExist: boolean };
+
+// Same folder name in two places. A folder that is gone was probably moved. Two live folders may be separate copies,
+// so those are only offered, for the user to decide.
+export function cleanupProposals(rows: CleanupRow[]): CleanupProposal[] {
+  const byName = new Map<string, CleanupRow[]>();
+  for (const row of rows) {
+    if (!row.path) continue;
+    const name = row.path.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() ?? "";
+    byName.set(name, [...(byName.get(name) ?? []), row]);
+  }
+  const out: CleanupProposal[] = [];
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const live = group.filter((row) => row.exists).sort((a, b) => b.chats - a.chats);
+    if (live.length === 1) {
+      for (const row of group) if (!row.exists && row.chats) out.push({ from: row, to: live[0], bothExist: false });
+    } else if (live.length === 2 && group.length === 2 && live[1].chats) {
+      out.push({ from: live[1], to: live[0], bothExist: true });
+    }
+  }
+  return out;
+}
+
+// Runs one at a time. Calls that arrive during a run share one follow-up run, which sees everything they wanted saved.
+export function oneAtATime<T>(work: () => Promise<T>): () => Promise<T> {
+  let running: Promise<T> | null = null;
+  let next: Promise<T> | null = null;
+  const call = (): Promise<T> => {
+    if (running) {
+      next ??= running.then(
+        () => ((next = null), call()),
+        () => ((next = null), call()),
+      );
+      return next;
+    }
+    running = work().finally(() => {
+      running = null;
+    });
+    return running;
+  };
+  return call;
+}
+
+export function slugFromResolved(resolved: string): string {
+  return resolved.replace(/^[A-Za-z]:/, (m) => m[0].toLowerCase()).replace(/[^A-Za-z0-9]+/g, "-");
 }
 
 export function mergeDeleted(a: string[], b: string[]): string[] {
   return [...new Set([...a, ...b].filter((id) => typeof id === "string" && id.length > 0))];
 }
 
-// Newer updatedAt wins. A deleted id stays deleted on every computer.
+// Newer updatedAt wins, except the project: only a move changes that, so using a chat on an old computer can't undo one.
+// A deleted id stays deleted on every computer.
 export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: string[]): SyncChat[] {
   const gone = new Set(deleted);
   const map = new Map<string, SyncChat>();
   for (const chat of [...local, ...incoming]) {
     if (!chat?.id || gone.has(chat.id)) continue;
     const prev = map.get(chat.id);
-    if (!prev || (chat.updatedAt ?? 0) >= (prev.updatedAt ?? 0)) {
-      map.set(chat.id, {
-        ...prev,
-        ...chat,
-        title: chat.title || prev?.title || "",
-        projectRemote: chat.projectRemote || prev?.projectRemote || null,
-        projectName: chat.projectName || prev?.projectName || "",
-      });
+    if (!prev) {
+      map.set(chat.id, chat);
+      continue;
     }
+    const [older, newer] = (chat.updatedAt ?? 0) >= (prev.updatedAt ?? 0) ? [prev, chat] : [chat, prev];
+    const [earlier, moved] = (chat.projectMovedAt ?? 0) >= (prev.projectMovedAt ?? 0) ? [prev, chat] : [chat, prev];
+    map.set(chat.id, {
+      ...older,
+      ...newer,
+      title: newer.title || older.title || "",
+      projectId: moved.projectId ?? earlier.projectId ?? null,
+      projectMovedAt: moved.projectMovedAt ?? earlier.projectMovedAt,
+      projectName: moved.projectName || earlier.projectName || "",
+    });
   }
   return [...map.values()];
 }

@@ -1032,11 +1032,17 @@ export function pendingRuns(): Array<{ chatId: string; workspace?: string }> {
     .map(([chatId, s]) => ({ chatId, workspace: s.workspace }));
 }
 
-export function resumePendingRun(win: BrowserWindow | null, chatId: string, fallbackWorkspace: string) {
+export function resumePendingRun(win: BrowserWindow | null, chatId: string) {
   const stored = loadStore()[chatId];
   const pending = stored?.pending;
   if (!pending) return false;
-  const cwd = stored.workspace && existsSync(stored.workspace) ? stored.workspace : fallbackWorkspace;
+  // Its folder is gone. Running it in whatever folder is open would edit the wrong project.
+  if (!stored.workspace || !existsSync(stored.workspace)) {
+    patchStored(chatId, (s) => delete s.pending);
+    send(win, { kind: "error", text: `This run was cut off and its folder is gone: ${stored.workspace ?? "unknown"}. Send the message again after locating the folder.`, chatId, running: false });
+    return false;
+  }
+  const cwd = stored.workspace;
   // If the CLI never reported a session, the original prompt was never seen; send it again.
   const prompt =
     pending.started && stored.claudeSession
@@ -1162,13 +1168,16 @@ export function runClaude(opts: RunOptions) {
   session.lastPrompt = opts.prompt;
   session.fixAttempts = 0;
 
+  // A CLI session lives under the folder it started in. A chat since moved to another folder starts a new
+  // session there with its transcript.
+  if (session.claudeSession && session.workspace && path.resolve(session.workspace).toLowerCase() !== path.resolve(opts.workspace).toLowerCase()) {
+    session.claudeSession = undefined;
+  }
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
   const scrubbed = scrubOutgoing(resuming ? opts.prompt : withHistory(opts.prompt, opts.history));
   const prompt = scrubbed.text;
-  // A CLI session lives under the folder it started in, so resume it there.
-  const cwd =
-    resuming && session.workspace && existsSync(session.workspace) ? session.workspace : opts.workspace;
+  const cwd = opts.workspace;
   session.workspace = cwd;
   session.engine = "claude";
   session.stopping = false;

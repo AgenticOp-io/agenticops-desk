@@ -184,7 +184,7 @@ contextBridge.exposeInMainWorld("desk", {
       ok: boolean;
       note: string;
       cursor: "off" | "partial" | "full";
-      projects: Array<{ remote: string; name: string; local: string | null }>;
+      projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
     }>,
   setSyncUrl: (url: string) =>
     ipcRenderer.invoke("sync:set", url) as Promise<{
@@ -192,7 +192,7 @@ contextBridge.exposeInMainWorld("desk", {
       ok: boolean;
       note: string;
       cursor: "off" | "partial" | "full";
-      projects: Array<{ remote: string; name: string; local: string | null }>;
+      projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
     }>,
   setCursorIntegration: (mode: "off" | "partial" | "full") =>
     ipcRenderer.invoke("sync:cursor", mode) as Promise<{
@@ -200,7 +200,7 @@ contextBridge.exposeInMainWorld("desk", {
       ok: boolean;
       note: string;
       cursor: "off" | "partial" | "full";
-      projects: Array<{ remote: string; name: string; local: string | null }>;
+      projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
     }>,
   syncNow: () =>
     ipcRenderer.invoke("sync:now") as Promise<{
@@ -208,10 +208,16 @@ contextBridge.exposeInMainWorld("desk", {
       ok: boolean;
       note: string;
       cursor: "off" | "partial" | "full";
-      projects: Array<{ remote: string; name: string; local: string | null }>;
+      projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
     }>,
-  cloneSyncedProject: (remote: string) =>
-    ipcRenderer.invoke("sync:clone", remote) as Promise<{ ok: boolean; output: string; path?: string }>,
+  chatFolder: (chatId: string) => ipcRenderer.invoke("chat:folder", chatId) as Promise<{ folder: string; changed: boolean } | null>,
+  moveChat: (chatId: string, projectId: string | null) => ipcRenderer.invoke("chat:move", chatId, projectId),
+  locateProject: (projectId: string) => ipcRenderer.invoke("project:locate", projectId) as Promise<boolean>,
+  projectCleanupPlan: () => ipcRenderer.invoke("cleanup:plan"),
+  applyProjectCleanup: (merges: Array<{ from: string; to: string }>) =>
+    ipcRenderer.invoke("cleanup:apply", merges) as Promise<{ moved: number; backup: string }>,
+  cloneSyncedProject: (remote: string, projectId: string) =>
+    ipcRenderer.invoke("sync:clone", remote, projectId) as Promise<{ ok: boolean; output: string; path?: string }>,
   readProjectDoc: (cwd: string, name: string) => ipcRenderer.invoke("project:read", cwd, name) as Promise<string>,
   writeProjectDoc: (cwd: string, name: string, contents: string) =>
     ipcRenderer.invoke("project:write", cwd, name, contents) as Promise<boolean>,

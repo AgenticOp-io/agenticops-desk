@@ -14,6 +14,7 @@ import { Help } from "./Help";
 import { Briefing, Inbox, WatchChips } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
+import { ProjectCleanup } from "./ProjectCleanup";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
@@ -41,7 +42,7 @@ function setDragData(e: DragEvent, payload: DragPayload) {
 
 type Entry = { name: string; path: string; isDir: boolean };
 type Msg = TranscriptMsg;
-type SideGroup = { key: string; name: string; path: string; slug: string; chats: CursorChat[] };
+type SideGroup = { key: string; name: string; path: string; slug: string; exists: boolean; projectId?: string; chats: CursorChat[] };
 type SideRow =
   | { kind: "project"; id: string; group: SideGroup }
   | { kind: "chat"; id: string; group: SideGroup; chat: CursorChat }
@@ -751,6 +752,20 @@ export function App() {
     markUsed(id, workspace);
   };
 
+  // Null means the user declined to pick a folder, so nothing should run.
+  const placeChat = async (chat: CursorChat) => {
+    const placed = await window.desk.chatFolder(chat.id);
+    if (!placed) {
+      setStatus("Not sent. This chat needs a folder first.");
+      return null;
+    }
+    if (!placed.changed) return { folder: placed.folder, chat };
+    const list = await reloadCursor();
+    setChats(list);
+    await focusProject(placed.folder);
+    return { folder: placed.folder, chat: list.find((c) => c.id === chat.id) ?? chat };
+  };
+
   const send = async (
     extra: { images: ImageAttachment[]; mentions: string[]; text?: string; chat?: CursorChat; model?: string } = {
       images: [],
@@ -758,10 +773,14 @@ export function App() {
     },
   ) => {
     const typed = (extra.text ?? prompt).trim();
-    const chat = extra.chat ?? activeChat;
+    const wanted = extra.chat ?? activeChat;
     const useModel = extra.model ?? model;
-    if ((!typed && !extra.images.length) || !chat) return;
-    const guiding = Boolean(runningByChat[chat.id]);
+    if ((!typed && !extra.images.length) || !wanted) return;
+    const guiding = Boolean(runningByChat[wanted.id]);
+    // A guide goes to the run already going, wherever it is.
+    const placed = guiding ? { folder: wanted.projectPath || workspace, chat: wanted } : await placeChat(wanted);
+    if (!placed) return;
+    const chat = placed.chat;
     const text = typed || "(see attached image)";
     persistIds.current.add(chat.id);
     // A new message after a finished run accepts that run's edits. A guide during a run leaves them in place.
@@ -793,7 +812,7 @@ export function App() {
         ? { ...(p[chat.id] ?? { steps: [], phase: "thinking" }), status: "Following your instruction…" }
         : { status: "Starting…", steps: [], phase: "starting" },
     }));
-    markUsed(chat.id, chat.projectPath || workspace);
+    markUsed(chat.id, placed.folder);
     const history = nextMsgs
       .slice(0, -1)
       .filter((m) => (m.role === "user" || m.role === "assistant") && m.text.trim())
@@ -806,7 +825,7 @@ export function App() {
       prompt: promptText,
       history,
       chatId: chat.id,
-      workspace: chat.projectPath || workspace,
+      workspace: placed.folder,
       permissionMode: mode,
       model: useModel || undefined,
       images: extra.images.length ? extra.images : undefined,
@@ -853,9 +872,10 @@ export function App() {
   };
 
   const catchUp = async () => {
-    const chat = activeChat;
-    if (!chat || runningByChat[chat.id]) return;
-    const cwd = chat.projectPath || workspace;
+    if (!activeChat || runningByChat[activeChat.id]) return;
+    const placed = await placeChat(activeChat);
+    if (!placed) return;
+    const { chat, folder: cwd } = placed;
     persistIds.current.add(chat.id);
     setThreads((t) => ({
       ...t,
@@ -877,6 +897,18 @@ export function App() {
     setChats((all) => all.map((c) => (c.id === chat.id ? chat : c)));
     setActiveChat((cur) => (cur?.id === chat.id ? chat : cur));
     void window.desk.patchChat(chat.id, chat);
+  };
+
+  const [movingChat, setMovingChat] = useState<CursorChat | null>(null);
+
+  const moveChatTo = async (chat: CursorChat, projectId: string | null) => {
+    setMovingChat(null);
+    const moved = await window.desk.moveChat(chat.id, projectId);
+    if (!moved) return;
+    const list = await reloadCursor();
+    setChats(list);
+    setActiveChat((cur) => (cur?.id === chat.id ? list.find((c) => c.id === chat.id) ?? cur : cur));
+    setStatus(`Moved “${chat.title}” to ${moved.projectName}`);
   };
 
   // Electron has no window.prompt, so renaming edits the title in place in the sidebar.
@@ -1057,6 +1089,7 @@ export function App() {
       path: string;
       slug: string;
       exists: boolean;
+      projectId?: string;
       lastChatAt: number;
       lastUsedAt: number;
       chats: CursorChat[];
@@ -1078,9 +1111,10 @@ export function App() {
       return cur;
     };
     for (const p of projects) {
-      const key = (p.path || p.slug).toLowerCase();
+      const key = (p.path || p.id || p.slug).toLowerCase();
       put(key, {
         key,
+        projectId: p.id,
         name: p.name,
         path: p.path,
         slug: p.slug,
@@ -1094,10 +1128,11 @@ export function App() {
       const slugKey = c.slug.toLowerCase();
       const g =
         (pathKey && map.get(pathKey)) ||
+        (c.projectId && map.get(c.projectId.toLowerCase())) ||
         map.get(slugKey) ||
         put(slugKey, {
           key: slugKey,
-          name: c.projectName,
+          name: c.projectPath || c.projectId ? c.projectName : "No project",
           path: c.projectPath || "",
           slug: c.slug,
           exists: Boolean(c.projectPath),
@@ -1510,6 +1545,7 @@ export function App() {
                     <Glyph name="project" />
                   </span>
                   <span className="list-title">{g.name}</span>
+                  {g.projectId && !g.exists && <span className="list-sub" title="This project's folder is not on this computer. Right-click to locate it.">no folder</span>}
                   {projectRun && (
                     <span className={`phase phase-${projectRun.phase ?? "tool"}`} title={projectRun.status}>
                       {phaseWord(projectRun)}
@@ -1786,6 +1822,15 @@ export function App() {
                 onClick={() => {
                   const chat = chats.find((c) => c.id === menu.chatId);
                   setMenu(null);
+                  if (chat) setMovingChat(chat);
+                }}
+              >
+                Move to project…
+              </button>
+              <button
+                onClick={() => {
+                  const chat = chats.find((c) => c.id === menu.chatId);
+                  setMenu(null);
                   if (chat) void removeChat(chat);
                 }}
               >
@@ -1803,7 +1848,29 @@ export function App() {
               <button onClick={() => hideChat(menu.chatId!)}>Hide chat</button>
             </>
           ) : menu.projectKey ? (
-            <button onClick={() => hideProject(menu.projectKey!)}>Hide project</button>
+            <>
+              {(() => {
+                const g = groups.find((x) => x.key === menu.projectKey);
+                if (!g?.projectId) return null;
+                const id = g.projectId;
+                return (
+                  <button
+                    onClick={() => {
+                      setMenu(null);
+                      void window.desk.locateProject(id).then(async (done) => {
+                        if (!done) return;
+                        const list = await reloadCursor();
+                        setChats(list);
+                        setActiveChat((cur) => (cur ? list.find((c) => c.id === cur.id) ?? cur : cur));
+                      });
+                    }}
+                  >
+                    {g.exists ? "Change folder…" : "Locate folder…"}
+                  </button>
+                );
+              })()}
+              <button onClick={() => hideProject(menu.projectKey!)}>Hide project</button>
+            </>
           ) : null}
           {(menu.chatId || menu.projectKey) &&
           (hiddenGroupList.length > 0 || hiddenChatList.length > 0) ? (
@@ -1889,6 +1956,32 @@ export function App() {
           </div>
         </div>
       )}
+      {movingChat && (
+        <div className="modal" onClick={() => setMovingChat(null)}>
+          <div className="palette replay" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-head">
+              <strong>Move “{movingChat.title}” to…</strong>
+              <button className="ghost" onClick={() => setMovingChat(null)}>
+                Cancel
+              </button>
+            </div>
+            <p className="settings-hint">The chat runs in that project's folder from its next message, with its history handed over.</p>
+            <div className="palette-list">
+              <button className="list-item" onClick={() => void moveChatTo(movingChat, null)}>
+                <span className="list-title">Choose a folder…</span>
+              </button>
+              {projects
+                .filter((p) => p.id && p.id !== movingChat.projectId)
+                .map((p) => (
+                  <button key={p.id} className="list-item" onClick={() => void moveChatTo(movingChat, p.id!)}>
+                    <span className="list-title">{p.name}</span>
+                    <span className="list-sub">{p.exists ? p.path : p.path ? `${p.path} (folder missing)` : "not on this computer"}</span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
       {showHelp && <Help onClose={() => setShowHelp(false)} />}
       {paletteOpen && <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />}
 
@@ -1910,6 +2003,14 @@ export function App() {
                   if (ws) void refreshTree(ws);
                 });
               }}
+            />
+            <ProjectCleanup
+              onDone={() =>
+                void reloadCursor().then((list) => {
+                  setChats(list);
+                  setActiveChat((cur) => (cur ? list.find((c) => c.id === cur.id) ?? cur : cur));
+                })
+              }
             />
             <label className="settings-row">
               <span>Theme</span>

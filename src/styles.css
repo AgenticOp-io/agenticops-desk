@@ -879,6 +879,8 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
   margin: 10px 0;
   font-size: 13px;
 }
+.cleanup-row { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; font-size: 12px; }
+.cleanup-row span { min-width: 0; overflow-wrap: anywhere; }
 .settings-row em { font-style: normal; color: var(--muted); text-align: right; }
 .settings-row input[type="range"] { width: 100%; }
 .settings-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }

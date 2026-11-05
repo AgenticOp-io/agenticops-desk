@@ -5,7 +5,7 @@ type SyncView = {
   ok: boolean;
   note: string;
   cursor: "off" | "partial" | "full";
-  projects: Array<{ remote: string; name: string; local: string | null }>;
+  projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
 };
 
 const CURSOR_MODES = [
@@ -37,8 +37,8 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
       <div className="settings-label">Sync</div>
       <p className="settings-hint">
         A private git repository shared by your computers. Chats, memory and settings are pushed there. API keys stay on this
-        computer. Create an empty private repository and paste its address. Each project is remembered by its own git remote;
-        clone it here when you want the files.
+        computer. Create an empty private repository and paste its address. Each project keeps its chats on every computer;
+        clone it here when you want the files, or locate its folder from the sidebar.
       </p>
       <div className="provider-line">
         <input
@@ -103,17 +103,17 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
       </div>
       {view?.note && <p className="settings-hint">{view.note}</p>}
       {view?.projects.map((project) => (
-        <div className="dock-row" key={project.remote}>
+        <div className="dock-row" key={project.id}>
           <span>
-            {project.name} {project.local ? "· on this computer" : "· not cloned here"}
+            {project.name} {project.local ? "· on this computer" : "· not on this computer"}
           </span>
-          {!project.local && (
+          {!project.local && project.remote && (
             <button
               type="button"
               className="btn"
               onClick={() => {
                 setBusy(true);
-                void window.desk.cloneSyncedProject(project.remote).then((result) => {
+                void window.desk.cloneSyncedProject(project.remote, project.id).then((result) => {
                   setBusy(false);
                   setView((cur) => (cur ? { ...cur, ok: result.ok, note: result.output } : cur));
                   if (result.ok) {

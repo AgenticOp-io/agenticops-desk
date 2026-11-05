@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { createReadStream } from "node:fs";
+import { slugFromResolved } from "./pureFeatures";
 
 export type CursorProject = {
+  id?: string;
   name: string;
   path: string;
   slug: string;
@@ -21,6 +23,9 @@ export type CursorChat = {
   slug: string;
   projectPath: string | null;
   projectName: string;
+  // The permanent project. Only an explicit move changes it; projectPath follows it.
+  projectId?: string;
+  projectMovedAt?: number;
   title: string;
   updatedAt: number;
   lastUsedAt?: number;
@@ -73,10 +78,7 @@ export function cursorUserDir() {
 }
 
 export function slugFromPath(abs: string): string {
-  return path
-    .resolve(abs)
-    .replace(/^[A-Za-z]:/, (m) => m[0].toLowerCase())
-    .replace(/[:\\/]+/g, "-");
+  return slugFromResolved(path.resolve(abs));
 }
 
 function fileUriToPath(uri: string): string | null {
@@ -426,7 +428,7 @@ export async function listCursorProjects(): Promise<CursorProject[]> {
     if (already) continue;
     const last = chats.reduce((m, c) => Math.max(m, c.mtime), 0);
     projects.set(`slug:${slug}`, {
-      name: slug.split("-").slice(-1)[0] || slug,
+      name: slug === "empty-window" ? "No project" : slug.split("-").slice(-1)[0] || slug,
       path: "",
       slug,
       exists: false,

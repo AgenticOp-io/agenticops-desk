@@ -95,6 +95,7 @@ export type ClaudeEvent = {
 };
 
 export type CursorProject = {
+  id?: string;
   name: string;
   path: string;
   slug: string;
@@ -109,6 +110,8 @@ export type CursorChat = {
   slug: string;
   projectPath: string | null;
   projectName: string;
+  projectId?: string;
+  projectMovedAt?: number;
   title: string;
   updatedAt: number;
   lastUsedAt?: number;
@@ -118,6 +121,9 @@ export type CursorChat = {
   model?: string;
   parentId?: string;
 };
+
+export type CleanupRow = { id: string; name: string; path: string; exists: boolean; chats: number };
+export type CleanupProposal = { from: CleanupRow; to: CleanupRow; bothExist: boolean };
 
 export type CursorChatDetail = CursorChat & {
   messages: Array<{ role: "user" | "assistant" | "system"; text: string }>;
@@ -231,30 +237,35 @@ declare global {
         ok: boolean;
         note: string;
         cursor: "off" | "partial" | "full";
-        projects: Array<{ remote: string; name: string; local: string | null }>;
+        projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
       }>;
       setSyncUrl: (url: string) => Promise<{
         url: string;
         ok: boolean;
         note: string;
         cursor: "off" | "partial" | "full";
-        projects: Array<{ remote: string; name: string; local: string | null }>;
+        projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
       }>;
       setCursorIntegration: (mode: "off" | "partial" | "full") => Promise<{
         url: string;
         ok: boolean;
         note: string;
         cursor: "off" | "partial" | "full";
-        projects: Array<{ remote: string; name: string; local: string | null }>;
+        projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
       }>;
       syncNow: () => Promise<{
         url: string;
         ok: boolean;
         note: string;
         cursor: "off" | "partial" | "full";
-        projects: Array<{ remote: string; name: string; local: string | null }>;
+        projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
       }>;
-      cloneSyncedProject: (remote: string) => Promise<{ ok: boolean; output: string; path?: string }>;
+      chatFolder: (chatId: string) => Promise<{ folder: string; changed: boolean } | null>;
+      moveChat: (chatId: string, projectId: string | null) => Promise<CursorChat | null>;
+      locateProject: (projectId: string) => Promise<boolean>;
+      projectCleanupPlan: () => Promise<CleanupProposal[]>;
+      applyProjectCleanup: (merges: Array<{ from: string; to: string }>) => Promise<{ moved: number; backup: string }>;
+      cloneSyncedProject: (remote: string, projectId: string) => Promise<{ ok: boolean; output: string; path?: string }>;
       readProjectDoc: (cwd: string, name: string) => Promise<string>;
       writeProjectDoc: (cwd: string, name: string, contents: string) => Promise<boolean>;
       openShell: (cwd: string) => Promise<{ id: string; backlog: string }>;

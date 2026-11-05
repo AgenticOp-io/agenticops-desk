@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
@@ -56,6 +57,19 @@ export function memoryDirs(workspace: string) {
     orgName: org,
     project: claudeProjectMemoryDir(workspace),
   };
+}
+
+// A project's folder changed or two projects became one. Notes the new folder lacks come over; nothing is overwritten.
+export async function carryProjectMemory(fromFolder: string, toFolder: string) {
+  const from = claudeProjectMemoryDir(fromFolder);
+  const to = claudeProjectMemoryDir(toFolder);
+  if (from === to || !existsSync(from)) return;
+  const index = path.join(to, INDEX);
+  const before = existsSync(index) ? readFileSync(index, "utf8") : "";
+  mkdirSync(to, { recursive: true });
+  await fs.cp(from, to, { recursive: true, force: false });
+  const pointers = readFileSync(path.join(from, INDEX), "utf8").split(/\r?\n/).filter((line) => line.startsWith("- [") && !before.includes(line));
+  if (before && pointers.length) writeFileSync(index, `${before.trimEnd()}\n${pointers.join("\n")}\n`);
 }
 
 function ensureScope(dir: string, title: string, extra = "") {

@@ -50,9 +50,13 @@ import {
 } from "./cursor";
 import {
   addProject,
+  applyProjectCleanup,
   chatLastUsedMap,
   importCursorLibrary,
   lastUsedProjects,
+  locateProject,
+  moveChatToProject,
+  projectCleanupPlan,
   listLibraryProjects,
   deleteChat,
   deletedChatIds,
@@ -61,7 +65,6 @@ import {
   patchChat,
   searchMessages,
   rememberChats,
-  rememberProjects,
   rememberedChats,
   removeProject,
   saveThread,
@@ -69,7 +72,18 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
-import { cloneSyncedProject, scheduleDeskSync, setCursorIntegration, setSyncUrl, syncApplying, syncNow, syncStatus } from "./deskSync";
+import { carryProjectMemory } from "./memory";
+import {
+  cloneSyncedProject,
+  refreshProjectRemotes,
+  remoteOfPath,
+  scheduleDeskSync,
+  setCursorIntegration,
+  setSyncUrl,
+  syncApplying,
+  syncNow,
+  syncStatus,
+} from "./deskSync";
 import {
   checkForUpdate,
   closeAllShells,
@@ -358,22 +372,25 @@ app.whenReady().then(async () => {
   });
   onNotificationClick(() => showWindow());
   createWindow();
-  setTimeout(() => void syncNow(), 5000);
+  setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
   setInterval(() => void syncNow(), 3 * 60_000);
-  for (const run of pendingRuns()) resumePendingRun(win, run.chatId, run.workspace || workspace);
+  for (const run of pendingRuns()) resumePendingRun(win, run.chatId);
   // Watch and react: new errors in a watched log go to that chat, unless it is busy or waiting on the user.
   initWatches((w, lines) => {
     const state = chatState(w.chatId);
     if (state.running || state.waiting) return false;
     void rememberedChats().then((chats) => {
       const chat = chats.find((c) => c.id === w.chatId);
-      const cwd = chat?.projectPath && existsSync(chat.projectPath) ? chat.projectPath : workspace;
+      const cwd = chat?.projectPath && existsSync(chat.projectPath) ? chat.projectPath : "";
       win?.webContents.send("claude:event", {
         kind: "note",
         chatId: w.chatId,
         running: false,
-        text: `Watched log reported an error: ${path.basename(w.file)}`,
+        text: cwd
+          ? `Watched log reported an error: ${path.basename(w.file)}`
+          : `Watched log reported an error: ${path.basename(w.file)}. This chat's folder is not on this computer, so the agent did not start.`,
       });
+      if (!cwd) return;
       runClaude({
         win,
         chatId: w.chatId,
@@ -445,20 +462,79 @@ ipcMain.handle("workspace:set", (_e, dir: string) => {
   return setWorkspace(dir);
 });
 
-ipcMain.handle("cursor:projects", async () => {
-  const list = await listLibraryProjects();
-  await rememberProjects(list);
-  return list;
-});
+ipcMain.handle("cursor:projects", () => listLibraryProjects());
 ipcMain.handle("projects:add", async () => {
   const result = await dialog.showOpenDialog(win!, {
     title: "Add folder",
     properties: ["openDirectory"],
   });
   if (result.canceled || !result.filePaths[0]) return listLibraryProjects();
-  const dir = await addProject(result.filePaths[0]);
+  const dir = await addProject(result.filePaths[0], await remoteOfPath(result.filePaths[0]));
   setWorkspace(dir);
   return listLibraryProjects();
+});
+
+async function pickFolder(title: string) {
+  const result = await dialog.showOpenDialog(win!, { title, properties: ["openDirectory"] });
+  return result.canceled ? null : result.filePaths[0] ?? null;
+}
+
+async function locateAndCarry(projectId: string, dir: string) {
+  const carried = await locateProject(projectId, dir);
+  if (carried?.from && carried.to) await carryProjectMemory(carried.from, carried.to);
+}
+
+// The folder a chat runs in. A chat never falls back to whichever folder is open: if it has no folder here, the user decides.
+ipcMain.handle("chat:folder", async (_e, chatId: string) => {
+  const find = async () => (await rememberedChats()).find((c) => c.id === chatId);
+  const chat = await find();
+  if (chat?.projectPath && existsSync(chat.projectPath)) return { folder: chat.projectPath, changed: false };
+  if (chat?.projectId) {
+    const { response } = await dialog.showMessageBox(win!, {
+      type: "question",
+      message: `The folder for ${chat.projectName} is not on this computer.`,
+      detail: `${chat.projectPath ? `It was at ${chat.projectPath}. ` : ""}Locate the folder to run this chat. Every chat in that project follows it.`,
+      buttons: ["Locate folder…", "Cancel"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    const dir = response === 0 ? await pickFolder(`Locate ${chat.projectName}`) : null;
+    if (!dir) return null;
+    await locateAndCarry(chat.projectId, dir);
+    return { folder: (await find())?.projectPath ?? dir, changed: true };
+  }
+  const open = workspace && existsSync(workspace) ? workspace : "";
+  const buttons = [...(open ? [`Use ${path.basename(open)}`] : []), "Choose folder…", "Cancel"];
+  const { response } = await dialog.showMessageBox(win!, {
+    type: "question",
+    message: "This chat is not in a project yet.",
+    detail: "Pick the folder it should run in. It stays in that project until you move it.",
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+  });
+  if (response === buttons.length - 1) return null;
+  const dir = open && response === 0 ? open : await pickFolder("Choose a folder for this chat");
+  if (!dir) return null;
+  await moveChatToProject(chatId, { folder: dir }, "first run");
+  return { folder: dir, changed: true };
+});
+ipcMain.handle("chat:move", async (_e, chatId: string, projectId: string | null) => {
+  if (projectId) return moveChatToProject(chatId, { projectId });
+  const dir = await pickFolder("Move this chat to the project in…");
+  return dir ? moveChatToProject(chatId, { folder: dir }) : null;
+});
+ipcMain.handle("project:locate", async (_e, projectId: string) => {
+  const dir = await pickFolder("Locate this project's folder");
+  if (!dir) return false;
+  await locateAndCarry(projectId, dir);
+  return true;
+});
+ipcMain.handle("cleanup:plan", () => projectCleanupPlan());
+ipcMain.handle("cleanup:apply", async (_e, merges: Array<{ from: string; to: string }>) => {
+  const result = await applyProjectCleanup(Array.isArray(merges) ? merges : []);
+  for (const pair of result.carried) await carryProjectMemory(pair.from, pair.to);
+  return { moved: result.moved, backup: result.backup };
 });
 ipcMain.handle("projects:remove", async (_e, dir: string) => {
   await removeProject(dir);
@@ -510,15 +586,16 @@ ipcMain.handle("cursor:chats", async (_e, projectPath?: string) => {
       lastUsedAt: c.lastUsedAt ?? prev?.lastUsedAt,
     });
   }
-  const merged = [...byId.values()]
+  const all = [...byId.values()];
+  const filed = new Map((await rememberChats(all)).map((c) => [c.id, c]));
+  return all
+    .map((c) => filed.get(c.id) ?? c)
     .filter((c) => {
       if (!projectPath) return true;
       return c.projectPath && path.normalize(c.projectPath).toLowerCase() === path.normalize(projectPath).toLowerCase();
     })
     .map((c) => ({ ...c, lastUsedAt: used[c.id] ?? c.lastUsedAt ?? c.updatedAt }))
     .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
-  await rememberChats(merged);
-  return merged;
 });
 ipcMain.handle("cursor:chat", async (_e, slug: string, id: string) => {
   const saved = await loadThread(id);
@@ -551,7 +628,8 @@ ipcMain.handle(
     payload: { slug?: string; id?: string; workspace?: string } | null,
   ) => {
     const chat = payload?.slug && payload.id ? { slug: payload.slug, id: payload.id } : null;
-    const cwd = payload?.workspace && existsSync(payload.workspace) ? payload.workspace : workspace;
+    const cwd = payload?.workspace && existsSync(payload.workspace) ? payload.workspace : "";
+    if (!cwd) return { title: "", chatId: payload?.id ?? "" };
     const briefing = await catchupBriefing(cwd, chat);
     const chatId = payload?.id ?? `folder-${Date.now()}`;
     runClaude({
@@ -728,7 +806,12 @@ ipcMain.handle(
       images?: Array<{ mediaType: string; data: string; name?: string }>;
     },
   ) => {
-    const cwd = payload.workspace && existsSync(payload.workspace) ? payload.workspace : workspace;
+    const cwd = payload.workspace && existsSync(payload.workspace) ? payload.workspace : "";
+    if (!cwd) {
+      win?.webContents.send("claude:event", { kind: "error", chatId: payload.chatId, running: false, text: "This chat's folder is not on this computer, so nothing ran." });
+      win?.webContents.send("claude:event", { kind: "done", chatId: payload.chatId, running: false, text: "Stopped." });
+      return false;
+    }
     const images = Array.isArray(payload.images)
       ? payload.images
           .filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i?.mediaType) && typeof i.data === "string")
@@ -887,7 +970,7 @@ ipcMain.handle("sync:status", () => syncStatus());
 ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
 ipcMain.handle("sync:cursor", (_e, mode: string) => setCursorIntegration(String(mode ?? "")));
 ipcMain.handle("sync:now", () => syncNow());
-ipcMain.handle("sync:clone", async (_e, remote: string) => {
+ipcMain.handle("sync:clone", async (_e, remote: string, projectId: string) => {
   const result = await dialog.showOpenDialog(win!, {
     title: "Folder to clone into",
     properties: ["openDirectory", "createDirectory"],
@@ -895,7 +978,7 @@ ipcMain.handle("sync:clone", async (_e, remote: string) => {
   if (result.canceled || !result.filePaths[0]) return { ok: false, output: "Clone cancelled.", path: "" };
   const cloned = await cloneSyncedProject(String(remote ?? ""), result.filePaths[0]);
   if (cloned.ok && cloned.path) {
-    await addProject(cloned.path);
+    await locateAndCarry(String(projectId ?? ""), cloned.path);
     setWorkspace(cloned.path);
   }
   return cloned;
