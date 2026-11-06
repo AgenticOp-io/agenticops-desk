@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
-import { parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
+import { chatStorage, parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
 import {
   addMarketplace,
   installPlugin,
@@ -74,7 +74,7 @@ import {
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { carryProjectMemory } from "./memory";
-import { convertCursorChats, markConvertNotified, readConvertReport, removeCursorFolders, reviewCursorRemoval } from "./cursorConvert";
+import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { confirmPatch, updateCode } from "./patcher";
 import {
   cloneSyncedProject,
@@ -329,34 +329,33 @@ async function importCursorOnInstall() {
   return result;
 }
 
-// Covers updates that arrive without the installer and installs where the converting was cut short. Tells the user once.
-async function convertOnFirstRun() {
-  try {
-    const report = (await readConvertReport()) ?? (await convertCursorChats());
-    if (report.errors.length) console.error("AgenticOps Desk could not convert everything from Cursor", report.errors);
-    if (report.notified || report.errors.length || !(report.converted || report.recovered) || !win) return;
-    await markConvertNotified(report);
-    await dialog.showMessageBox(win, {
-      type: "info",
-      message: `${report.converted + report.recovered + report.already} of your ${report.chats} Cursor chats are now stored here.`,
-      detail: `Cursor's folders were not changed.${report.recovered ? ` ${report.recovered} had only your own messages left to recover.` : ""}${report.empty ? ` ${report.empty} chats had no messages left in Cursor, so only their titles remain.` : ""} If you no longer need them, Settings can delete them.`,
-    });
-  } catch (err) {
-    console.error("AgenticOps Desk could not convert from Cursor", err);
-  }
+// Finishes a copy that was cut short or failed. Only after the user has chosen to have chats copied.
+async function convertIfChosen() {
+  const { chatStorage: mode } = await loadSettings();
+  if (mode !== "github" && mode !== "hybrid") return null;
+  const report = (await readConvertReport()) ?? (await convertCursorChats());
+  if (report.errors.length) console.error("AgenticOps Desk could not convert everything from Cursor", report.errors);
+  return report;
+}
+
+function convertNote(report: ConvertReport | null) {
+  if (!report) return "";
+  const stored = report.converted + report.recovered + report.already;
+  const partial = report.recovered ? ` ${report.recovered} had only your own messages left to recover.` : "";
+  const failed = report.errors.length ? ` ${report.errors.length} could not be copied and will be tried again.` : "";
+  return `${stored} of ${report.chats} chats are stored here.${partial}${failed}`;
 }
 
 app.whenReady().then(async () => {
   // The installer runs this and waits, so projects and chats are on disk before the first window.
   if (process.argv.includes("--import-cursor")) {
     // The installer waits for this, so never let a slow Cursor scan hang the install.
-    // Converting is safe to cut short: the first normal start finishes it.
-    const giveUp = setTimeout(() => app.exit(0), 180_000);
+    const giveUp = setTimeout(() => app.exit(0), 60_000);
     let code = 0;
     if (app.requestSingleInstanceLock()) {
       try {
+        // Only lists what is there. Copying waits until the user has chosen where chats live, at first start.
         await importCursorOnInstall();
-        await convertCursorChats();
         // The library saves on a timer, and app.exit below would beat it.
         await flushLibrary();
       } catch (err) {
@@ -400,7 +399,7 @@ app.whenReady().then(async () => {
   onNotificationClick(() => showWindow());
   createWindow();
   setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
-  void convertOnFirstRun();
+  void convertIfChosen().catch((err) => console.error("AgenticOps Desk could not convert from Cursor", err));
   setInterval(() => void syncNow(), 3 * 60_000);
   setTimeout(() => void checkAndPatch(), 30_000);
   setInterval(() => void checkAndPatch(), 6 * 60 * 60_000);
@@ -561,6 +560,34 @@ ipcMain.handle("project:locate", async (_e, projectId: string) => {
   return true;
 });
 ipcMain.handle("cursor:review-removal", () => reviewCursorRemoval());
+ipcMain.handle("storage:status", async () => {
+  const { chatStorage: mode } = await loadSettings();
+  const found = mode ? 0 : (await listCursorChats().catch(() => [])).length;
+  return { mode, cursorChats: found, url: (await syncStatus()).url };
+});
+ipcMain.handle("storage:set", async (_e, raw: string, address: string) => {
+  const mode = chatStorage(raw);
+  if (!mode) return { ok: false, note: "Pick where chats should live." };
+  if (mode === "local") {
+    await setSyncUrl("");
+    await patchSettings({ chatStorage: mode });
+    return { ok: true, note: "Chats stay in Cursor's local database, and nothing goes to GitHub." };
+  }
+  const url = String(address ?? "").trim();
+  if (!url) return { ok: false, note: "Paste the address of an empty private repository first." };
+  const before = (await syncStatus()).url;
+  const previous = (await loadSettings()).chatStorage;
+  await patchSettings({ chatStorage: mode });
+  const report = await convertIfChosen();
+  const view = await setSyncUrl(url);
+  if (!view.ok) {
+    // A choice that cannot reach its repository is not made: the user is asked again.
+    await setSyncUrl(before);
+    await patchSettings({ chatStorage: previous });
+    return { ok: false, note: view.note || "That repository could not be reached." };
+  }
+  return { ok: true, note: `Chats now sync to ${url}. ${convertNote(report)}`.trim() };
+});
 // The one thing that deletes Cursor's folders. Only this dialog can start it, and Cancel is the default.
 ipcMain.handle("cursor:remove-folders", async () => {
   const { response } = await dialog.showMessageBox(win!, {

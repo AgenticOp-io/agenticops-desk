@@ -14,6 +14,7 @@ import { Help } from "./Help";
 import { Briefing, Inbox, WatchChips } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
+import { ChatStorage } from "./ChatStorage";
 import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
 import { collapsedChats } from "./sideChats";
@@ -193,7 +194,6 @@ export function App() {
   const [roots, setRoots] = useState<Entry[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState("");
   const [activeChat, setActiveChat] = useState<CursorChat | null>(null);
   const [threads, setThreads] = useState<Record<string, Msg[]>>({});
   const [runningByChat, setRunningByChat] = useState<Record<string, boolean>>({});
@@ -213,6 +213,29 @@ export function App() {
   const [inboxOpen, setInboxOpen] = useState(false);
   const [briefing, setBriefing] = useState<BriefingItem[] | null>(null);
   const [watches, setWatches] = useState<WatchInfo[]>([]);
+  // What is typed in the message box belongs to the chat it was typed in, and survives a restart.
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("desk.drafts") ?? "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+  const setDraft = (chatId: string, text: string) =>
+    setDrafts(({ [chatId]: _old, ...rest }) => (text ? { ...rest, [chatId]: text } : rest));
+  const prompt = drafts[activeChat?.id ?? ""] ?? "";
+  const setPrompt = (text: string) => setDraft(activeChat?.id ?? "", text);
+  useEffect(() => {
+    localStorage.setItem("desk.drafts", JSON.stringify(drafts));
+  }, [drafts]);
+
+  const [askStorage, setAskStorage] = useState<{ cursorChats: number; url: string } | null>(null);
+  useEffect(() => {
+    void window.desk.storageStatus().then((s) => {
+      if (!s.mode && s.cursorChats > 0) setAskStorage({ cursorChats: s.cursorChats, url: s.url });
+    });
+  }, []);
+
   const [replayFrom, setReplayFrom] = useState<{ chat: CursorChat; index: number } | null>(null);
 
   // Morning briefing: after 8 hours away, show where every recent chat stands.
@@ -753,7 +776,6 @@ export function App() {
     setThreads((t) => ({ ...t, [id]: [] }));
     setActiveChat(chat);
     setChats((all) => [chat, ...all.filter((c) => c.id !== id)]);
-    setPrompt("");
     composerRef.current?.focus();
     setStatus("New agent");
     void window.desk.upsertChat(chat);
@@ -813,7 +835,8 @@ export function App() {
     ];
     setThreads((t) => ({ ...t, [chat.id]: nextMsgs }));
     void window.desk.saveThread(chat.id, nextMsgs);
-    setPrompt("");
+    // A replay sends other text, so what is in the box stays.
+    if (extra.text === undefined) setDraft(chat.id, "");
     setProgressByChat((p) => ({
       ...p,
       [chat.id]: guiding
@@ -1990,6 +2013,29 @@ export function App() {
           </div>
         </div>
       )}
+      {askStorage && (
+        <div className="modal">
+          <div className="palette replay" role="dialog" aria-label="Where should your chats live?">
+            <div className="settings-head">
+              <strong>Where should your chats live?</strong>
+              <button className="ghost" onClick={() => setAskStorage(null)}>
+                Ask me later
+              </button>
+            </div>
+            <p className="settings-hint">
+              Found {askStorage.cursorChats} Cursor chats. Passwords and tokens are hidden in anything pushed to GitHub. Your choice can be changed in Settings.
+            </p>
+            <ChatStorage
+              url={askStorage.url}
+              onChosen={(mode) => {
+                setPrefs((p) => ({ ...p, chatStorage: mode }));
+                setAskStorage(null);
+                void reloadCursor().then(setChats);
+              }}
+            />
+          </div>
+        </div>
+      )}
       {showHelp && <Help onClose={() => setShowHelp(false)} />}
       {paletteOpen && <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />}
 
@@ -2020,7 +2066,9 @@ export function App() {
                 })
               }
             />
-            <CursorFolders />
+            <div className="settings-label">Where chats live</div>
+            <ChatStorage current={prefs.chatStorage} onChosen={(mode) => setPrefs((p) => ({ ...p, chatStorage: mode }))} />
+            {prefs.chatStorage === "github" && <CursorFolders />}
             <label className="settings-row">
               <span>Theme</span>
               <select

@@ -263,6 +263,8 @@ declare global {
       chatFolder: (chatId: string) => Promise<{ folder: string; changed: boolean } | null>;
       moveChat: (chatId: string, projectId: string | null) => Promise<CursorChat | null>;
       locateProject: (projectId: string) => Promise<boolean>;
+      storageStatus: () => Promise<{ mode: string; cursorChats: number; url: string }>;
+      setChatStorage: (mode: string, url: string) => Promise<{ ok: boolean; note: string }>;
       reviewCursorRemoval: () => Promise<{
         folders: Array<{ path: string; bytes: number }>;
         keep: string | null;

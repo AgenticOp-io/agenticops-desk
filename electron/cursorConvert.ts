@@ -7,12 +7,12 @@ import { cursorRunning } from "./cursorLink";
 import { writeJsonAtomic } from "./jsonStore";
 import { importCursorLibrary, loadThread, rememberedChats, saveThread } from "./library";
 import { cursorRemovalRefusal } from "./pureFeatures";
-import { patchSettings } from "./settings";
+import { loadSettings, patchSettings } from "./settings";
 
 // Copies Cursor's projects, chats and agent files into the desk's own storage and never changes Cursor's.
 // After this the desk needs nothing of Cursor's, which is what makes deleting it (opt-in, below) safe.
 
-export type ConvertReport = { chats: number; converted: number; recovered: number; already: number; empty: number; errors: string[]; notified?: boolean };
+export type ConvertReport = { chats: number; converted: number; recovered: number; already: number; empty: number; errors: string[] };
 
 const RECOVERED_NOTE = "Recovered from Cursor's search index. The original chat was lost, so this is only what you typed, run together, without the agent's answers.";
 
@@ -26,8 +26,6 @@ export async function readConvertReport(): Promise<ConvertReport | null> {
     return null;
   }
 }
-
-export const markConvertNotified = (report: ConvertReport) => writeJsonAtomic(markerFile(), { ...report, notified: true });
 
 // The raw files keep what a chat thread does not: tool calls, subagents, canvases, pasted images, plans.
 async function archiveCursorFiles(errors: string[]) {
@@ -77,7 +75,7 @@ export async function convertCursorChats(): Promise<ConvertReport> {
   }
   await archiveCursorFiles(report.errors);
   // Left unmarked when anything failed, so the next start tries again.
-  if (!report.errors.length) await writeJsonAtomic(markerFile(), { ...report, notified: (await readConvertReport())?.notified });
+  if (!report.errors.length) await writeJsonAtomic(markerFile(), report);
   return report;
 }
 
@@ -132,8 +130,12 @@ async function backupCursorDatabases() {
 
 // Converts once more first, so a chat from this morning is not lost, and backs up Cursor's databases. Refuses unless both fully worked.
 export async function removeCursorFolders(): Promise<{ ok: boolean; note: string; failed: string[] }> {
+  const { chatStorage: mode } = await loadSettings();
+  // Checked before copying, because the other modes promise that Cursor's files stay put and nothing is copied.
+  const notAllowed = cursorRemovalRefusal({ mode, running: false, errors: [] });
+  if (notAllowed) return { ok: false, note: notAllowed, failed: [] };
   const report = await convertCursorChats();
-  const refusal = cursorRemovalRefusal({ running: await cursorRunning(), errors: report.errors });
+  const refusal = cursorRemovalRefusal({ mode, running: await cursorRunning(), errors: report.errors });
   if (refusal) return { ok: false, note: refusal, failed: [] };
   try {
     await backupCursorDatabases();

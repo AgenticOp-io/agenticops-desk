@@ -201,6 +201,12 @@ const SYNC_PREFS = ["windowFont", "itemFont", "hiddenChats", "showCode", "theme"
 
 export type CursorMode = "off" | "partial" | "full";
 
+export type ChatStorage = "github" | "hybrid" | "local";
+
+export function chatStorage(value: unknown): ChatStorage | "" {
+  return value === "github" || value === "hybrid" || value === "local" ? value : "";
+}
+
 export function cursorMode(value: unknown): CursorMode {
   return value === "partial" || value === "full" ? value : "off";
 }
@@ -345,7 +351,8 @@ export function oneAtATime<T>(work: () => Promise<T>): () => Promise<T> {
 }
 
 // Why Cursor's folders can't be deleted right now, or null. A failed copy could mean losing the only one.
-export function cursorRemovalRefusal(state: { running: boolean; errors: string[] }): string | null {
+export function cursorRemovalRefusal(state: { mode: string; running: boolean; errors: string[] }): string | null {
+  if (state.mode !== "github") return "Nothing was deleted, because Cursor keeps its files unless chats are set to GitHub.";
   if (state.errors.length) return `Nothing was deleted, because copying failed: ${state.errors.slice(0, 3).join("; ")}`;
   if (state.running) return "Nothing was deleted, because Cursor is still running. Close it and try again.";
   return null;

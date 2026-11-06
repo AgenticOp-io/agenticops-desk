@@ -20,6 +20,7 @@ export type UiPrefs = {
   privacy: "standard" | "protect" | "local";
   /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
   cursorIntegration: "off" | "partial" | "full";
+  chatStorage: "github" | "hybrid" | "local" | "";
 };
 
 export const defaultPrefs = (): UiPrefs => ({
@@ -42,6 +43,7 @@ export const defaultPrefs = (): UiPrefs => ({
   autocomplete: "",
   privacy: "protect",
   cursorIntegration: "off",
+  chatStorage: "",
 });
 
 export function clamp(n: number, min: number, max: number) {

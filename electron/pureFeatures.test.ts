@@ -260,9 +260,10 @@ test("overlapping sync requests share one follow-up and then stop", async () => 
 
 test("Cursor's folders stay unless every copy worked and Cursor is closed", async () => {
   const { cursorRemovalRefusal } = await import("./pureFeatures.ts");
-  assert.equal(cursorRemovalRefusal({ running: false, errors: [] }), null);
-  assert.match(cursorRemovalRefusal({ running: true, errors: [] })!, /running/);
-  assert.match(cursorRemovalRefusal({ running: false, errors: ["chat: disk full"] })!, /disk full/);
+  assert.equal(cursorRemovalRefusal({ mode: "github", running: false, errors: [] }), null);
+  for (const mode of ["hybrid", "local", ""]) assert.match(cursorRemovalRefusal({ mode, running: false, errors: [] })!, /keeps its files/);
+  assert.match(cursorRemovalRefusal({ mode: "github", running: true, errors: [] })!, /running/);
+  assert.match(cursorRemovalRefusal({ mode: "github", running: false, errors: ["chat: disk full"] })!, /disk full/);
 });
 
 test("a collapsed project shows the last used chat, plus any that must stay in view", async () => {
