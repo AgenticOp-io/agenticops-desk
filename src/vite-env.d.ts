@@ -263,6 +263,13 @@ declare global {
       chatFolder: (chatId: string) => Promise<{ folder: string; changed: boolean } | null>;
       moveChat: (chatId: string, projectId: string | null) => Promise<CursorChat | null>;
       locateProject: (projectId: string) => Promise<boolean>;
+      reviewCursorRemoval: () => Promise<{
+        folders: Array<{ path: string; bytes: number }>;
+        keep: string | null;
+        report: { chats: number; converted: number; recovered: number; already: number; empty: number; errors: string[] } | null;
+        archive: string;
+      }>;
+      removeCursorFolders: () => Promise<{ ok: boolean; note: string; failed: string[] } | null>;
       projectCleanupPlan: () => Promise<CleanupProposal[]>;
       applyProjectCleanup: (merges: Array<{ from: string; to: string }>) => Promise<{ moved: number; backup: string }>;
       restartForUpdate: () => Promise<void>;

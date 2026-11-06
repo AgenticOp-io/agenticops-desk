@@ -213,6 +213,8 @@ contextBridge.exposeInMainWorld("desk", {
   chatFolder: (chatId: string) => ipcRenderer.invoke("chat:folder", chatId) as Promise<{ folder: string; changed: boolean } | null>,
   moveChat: (chatId: string, projectId: string | null) => ipcRenderer.invoke("chat:move", chatId, projectId),
   locateProject: (projectId: string) => ipcRenderer.invoke("project:locate", projectId) as Promise<boolean>,
+  reviewCursorRemoval: () => ipcRenderer.invoke("cursor:review-removal"),
+  removeCursorFolders: () => ipcRenderer.invoke("cursor:remove-folders"),
   projectCleanupPlan: () => ipcRenderer.invoke("cleanup:plan"),
   applyProjectCleanup: (merges: Array<{ from: string; to: string }>) =>
     ipcRenderer.invoke("cleanup:apply", merges) as Promise<{ moved: number; backup: string }>,

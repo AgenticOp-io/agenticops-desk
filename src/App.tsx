@@ -14,7 +14,9 @@ import { Help } from "./Help";
 import { Briefing, Inbox, WatchChips } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
+import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
+import { collapsedChats } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
@@ -1203,18 +1205,17 @@ export function App() {
     for (const g of visibleGroups) {
       const showAll = Boolean(q) || Boolean(prefs.expanded[g.key]);
       const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
-      const runningChats = liveChats.filter((c) => runningByChat[c.id]);
-      const idleChats = liveChats.filter((c) => !runningByChat[c.id]);
-      const visibleChats = showAll ? liveChats : [...runningChats, ...idleChats].slice(0, Math.max(2, runningChats.length));
+      const limit = samePath(g.path, workspace) ? 5 : 1;
+      const visibleChats = showAll ? liveChats : collapsedChats(liveChats, limit, (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id);
       const hiddenCount = liveChats.length - visibleChats.length;
       rows.push({ kind: "project", id: `p:${g.key}`, group: g });
       for (const c of visibleChats) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
       if (hiddenCount > 0) rows.push({ kind: "more", id: `more:${g.key}`, group: g, count: hiddenCount });
-      if (showAll && !q && liveChats.length > 2) rows.push({ kind: "less", id: `less:${g.key}`, group: g });
+      if (showAll && !q && liveChats.length > limit) rows.push({ kind: "less", id: `less:${g.key}`, group: g });
       if (liveChats.length === 0) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
     }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, hiddenChatSet, runningByChat]);
+  }, [visibleGroups, q, prefs.expanded, hiddenChatSet, runningByChat, workspace, activeChat?.id]);
 
   const openMenu = (e: ReactMouseEvent, extra: Partial<CtxMenu> = {}) => {
     e.preventDefault();
@@ -2013,6 +2014,7 @@ export function App() {
                 })
               }
             />
+            <CursorFolders />
             <label className="settings-row">
               <span>Theme</span>
               <select

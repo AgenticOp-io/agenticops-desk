@@ -147,7 +147,7 @@ async function collectWorkspaceFolders(): Promise<string[]> {
   return [...found];
 }
 
-async function listTranscripts(): Promise<Array<{ slug: string; id: string; file: string; mtime: number; size: number }>> {
+export async function listTranscripts(): Promise<Array<{ slug: string; id: string; file: string; mtime: number; size: number }>> {
   const root = path.join(cursorHome(), "projects");
   const out: Array<{ slug: string; id: string; file: string; mtime: number; size: number }> = [];
   let slugs: string[] = [];
@@ -275,8 +275,7 @@ function runNodeQuery(flags: string[], payload: string): Promise<SqlRow[]> {
   });
 }
 
-async function queryCursorDb(sql: string, params: unknown[] = []): Promise<SqlRow[]> {
-  const file = composerDbPath();
+async function queryCursorDb(sql: string, params: unknown[] = [], file = composerDbPath()): Promise<SqlRow[]> {
   if (!existsSync(file)) return [];
   const sqlite = await inProcessSqlite();
   if (sqlite) {
@@ -523,11 +522,12 @@ function collectFilesFromUnknown(value: unknown, into: Set<string>) {
   }
 }
 
-export async function readCursorChat(slug: string, id: string): Promise<CursorChatDetail | null> {
+// full keeps every message at full length, for converting a chat. Otherwise a long chat is shortened for reading.
+export async function readCursorChat(slug: string, id: string, full = false): Promise<CursorChatDetail | null> {
   const file = path.join(cursorHome(), "projects", slug, "agent-transcripts", id, `${id}.jsonl`);
-  if (!existsSync(file)) return readComposerBubbles(id, slug);
+  if (!existsSync(file)) return readComposerBubbles(id, slug, full);
   const st = statSync(file);
-  const projects = await listCursorProjects();
+  const projects = full ? [] : await listCursorProjects();
   const proj = projects.find((p) => p.slug.toLowerCase() === slug.toLowerCase());
   const messages: ChatMessage[] = [];
   const files = new Set<string>();
@@ -562,14 +562,14 @@ export async function readCursorChat(slug: string, id: string): Promise<CursorCh
     const text = texts.map(displayText).filter(Boolean).join("\n").trim();
     if (row.role === "user" && text) {
       if (title === "Untitled chat") title = titleFromUserText(texts.join("\n"));
-      messages.push({ role: "user", text: text.slice(0, 12_000) });
+      messages.push({ role: "user", text: full ? text : text.slice(0, 12_000) });
     } else if (row.role === "assistant" && text) {
-      messages.push({ role: "assistant", text: text.slice(0, 12_000) });
+      messages.push({ role: "assistant", text: full ? text : text.slice(0, 12_000) });
     }
   }
 
   const existing = [...files].filter((p) => existsSync(p) && statSync(p).isFile()).slice(0, 60);
-  const kept = trimMessages(messages);
+  const kept = full ? messages : trimMessages(messages);
 
   return {
     id,
@@ -593,7 +593,22 @@ function trimMessages(messages: ChatMessage[]): ChatMessage[] {
   ];
 }
 
-async function readComposerBubbles(id: string, slug: string): Promise<CursorChatDetail | null> {
+// Cursor's search index can outlive its messages. It holds only what the user typed, run together, and its layout is
+// Cursor's own, so anything unexpected counts as no text.
+export async function searchIndexText(id: string): Promise<string> {
+  try {
+    const rows = await queryCursorDb(
+      "SELECT f.c1 AS body FROM conversations c JOIN conversation_fts_content f ON f.id = c.fts_rowid WHERE c.id = ?",
+      [id],
+      path.join(cursorUserDir(), "globalStorage", "conversation-search.db"),
+    );
+    return sqlText(rows[0]?.body).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function readComposerBubbles(id: string, slug: string, full = false): Promise<CursorChatDetail | null> {
   try {
     const head = (await queryCursorDb("SELECT value FROM cursorDiskKV WHERE key = ?", [`composerData:${id}`]))[0] as
       | { value?: unknown }
@@ -604,7 +619,7 @@ async function readComposerBubbles(id: string, slug: string): Promise<CursorChat
       subtitle?: string;
     };
     const headers = data.fullConversationHeadersOnly ?? [];
-    const picked = headers.length > 120 ? [headers[0], ...headers.slice(-119)] : headers;
+    const picked = !full && headers.length > 120 ? [headers[0], ...headers.slice(-119)] : headers;
     const messages: ChatMessage[] = [];
     for (const item of picked) {
       if (!item?.bubbleId) continue;
@@ -621,7 +636,7 @@ async function readComposerBubbles(id: string, slug: string): Promise<CursorChat
       const text = (body.text || "").trim();
       if (!text) continue;
       const role = body.type === 1 || item.type === 1 ? "user" : "assistant";
-      messages.push({ role, text: text.slice(0, 12_000) });
+      messages.push({ role, text: full ? text : text.slice(0, 12_000) });
     }
     if (!messages.length) return null;
     const proj = headerProject(data);
@@ -633,7 +648,7 @@ async function readComposerBubbles(id: string, slug: string): Promise<CursorChat
       title: (data.name || "").trim() || titleFromUserText(messages.find((m) => m.role === "user")?.text || ""),
       updatedAt: Number(data.lastUpdatedAt || Date.now()),
       size: 0,
-      messages: trimMessages(messages),
+      messages: full ? messages : trimMessages(messages),
       files: [],
     };
   } catch (err) {
@@ -698,11 +713,13 @@ const BRIEFING_LIMIT = 60_000;
 export async function catchupBriefing(
   workspaceDir: string,
   chat?: { slug: string; id: string } | null,
+  saved?: ChatMessage[] | null,
 ): Promise<{ title: string; prompt: string }> {
   const parts: string[] = [];
   let title = "folder progress";
   if (chat?.slug && chat.id) {
-    const detail = await readCursorChat(chat.slug, chat.id);
+    // Once Cursor's folders are deleted, the converted copy is the chat.
+    const detail = (await readCursorChat(chat.slug, chat.id)) ?? (saved?.length ? { title: "this chat", messages: saved, files: [] } : null);
     if (detail) {
       title = detail.title;
       parts.push(`## Chat: ${detail.title}`, ``);

@@ -147,7 +147,7 @@ export async function writeCursorArchiveThreads(dir: string, deleted: Set<string
   }
 }
 
-function cursorRunning(): Promise<boolean> {
+export function cursorRunning(): Promise<boolean> {
   return new Promise((resolve) => {
     const done = (running: boolean) => resolve(running);
     if (process.platform === "win32") {

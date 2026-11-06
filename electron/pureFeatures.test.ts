@@ -258,6 +258,28 @@ test("overlapping sync requests share one follow-up and then stop", async () => 
   await assert.rejects(Promise.all([failing(), failing()]));
 });
 
+test("Cursor's folders stay unless every copy worked and Cursor is closed", async () => {
+  const { cursorRemovalRefusal } = await import("./pureFeatures.ts");
+  assert.equal(cursorRemovalRefusal({ running: false, errors: [] }), null);
+  assert.match(cursorRemovalRefusal({ running: true, errors: [] })!, /running/);
+  assert.match(cursorRemovalRefusal({ running: false, errors: ["chat: disk full"] })!, /disk full/);
+});
+
+test("a collapsed project shows the last used chat, plus any that must stay in view", async () => {
+  const { collapsedChats } = await import("../src/sideChats.ts");
+  const chats = [
+    { id: "pinned-old", updatedAt: 1 },
+    { id: "newest-update", updatedAt: 50, lastUsedAt: 2 },
+    { id: "last-used", updatedAt: 3, lastUsedAt: 90 },
+    { id: "running", updatedAt: 4 },
+  ];
+  const ids = (limit: number, must: string[] = []) => collapsedChats(chats, limit, (c) => must.includes(c.id)).map((c) => c.id);
+  assert.deepEqual(ids(1), ["last-used"]);
+  assert.deepEqual(ids(1, ["running"]), ["last-used", "running"]);
+  assert.deepEqual(ids(5), ["pinned-old", "newest-update", "last-used", "running"]);
+  assert.deepEqual(collapsedChats([], 1, () => true), []);
+});
+
 test("a patch must be newer, match this install and stay in its folder", async () => {
   const { isNewerVersion, patchRefusal, patchShell } = await import("./pureFeatures.ts");
   assert.equal(isNewerVersion("v0.1.10", "0.1.9"), true);

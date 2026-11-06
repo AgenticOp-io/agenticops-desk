@@ -69,7 +69,7 @@ CI runs both on every push. Setting `AGENTICOPS_DESK_DATA` points any run at a s
 
 The **Release** workflow (Actions → Release → Run workflow, or push a `v*` tag) builds Windows, macOS and Linux, each for both chip types. The installers are about 100 MB. They do not contain Claude Code. On first launch, with a network connection, AgenticOps Desk downloads the one binary for that computer from npm and checks it against npm's SHA-512 fingerprint. Later launches work offline. Running from a source checkout does not download anything; it uses the binary from `node_modules`.
 
-The Windows setup imports Cursor projects and chats while it installs, and opens the most recently used project if AgenticOps Desk does not already have one. A portable copy does the same import the first time it starts.
+The Windows setup converts Cursor projects and chats while it installs, and opens the most recently used project if AgenticOps Desk does not already have one. Every chat is copied at full length with a permanent project (a chat whose messages are gone falls back to what you typed, from Cursor's search index), along with Cursor's raw transcripts, plans and agent files (`%APPDATA%\AgenticOps Desk\cursor-archive`). Cursor's folders are not changed. A portable copy or an update does the same the first time it starts. **Settings → Cursor folders** can then delete Cursor's folders to free disk space. That is opt-in and permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees` because those hold code.
 
 | Platform | Files |
 |----------|-------|

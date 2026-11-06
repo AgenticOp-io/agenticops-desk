@@ -344,6 +344,13 @@ export function oneAtATime<T>(work: () => Promise<T>): () => Promise<T> {
   return call;
 }
 
+// Why Cursor's folders can't be deleted right now, or null. A failed copy could mean losing the only one.
+export function cursorRemovalRefusal(state: { running: boolean; errors: string[] }): string | null {
+  if (state.errors.length) return `Nothing was deleted, because copying failed: ${state.errors.slice(0, 3).join("; ")}`;
+  if (state.running) return "Nothing was deleted, because Cursor is still running. Close it and try again.";
+  return null;
+}
+
 export function isNewerVersion(a: string, b: string): boolean {
   const parts = (v: string) => v.replace(/^v/, "").split(".").map((n) => Number(n) || 0);
   const [x, y] = [parts(a), parts(b)];

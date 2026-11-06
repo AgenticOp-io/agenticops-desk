@@ -51,6 +51,7 @@ import {
 import {
   addProject,
   applyProjectCleanup,
+  flushLibrary,
   chatLastUsedMap,
   importCursorLibrary,
   lastUsedProjects,
@@ -73,6 +74,7 @@ import {
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { carryProjectMemory } from "./memory";
+import { convertCursorChats, markConvertNotified, readConvertReport, removeCursorFolders, reviewCursorRemoval } from "./cursorConvert";
 import { confirmPatch, updateCode } from "./patcher";
 import {
   cloneSyncedProject,
@@ -327,15 +329,36 @@ async function importCursorOnInstall() {
   return result;
 }
 
+// Covers updates that arrive without the installer and installs where the converting was cut short. Tells the user once.
+async function convertOnFirstRun() {
+  try {
+    const report = (await readConvertReport()) ?? (await convertCursorChats());
+    if (report.errors.length) console.error("AgenticOps Desk could not convert everything from Cursor", report.errors);
+    if (report.notified || report.errors.length || !(report.converted || report.recovered) || !win) return;
+    await markConvertNotified(report);
+    await dialog.showMessageBox(win, {
+      type: "info",
+      message: `${report.converted + report.recovered + report.already} of your ${report.chats} Cursor chats are now stored here.`,
+      detail: `Cursor's folders were not changed.${report.recovered ? ` ${report.recovered} had only your own messages left to recover.` : ""}${report.empty ? ` ${report.empty} chats had no messages left in Cursor, so only their titles remain.` : ""} If you no longer need them, Settings can delete them.`,
+    });
+  } catch (err) {
+    console.error("AgenticOps Desk could not convert from Cursor", err);
+  }
+}
+
 app.whenReady().then(async () => {
   // The installer runs this and waits, so projects and chats are on disk before the first window.
   if (process.argv.includes("--import-cursor")) {
     // The installer waits for this, so never let a slow Cursor scan hang the install.
-    const giveUp = setTimeout(() => app.exit(0), 60_000);
+    // Converting is safe to cut short: the first normal start finishes it.
+    const giveUp = setTimeout(() => app.exit(0), 180_000);
     let code = 0;
     if (app.requestSingleInstanceLock()) {
       try {
         await importCursorOnInstall();
+        await convertCursorChats();
+        // The library saves on a timer, and app.exit below would beat it.
+        await flushLibrary();
       } catch (err) {
         console.error("AgenticOps Desk could not import Cursor during install", err);
         code = 1;
@@ -377,6 +400,7 @@ app.whenReady().then(async () => {
   onNotificationClick(() => showWindow());
   createWindow();
   setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
+  void convertOnFirstRun();
   setInterval(() => void syncNow(), 3 * 60_000);
   setTimeout(() => void checkAndPatch(), 30_000);
   setInterval(() => void checkAndPatch(), 6 * 60 * 60_000);
@@ -536,6 +560,19 @@ ipcMain.handle("project:locate", async (_e, projectId: string) => {
   await locateAndCarry(projectId, dir);
   return true;
 });
+ipcMain.handle("cursor:review-removal", () => reviewCursorRemoval());
+// The one thing that deletes Cursor's folders. Only this dialog can start it, and Cancel is the default.
+ipcMain.handle("cursor:remove-folders", async () => {
+  const { response } = await dialog.showMessageBox(win!, {
+    type: "warning",
+    message: "Permanently delete Cursor's folders?",
+    detail: "This cannot be undone. Cursor loses its settings, extensions, sign-in and chat history. Your chats are copied here first, and your project folders are not touched.",
+    buttons: ["Cancel", "Delete"],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  return response === 1 ? removeCursorFolders() : null;
+});
 ipcMain.handle("cleanup:plan", () => projectCleanupPlan());
 ipcMain.handle("cleanup:apply", async (_e, merges: Array<{ from: string; to: string }>) => {
   const result = await applyProjectCleanup(Array.isArray(merges) ? merges : []);
@@ -636,7 +673,8 @@ ipcMain.handle(
     const chat = payload?.slug && payload.id ? { slug: payload.slug, id: payload.id } : null;
     const cwd = payload?.workspace && existsSync(payload.workspace) ? payload.workspace : "";
     if (!cwd) return { title: "", chatId: payload?.id ?? "" };
-    const briefing = await catchupBriefing(cwd, chat);
+    const saved = payload?.id ? ((await loadThread(payload.id)) as Array<{ role: "user" | "assistant" | "system"; text: string }> | null) : null;
+    const briefing = await catchupBriefing(cwd, chat, saved);
     const chatId = payload?.id ?? `folder-${Date.now()}`;
     runClaude({
       win,
