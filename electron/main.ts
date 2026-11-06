@@ -82,6 +82,7 @@ import {
   refreshProjectRemotes,
   remoteOfPath,
   scheduleDeskSync,
+  SYNC_WHILE_WORKING,
   setCursorIntegration,
   setSyncUrl,
   createSyncRepo,
@@ -396,7 +397,7 @@ app.whenReady().then(async () => {
   }
   watchWorkspace();
   onLibraryFlush(() => {
-    if (!syncApplying()) scheduleDeskSync();
+    if (!syncApplying()) scheduleDeskSync(SYNC_WHILE_WORKING);
   });
   onNotificationClick(() => showWindow());
   createWindow();
@@ -687,8 +688,8 @@ ipcMain.handle("cursor:chat", async (_e, slug: string, id: string) => {
 });
 ipcMain.handle("cursor:touch", (_e, chatId: string, projectPath?: string | null) => touchChat(chatId, projectPath));
 ipcMain.handle("cursor:upsert", (_e, chat: Parameters<typeof upsertChat>[0]) => upsertChat(chat));
-ipcMain.handle("thread:save", (_e, chatId: string, messages: unknown[]) =>
-  saveThread(chatId, messages).then(() => scheduleDeskSync()),
+ipcMain.handle("thread:save", (_e, chatId: string, messages: unknown[], entered?: boolean) =>
+  saveThread(chatId, messages).then(() => scheduleDeskSync(entered ? undefined : SYNC_WHILE_WORKING)),
 );
 ipcMain.handle("thread:load", (_e, chatId: string) => loadThread(chatId));
 ipcMain.handle(

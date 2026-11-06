@@ -51,8 +51,9 @@ export type SyncView = {
 };
 
 let applying = false;
-let queued = false;
+let queued: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let timerAt = 0;
 let urlCache = "";
 let loaded = false;
 let lastOk = true;
@@ -394,9 +395,10 @@ async function doSync(): Promise<SyncView> {
   } finally {
     applying = false;
     // Something entered during that sync missed it.
-    if (queued) {
-      queued = false;
-      scheduleDeskSync();
+    if (queued !== null) {
+      const wait = queued;
+      queued = null;
+      scheduleDeskSync(wait);
     }
   }
 }
@@ -478,17 +480,25 @@ async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncCh
 }
 
 // A message commits as soon as it is entered. The short wait lets the chat row and its thread land in one commit.
-export function scheduleDeskSync() {
+// Saves while a reply streams wait longer: each commit stores the whole thread again, so the repository would balloon.
+export const SYNC_WHILE_WORKING = 30_000;
+export function scheduleDeskSync(wait = 500) {
   void config().then((url) => {
-    if (!url || timer) return;
+    if (!url) return;
     if (applying) {
-      queued = true;
+      queued = queued === null ? wait : Math.min(queued, wait);
       return;
     }
+    const at = Date.now() + wait;
+    if (timer) {
+      if (timerAt <= at) return;
+      clearTimeout(timer);
+    }
+    timerAt = at;
     timer = setTimeout(() => {
       timer = null;
       void syncNow();
-    }, 500);
+    }, wait);
   });
 }
 

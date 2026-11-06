@@ -384,10 +384,14 @@ async function tidyLibrary(lib: Library): Promise<boolean> {
   const rows: Array<{ id: string; key: string; at: number }> = [];
   for (const chat of lib.chats) {
     let key = "";
-    try {
-      key = createHash("sha256").update(await fs.readFile(threadFile(chat.id))).digest("hex");
-    } catch {
-      key = "";
+    // A branch starts as an exact copy on purpose, and blank chats match without being copies of anything.
+    if (!chat.parentId) {
+      try {
+        const bytes = await fs.readFile(threadFile(chat.id));
+        if (bytes.toString("utf8").trim() !== "[]") key = createHash("sha256").update(bytes).digest("hex");
+      } catch {
+        key = "";
+      }
     }
     rows.push({ id: chat.id, key, at: chat.lastUsedAt ?? chat.updatedAt ?? 0 });
   }

@@ -563,7 +563,7 @@ export function App() {
         const msgs = threadsRef.current[chatId];
         if (msgs) {
           savedThreads.current.set(chatId, msgs);
-          void window.desk.saveThread(chatId, msgs);
+          void window.desk.saveThread(chatId, msgs, true);
         }
         const row = activeChatRef.current?.id === chatId ? activeChatRef.current : null;
         if (row) void window.desk.upsertChat({ ...row, updatedAt: Date.now() });
@@ -838,7 +838,7 @@ export function App() {
       { role: "user" as const, text: shown, ...(guiding ? { steer: true } : {}) },
     ];
     setThreads((t) => ({ ...t, [chat.id]: nextMsgs }));
-    void window.desk.saveThread(chat.id, nextMsgs);
+    void window.desk.saveThread(chat.id, nextMsgs, true);
     // A replay sends other text, so what is in the box stays.
     if (extra.text === undefined) setDraft(chat.id, "");
     setProgressByChat((p) => ({
@@ -2090,6 +2090,27 @@ export function App() {
                 Close
               </button>
             </div>
+            {(hiddenGroupList.length > 0 || hiddenChatList.length > 0) && (
+              <div className="settings-hidden">
+                <div className="settings-label">Hidden items</div>
+                <button
+                  className="btn"
+                  onClick={() => patchPrefs({ hiddenProjects: [], hiddenChats: [] })}
+                >
+                  Unhide all
+                </button>
+                {hiddenGroupList.map((g) => (
+                  <button key={g.key} className="more-link" onClick={() => unhideProject(g.key)}>
+                    Unhide {g.name}
+                  </button>
+                ))}
+                {hiddenChatList.map((c) => (
+                  <button key={c.id} className="more-link" onClick={() => unhideChat(c.id)}>
+                    Unhide chat: {c.title}
+                  </button>
+                ))}
+              </div>
+            )}
             <PrivacySettings mode={prefs.privacy} onMode={(privacy) => patchPrefs({ privacy })} />
             <SyncSettings
               onChanged={() => {
@@ -2248,27 +2269,6 @@ export function App() {
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
               Drag items to reorder. GitHub projects stay in the list. Other folders are one row at the bottom.
             </p>
-            {(hiddenGroupList.length > 0 || hiddenChatList.length > 0) && (
-              <div className="settings-hidden">
-                <div className="settings-label">Hidden items</div>
-                <button
-                  className="btn"
-                  onClick={() => patchPrefs({ hiddenProjects: [], hiddenChats: [] })}
-                >
-                  Unhide all
-                </button>
-                {hiddenGroupList.map((g) => (
-                  <button key={g.key} className="more-link" onClick={() => unhideProject(g.key)}>
-                    Unhide {g.name}
-                  </button>
-                ))}
-                {hiddenChatList.map((c) => (
-                  <button key={c.id} className="more-link" onClick={() => unhideChat(c.id)}>
-                    Unhide chat: {c.title}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}

@@ -156,7 +156,7 @@ declare global {
       }>;
       touchChat: (chatId: string, projectPath?: string | null) => Promise<void>;
       upsertChat: (chat: CursorChat) => Promise<void>;
-      saveThread: (chatId: string, messages: unknown[]) => Promise<void>;
+      saveThread: (chatId: string, messages: unknown[], entered?: boolean) => Promise<void>;
       probeClaude: () => Promise<{ found: boolean; path: string; bundled: boolean }>;
       onSetup: (cb: (text: string) => void) => () => void;
       signIn: () => Promise<boolean>;

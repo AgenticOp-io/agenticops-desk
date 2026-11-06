@@ -86,8 +86,8 @@ contextBridge.exposeInMainWorld("desk", {
   touchChat: (chatId: string, projectPath?: string | null) =>
     ipcRenderer.invoke("cursor:touch", chatId, projectPath) as Promise<void>,
   upsertChat: (chat: CursorChat) => ipcRenderer.invoke("cursor:upsert", chat) as Promise<void>,
-  saveThread: (chatId: string, messages: unknown[]) =>
-    ipcRenderer.invoke("thread:save", chatId, messages) as Promise<void>,
+  saveThread: (chatId: string, messages: unknown[], entered?: boolean) =>
+    ipcRenderer.invoke("thread:save", chatId, messages, entered) as Promise<void>,
   probeClaude: () =>
     ipcRenderer.invoke("claude:probe") as Promise<{ found: boolean; path: string; bundled: boolean }>,
   authStatus: () =>
