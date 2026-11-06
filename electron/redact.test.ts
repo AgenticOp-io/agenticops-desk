@@ -13,6 +13,9 @@ test("a copy leaving this computer hides typed logins and keeps ordinary words",
   assert.equal(hideForSync("- User: `bob`\n- Pass: `Abc123xyz%`"), "- User: `bob`\n- Pass: `[hidden]`");
   assert.equal(hideForSync("Default login: admin / unl0ck"), "Default login: admin / [hidden]");
   assert.equal(hideForSync("mongodb+srv://u:<db_password>@host"), "mongodb+srv://u:<db_password>@host");
+  assert.equal(hideForSync("user: bob / Sunset2024!"), "user: bob / [hidden]");
+  assert.equal(hideForSync("try Sunset2024! on it"), "try [hidden] on it");
+  assert.equal(hideForSync("**Phase2** done"), "**Phase2** done");
   const plain = "add a password reset link. the password field is wrong";
   assert.equal(hideForSync(plain), plain);
   // Applied again on every sync, so the result must not change.

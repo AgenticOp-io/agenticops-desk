@@ -179,6 +179,8 @@ const TYPED_LOGINS = [
   /\b(pass\*{0,2}\s*[:=]\s*\*{0,2}\s*)([^\s`"']{3,})/gi,
   /\b((?:admin|administrator|root|ubnt)\s+\/\s+[`"']?)([^\s`"',;]+)/gi,
   /()\bpass(?:word|wd)?\d+\S*/gi,
+  /\b((?:user(?:name)?|usr|login)\b\s*[:=]?\s*[`"']?[\w.@-]+[`"']?\s*[,/|]\s*[`"']?)([^\s`"',;|)\]]*[\d!@#$%^&][^\s`"',;|)\]]*)/gi,
+  /()\b[A-Za-z]{3,}\d{1,6}[!@#$%^&]+/g,
 ];
 
 // Generated passwords flip between cases and digits far more often than a camelCase name does.
