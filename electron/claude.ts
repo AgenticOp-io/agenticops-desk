@@ -1018,6 +1018,11 @@ export function chatState(chatId: string) {
   return { running: Boolean(s?.query || s?.abort), waiting: Boolean(s?.approvals.size) };
 }
 
+// The window asks when it loads: a run resumed at startup reported its status before anything was listening.
+export function runningChats() {
+  return [...sessions.entries()].filter(([, s]) => s.query || s.abort).map(([id]) => id);
+}
+
 export function liveRunCount() {
   let n = 0;
   for (const session of sessions.values()) {

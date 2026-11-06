@@ -4,7 +4,7 @@ const OPTIONS = [
   {
     id: "github",
     title: "GitHub",
-    text: "Chats are copied here and sync through a private GitHub repository. Cursor's folders are no longer needed, and Settings can delete them.",
+    text: "Chats are copied here and sync through a private GitHub repository, created for you. Cursor's folders are no longer needed, and Settings can delete them.",
   },
   {
     id: "hybrid",
@@ -21,15 +21,14 @@ const OPTIONS = [
 type Mode = (typeof OPTIONS)[number]["id"];
 
 // Where chats live: asked once when Cursor chats are found, and changeable in Settings.
-export function ChatStorage({ current, url: savedUrl = "", onChosen }: { current?: string; url?: string; onChosen: (mode: Mode) => void }) {
-  const [url, setUrl] = useState(savedUrl);
+export function ChatStorage({ current, onChosen }: { current?: string; onChosen: (mode: Mode) => void }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
   const choose = (mode: Mode) => {
     setBusy(true);
     setNote(mode === "local" ? "" : "Copying your chats and pushing them. This can take a minute…");
-    void window.desk.setChatStorage(mode, url).then((result) => {
+    void window.desk.setChatStorage(mode).then((result) => {
       setBusy(false);
       setNote(result.note);
       if (result.ok) onChosen(mode);
@@ -38,15 +37,6 @@ export function ChatStorage({ current, url: savedUrl = "", onChosen }: { current
 
   return (
     <>
-      <div className="provider-line">
-        <input
-          aria-label="Private GitHub repository address"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="Private repository for GitHub or Hybrid: https://github.com/you/desk-sync.git"
-          spellCheck={false}
-        />
-      </div>
       <div className="palette-list">
         {OPTIONS.map((option) => (
           <button key={option.id} type="button" className={`list-item ${current === option.id ? "active" : ""}`} disabled={busy} onClick={() => choose(option.id)}>

@@ -35,6 +35,7 @@ export type CursorProject = {
   chatCount: number;
   lastChatAt: number | null;
   lastUsedAt?: number;
+  remote?: string;
 };
 
 export type CursorChat = {
@@ -133,6 +134,7 @@ contextBridge.exposeInMainWorld("desk", {
   createPath: (target: string, isDir: boolean) => ipcRenderer.invoke("fs:create", target, isDir) as Promise<boolean>,
   renamePath: (from: string, to: string) => ipcRenderer.invoke("fs:rename", from, to) as Promise<boolean>,
   deletePath: (target: string) => ipcRenderer.invoke("fs:delete", target) as Promise<boolean>,
+  runningChats: () => ipcRenderer.invoke("claude:running") as Promise<string[]>,
   stopClaude: (chatId?: string) => ipcRenderer.invoke("claude:stop", chatId) as Promise<boolean>,
   answerApproval: (payload: {
     chatId: string;
@@ -194,6 +196,14 @@ contextBridge.exposeInMainWorld("desk", {
       cursor: "off" | "partial" | "full";
       projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
     }>,
+  createSyncRepo: () =>
+    ipcRenderer.invoke("sync:create") as Promise<{
+      url: string;
+      ok: boolean;
+      note: string;
+      cursor: "off" | "partial" | "full";
+      projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
+    }>,
   setCursorIntegration: (mode: "off" | "partial" | "full") =>
     ipcRenderer.invoke("sync:cursor", mode) as Promise<{
       url: string;
@@ -214,7 +224,7 @@ contextBridge.exposeInMainWorld("desk", {
   moveChat: (chatId: string, projectId: string | null) => ipcRenderer.invoke("chat:move", chatId, projectId),
   locateProject: (projectId: string) => ipcRenderer.invoke("project:locate", projectId) as Promise<boolean>,
   storageStatus: () => ipcRenderer.invoke("storage:status"),
-  setChatStorage: (mode: string, url: string) => ipcRenderer.invoke("storage:set", mode, url),
+  setChatStorage: (mode: string) => ipcRenderer.invoke("storage:set", mode),
   reviewCursorRemoval: () => ipcRenderer.invoke("cursor:review-removal"),
   removeCursorFolders: () => ipcRenderer.invoke("cursor:remove-folders"),
   projectCleanupPlan: () => ipcRenderer.invoke("cleanup:plan"),

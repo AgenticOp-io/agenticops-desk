@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CursorChat } from "./cursor";
-import { runGit } from "./features";
+import { run, runGit } from "./features";
 import { writeJsonAtomic } from "./jsonStore";
 import {
   exportLibrarySlice,
@@ -40,6 +40,7 @@ import { loadSettings, patchSettings, type UiPrefs } from "./settings";
 // A project travels by its permanent ID. Its folder is per computer, and its remotes are only a clue to which folder it is.
 
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
+const SYNC_REPO = "desk-sync";
 
 export type SyncView = {
   url: string;
@@ -50,6 +51,7 @@ export type SyncView = {
 };
 
 let applying = false;
+let queued = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let urlCache = "";
 let loaded = false;
@@ -266,12 +268,18 @@ async function ensureRepo(dir: string, remote: string): Promise<{ ok: boolean; o
   if (!existsSync(ignore)) await fs.writeFile(ignore, "*.tmp\n", "utf8");
   const attrs = path.join(dir, ".gitattributes");
   if (!existsSync(attrs)) await fs.writeFile(attrs, "* -text\n", "utf8");
-  const fetched = await runGit(dir, ["fetch", "origin"], 120_000);
+  // --prune: a repository emptied or recreated on GitHub must not leave an origin/main that pull then cannot find.
+  const fetched = await runGit(dir, ["fetch", "--prune", "origin"], 120_000);
   const auth = /authentication failed|permission denied|could not read username|repository not found|access denied/i.test(fetched.output);
   if (!fetched.ok && auth) return fetched;
   const origin = await runGit(dir, ["rev-parse", "--verify", "origin/main"]);
   if (!origin.ok) {
     if (!fetched.ok && !/couldn't find remote ref|no refs in common|does not appear to be a git/i.test(fetched.output)) return fetched;
+    // The repository is empty and this folder's history is not chats: keep it, but never publish it there.
+    if (!(await isDeskRepo(dir)).ok) {
+      await fs.rename(dir, `${dir}-old-${Date.now()}`);
+      return ensureRepo(dir, remote);
+    }
     return { ok: true, output: "" };
   }
   const head = await runGit(dir, ["rev-parse", "--verify", "HEAD"]);
@@ -286,7 +294,7 @@ async function isDeskRepo(dir: string): Promise<{ ok: boolean; output: string }>
   if (existsSync(path.join(dir, "chats.json"))) return { ok: true, output: "" };
   const files = await runGit(dir, ["ls-tree", "-r", "--name-only", "HEAD"]);
   if (files.ok && files.output && !files.output.split("\n").includes("chats.json")) {
-    return { ok: false, output: "That repository is not a desk sync repo. Create an empty private repository and use that address." };
+    return { ok: false, output: "That repository already holds something other than chats. Clear the address to have a new one created." };
   }
   return { ok: true, output: "" };
 }
@@ -352,15 +360,21 @@ async function doSync(): Promise<SyncView> {
 
     const status = await runGit(dir, ["status", "--porcelain"]);
     if (!status.ok) return await viewOf(url, false, status.output);
+    // Commits with nothing new still go up: an earlier push failed, or the repository was emptied.
+    const ahead = await runGit(dir, ["rev-list", "--count", "origin/main..HEAD"]);
+    const changed = !!status.output || !ahead.ok || ahead.output !== "0";
     if (status.output) {
       const added = await runGit(dir, ["add", "-A"]);
       if (!added.ok) return await viewOf(url, false, added.output);
       const committed = await runGit(dir, ["commit", "-m", "Sync desk"]);
       if (!committed.ok && !/nothing to commit/i.test(committed.output)) return await viewOf(url, false, committed.output);
+    }
+    if (changed) {
       let pushed = await runGit(dir, ["push", "-u", "origin", "HEAD"], 120_000);
       if (!pushed.ok) {
         const pulled = await runGit(dir, ["pull", "--rebase", "--autostash", "origin", "main"], 120_000);
-        if (!pulled.ok) return await viewOf(url, false, pulled.output);
+        // With no main to pull, the push's own error is the one that explains the failure.
+        if (!pulled.ok) return await viewOf(url, false, /couldn't find remote ref/i.test(pulled.output) ? pushed.output : pulled.output);
         pushed = await runGit(dir, ["push", "-u", "origin", "HEAD"], 120_000);
         if (!pushed.ok) return await viewOf(url, false, pushed.output);
       }
@@ -373,12 +387,17 @@ async function doSync(): Promise<SyncView> {
       restore: mode === "full",
       announce: false,
     });
-    const note = status.output ? "Synced." : "Already up to date.";
+    const note = changed ? "Synced." : "Already up to date.";
     return await viewOf(url, true, link ? `${note} ${link}` : note);
   } catch (err) {
     return await viewOf(url, false, err instanceof Error ? err.message : String(err));
   } finally {
     applying = false;
+    // Something entered during that sync missed it.
+    if (queued) {
+      queued = false;
+      scheduleDeskSync();
+    }
   }
 }
 
@@ -458,13 +477,18 @@ async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncCh
   await writeJsonAtomic(path.join(dir, "deleted.json"), [...deleted].sort());
 }
 
+// A message commits as soon as it is entered. The short wait lets the chat row and its thread land in one commit.
 export function scheduleDeskSync() {
   void config().then((url) => {
-    if (!url || applying || timer) return;
+    if (!url || timer) return;
+    if (applying) {
+      queued = true;
+      return;
+    }
     timer = setTimeout(() => {
       timer = null;
       void syncNow();
-    }, 4000);
+    }, 500);
   });
 }
 
@@ -496,7 +520,7 @@ export async function setCursorIntegration(mode: string): Promise<SyncView> {
     return { ...view, cursor: next, note: view.note ? `${lead} ${view.note}` : lead };
   }
   const status = await syncStatus();
-  const note = next === "off" ? "Cursor is left alone." : "Save a private repository address to archive Cursor chats.";
+  const note = next === "off" ? "Cursor is left alone." : "Turn on sync to archive Cursor chats.";
   return { ...status, ok: true, cursor: next, note };
 }
 
@@ -504,7 +528,7 @@ export async function setSyncUrl(next: string): Promise<SyncView> {
   const trimmed = next.trim();
   const mode = await modeNow();
   if (trimmed && !allowedGitRemote(trimmed)) {
-    return emptyView(urlCache, "Use an https or git@ address of an empty private repository.", false, mode);
+    return emptyView(urlCache, "Use an https or git@ address, or leave it empty to have a private repository created.", false, mode);
   }
   urlCache = trimmed;
   loaded = true;
@@ -514,6 +538,38 @@ export async function setSyncUrl(next: string): Promise<SyncView> {
     return emptyView("", link || "Sync is off.", true, mode);
   }
   return syncNow();
+}
+
+// The address of a private repository this account can sync to, created if there is none yet.
+async function findOrCreateRepo(): Promise<{ ok: boolean; output: string }> {
+  const dir = syncDir();
+  // One used before comes back, so turning sync off and on does not start a second repository.
+  const earlier = await remoteOfPath(dir);
+  if (earlier) {
+    const listed = await runGit(dir, ["ls-remote", "origin"]);
+    if (listed.ok && (!listed.output || (await isDeskRepo(dir)).ok)) return { ok: true, output: earlier };
+  }
+  const home = app.getPath("home");
+  // Only a private one will do: chats must never land in a public repository that shares the name.
+  const lookUp = () => run("gh", ["repo", "view", SYNC_REPO, "--json", "url,visibility", "--jq", 'select(.visibility == "PRIVATE") | .url'], home);
+  let found = await lookUp();
+  if (!found.ok) {
+    const made = await run("gh", ["repo", "create", SYNC_REPO, "--private", "--description", "AgenticOps Desk sync: chats, memory and settings"], home);
+    if (!made.ok) {
+      return { ok: false, output: `Could not create a private repository. Install the GitHub CLI and run gh auth login, or paste an address in Settings. ${made.output}` };
+    }
+    found = await lookUp();
+  }
+  if (!found.ok || !found.output) return { ok: false, output: `Your GitHub account has a ${SYNC_REPO} repository that is not private. Make it private, or paste another address in Settings.` };
+  // Signed in to gh does not always mean signed in to git.
+  if (!(await runGit(home, ["ls-remote", found.output])).ok) await run("gh", ["auth", "setup-git"], home);
+  return found;
+}
+
+export async function createSyncRepo(): Promise<SyncView> {
+  const repo = await findOrCreateRepo();
+  if (!repo.ok) return emptyView(urlCache, repo.output, false, await modeNow());
+  return setSyncUrl(repo.output);
 }
 
 export async function cloneSyncedProject(remote: string, parent: string): Promise<{ ok: boolean; output: string; path?: string }> {

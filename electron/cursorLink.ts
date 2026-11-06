@@ -317,7 +317,7 @@ export async function applyCursorLink(input: CursorLinkInput): Promise<string> {
     return err instanceof Error ? err.message : "Cursor integration could not be saved.";
   }
   if (mode !== "off" && !allowedGitRemote(input.remote)) {
-    return input.announce ? "Save a private repository address to archive Cursor chats." : "";
+    return input.announce ? "Turn on sync to archive Cursor chats." : "";
   }
   const restored = mode === "full" && input.restore ? await restoreCursorList(input.syncDir) : "";
   if (!input.announce) return restored;

@@ -319,7 +319,7 @@ export const Composer = forwardRef<
         )}
         <textarea
           ref={areaRef}
-          placeholder="Message the agent…  @ to add a file, paste or drop images"
+          placeholder={running ? "This agent is working. A message here guides it. Use New chat to start another agent." : "Message the agent…  @ to add a file, paste or drop images"}
           value={value}
           onChange={(e) => {
             onChange(e.target.value);

@@ -16,6 +16,7 @@ export type CursorProject = {
   chatCount: number;
   lastChatAt: number | null;
   lastUsedAt?: number;
+  remote?: string;
 };
 
 export type CursorChat = {

@@ -103,6 +103,7 @@ export type CursorProject = {
   chatCount: number;
   lastChatAt: number | null;
   lastUsedAt?: number;
+  remote?: string;
 };
 
 export type CursorChat = {
@@ -203,6 +204,7 @@ declare global {
       createPath: (target: string, isDir: boolean) => Promise<boolean>;
       renamePath: (from: string, to: string) => Promise<boolean>;
       deletePath: (target: string) => Promise<boolean>;
+      runningChats: () => Promise<string[]>;
       stopClaude: (chatId?: string) => Promise<boolean>;
       answerApproval: (payload: {
         chatId: string;
@@ -246,6 +248,13 @@ declare global {
         cursor: "off" | "partial" | "full";
         projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
       }>;
+      createSyncRepo: () => Promise<{
+        url: string;
+        ok: boolean;
+        note: string;
+        cursor: "off" | "partial" | "full";
+        projects: Array<{ id: string; remote: string; name: string; local: string | null }>;
+      }>;
       setCursorIntegration: (mode: "off" | "partial" | "full") => Promise<{
         url: string;
         ok: boolean;
@@ -263,8 +272,8 @@ declare global {
       chatFolder: (chatId: string) => Promise<{ folder: string; changed: boolean } | null>;
       moveChat: (chatId: string, projectId: string | null) => Promise<CursorChat | null>;
       locateProject: (projectId: string) => Promise<boolean>;
-      storageStatus: () => Promise<{ mode: string; cursorChats: number; url: string }>;
-      setChatStorage: (mode: string, url: string) => Promise<{ ok: boolean; note: string }>;
+      storageStatus: () => Promise<{ mode: string; cursorChats: number }>;
+      setChatStorage: (mode: string) => Promise<{ ok: boolean; note: string }>;
       reviewCursorRemoval: () => Promise<{
         folders: Array<{ path: string; bytes: number }>;
         keep: string | null;

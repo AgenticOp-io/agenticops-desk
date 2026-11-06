@@ -1,11 +1,11 @@
 import { app } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listCursorChats, listCursorProjects, slugFromPath, type CursorChat, type CursorProject } from "./cursor";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
-import { cleanupProposals, mergeRemotes, remoteKey, type CleanupProposal, type SyncProject } from "./pureFeatures";
+import { cleanupProposals, copiesToDrop, emptyGoneProjectIds, mergeRemotes, remoteKey, type CleanupProposal, type SyncProject } from "./pureFeatures";
 
 export type ProjectRecord = CursorProject & { lastUsedAt: number };
 
@@ -378,6 +378,50 @@ function hydrate(lib: Library): Library {
   return lib;
 }
 
+// Same transcript saved under several chats, and projects whose folder and chats are both gone.
+// The kept chat is unchanged. A copy of library.json is saved the first time anything is removed.
+async function tidyLibrary(lib: Library): Promise<boolean> {
+  const rows: Array<{ id: string; key: string; at: number }> = [];
+  for (const chat of lib.chats) {
+    let key = "";
+    try {
+      key = createHash("sha256").update(await fs.readFile(threadFile(chat.id))).digest("hex");
+    } catch {
+      key = "";
+    }
+    rows.push({ id: chat.id, key, at: chat.lastUsedAt ?? chat.updatedAt ?? 0 });
+  }
+  const drop = new Set(copiesToDrop(rows));
+  const counts = new Map<string, number>();
+  for (const chat of lib.chats) if (chat.projectId && !drop.has(chat.id)) counts.set(chat.projectId, (counts.get(chat.projectId) ?? 0) + 1);
+  const ghosts = new Set(
+    emptyGoneProjectIds(lib.added.map((row) => ({ id: row.id, exists: Boolean(row.path) && existsSync(row.path), chats: counts.get(row.id) ?? 0 }))),
+  );
+  if (!drop.size && !ghosts.size) return false;
+  const backup = path.join(app.getPath("userData"), "backups", "library-before-tidy.json");
+  if (!existsSync(backup)) {
+    await fs.mkdir(path.dirname(backup), { recursive: true });
+    await fs.copyFile(libraryFile(), backup).catch(() => undefined);
+  }
+  if (drop.size) {
+    lib.chats = lib.chats.filter((chat) => !drop.has(chat.id));
+    for (const id of drop) {
+      if (!lib.deleted.includes(id)) lib.deleted.push(id);
+      delete lib.chatLastUsed[id];
+      await fs.rm(threadFile(id), { force: true }).catch(() => undefined);
+    }
+  }
+  if (ghosts.size) {
+    for (const row of lib.added) {
+      if (!ghosts.has(row.id) || !row.path) continue;
+      const key = keyOf(row.path);
+      if (!lib.removed.includes(key)) lib.removed.push(key);
+    }
+    lib.added = lib.added.filter((row) => !ghosts.has(row.id));
+  }
+  return true;
+}
+
 // Only call inside withLibrary. readJson sets a corrupt file aside before we start over from empty.
 async function load(): Promise<Library> {
   if (memory) return memory;
@@ -397,8 +441,9 @@ async function load(): Promise<Library> {
       : empty();
   const before = JSON.stringify(lib);
   hydrate(lib);
+  const tidied = await tidyLibrary(lib);
   memory = lib;
-  if (JSON.stringify(lib) !== before) {
+  if (tidied || JSON.stringify(lib) !== before) {
     remember(lib);
     await flushLibrary();
   }
@@ -770,6 +815,7 @@ export async function listLibraryProjects(): Promise<ProjectRecord[]> {
     out.set(k, {
       ...p,
       id: row?.id,
+      remote: row?.remotes?.find((r) => /github\.com/i.test(r)),
       lastUsedAt: lib.lastUsed[k] ?? p.lastChatAt ?? 0,
     });
   }
@@ -783,6 +829,7 @@ export async function listLibraryProjects(): Promise<ProjectRecord[]> {
       id: a.id,
       name: a.name || path.basename(a.path) || a.path,
       path: a.path,
+      remote: a.remotes?.find((r) => /github\.com/i.test(r)),
       slug,
       exists: Boolean(a.path) && existsSync(a.path),
       chatCount: chats?.chatCount ?? 0,

@@ -51,12 +51,14 @@ type SideRow =
   | { kind: "chat"; id: string; group: SideGroup; chat: CursorChat }
   | { kind: "more"; id: string; group: SideGroup; count: number }
   | { kind: "less"; id: string; group: SideGroup }
-  | { kind: "note"; id: string; text: string };
+  | { kind: "note"; id: string; text: string }
+  | { kind: "other"; id: string; count: number; open: boolean };
 
-function sideRowHeight(row: SideRow) {
-  if (row.kind === "chat") return 52;
-  if (row.kind === "project") return 36;
-  if (row.kind === "note") return 32;
+// Rows grow with the list's font size, so a larger font is not clipped.
+function sideRowHeight(row: SideRow, font: number) {
+  if (row.kind === "chat") return Math.ceil(font * 2.5) + 18;
+  if (row.kind === "project") return Math.ceil(font * 1.35) + 18;
+  if (row.kind === "note" || row.kind === "other") return 32;
   return 28;
 }
 type Tab = { path: string; name: string; contents: string; dirty: boolean };
@@ -99,7 +101,7 @@ function relTime(ms: number | null) {
 const GLYPH: Record<string, string> = {
   chats: "M2.4 4.2h6.4a1 1 0 0 1 1 1v3.6a1 1 0 0 1-1 1H6.2L4.4 12v-2.2H2.4a1 1 0 0 1-1-1V5.2a1 1 0 0 1 1-1ZM6.2 6.6h6.4a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H8.6",
   files: "M3.2 2.4h5.6L12.4 6v7.2a.8.8 0 0 1-.8.8H3.2a.8.8 0 0 1-.8-.8V3.2a.8.8 0 0 1 .8-.8ZM8.6 2.6V6h3.6",
-  project: "M8 1.8 13.2 4.6v6.8L8 14.2 2.8 11.4V4.6Z",
+  caret: "M6 3.5 10.5 8 6 12.5",
   chat: "M3.2 3.6h9.6v6.4H6.4L4.2 12.4V10H3.2Z",
 };
 
@@ -229,10 +231,10 @@ export function App() {
     localStorage.setItem("desk.drafts", JSON.stringify(drafts));
   }, [drafts]);
 
-  const [askStorage, setAskStorage] = useState<{ cursorChats: number; url: string } | null>(null);
+  const [askStorage, setAskStorage] = useState<{ cursorChats: number } | null>(null);
   useEffect(() => {
     void window.desk.storageStatus().then((s) => {
-      if (!s.mode && s.cursorChats > 0) setAskStorage({ cursorChats: s.cursorChats, url: s.url });
+      if (!s.mode && s.cursorChats > 0) setAskStorage({ cursorChats: s.cursorChats });
     });
   }, []);
 
@@ -264,6 +266,8 @@ export function App() {
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [allChats, setAllChats] = useState<Set<string>>(() => new Set());
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
@@ -1123,6 +1127,7 @@ export function App() {
       projectId?: string;
       lastChatAt: number;
       lastUsedAt: number;
+      github: boolean;
       chats: CursorChat[];
     };
     const map = new Map<string, Group>();
@@ -1135,6 +1140,7 @@ export function App() {
         exists: extra.exists ?? false,
         lastChatAt: extra.lastChatAt ?? 0,
         lastUsedAt: extra.lastUsedAt ?? 0,
+        github: extra.github ?? false,
         chats: [],
       };
       Object.assign(cur, extra);
@@ -1150,6 +1156,7 @@ export function App() {
         path: p.path,
         slug: p.slug,
         exists: p.exists,
+        github: /github\.com/i.test(p.remote ?? ""),
         lastChatAt: p.lastChatAt ?? 0,
         lastUsedAt: p.lastUsedAt ?? p.lastChatAt ?? 0,
       });
@@ -1228,22 +1235,52 @@ export function App() {
   const visibleGroups = q ? groups : groups.filter((g) => !hiddenProjectSet.has(g.key));
   const hiddenGroupList = groups.filter((g) => hiddenProjectSet.has(g.key));
   const hiddenChatList = chats.filter((c) => hiddenChatSet.has(c.id));
+  const sideHeight = useMemo(() => (row: SideRow) => sideRowHeight(row, prefs.itemFont), [prefs.itemFont]);
   const sideRows = useMemo(() => {
     const rows: SideRow[] = [];
-    for (const g of visibleGroups) {
-      const showAll = Boolean(q) || Boolean(prefs.expanded[g.key]);
+    const pushGroup = (g: (typeof visibleGroups)[number]) => {
+      const current = samePath(g.path, workspace);
+      const opened = Boolean(q) || Boolean(prefs.expanded[g.key]);
+      const every = Boolean(q) || allChats.has(g.key);
       const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
-      const limit = samePath(g.path, workspace) ? 5 : 1;
-      const visibleChats = showAll ? liveChats : collapsedChats(liveChats, limit, (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id);
-      const hiddenCount = liveChats.length - visibleChats.length;
+      // A closed project is one row, so a long list of folders is easy to scan. An open one shows its recent chats.
+      const visibleChats = !opened
+        ? []
+        : every
+          ? liveChats
+          : collapsedChats(liveChats, 5, (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id);
+      const hiddenCount = opened ? liveChats.length - visibleChats.length : 0;
       rows.push({ kind: "project", id: `p:${g.key}`, group: g });
       for (const c of visibleChats) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
       if (hiddenCount > 0) rows.push({ kind: "more", id: `more:${g.key}`, group: g, count: hiddenCount });
-      if (showAll && !q && liveChats.length > limit) rows.push({ kind: "less", id: `less:${g.key}`, group: g });
-      if (liveChats.length === 0) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
+      if (opened && !q && every && liveChats.length > 5) rows.push({ kind: "less", id: `less:${g.key}`, group: g });
+      if (liveChats.length === 0 && (opened || current)) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
+    };
+    // A search shows every match. Otherwise GitHub projects stay in the list, and the rest sit behind one row.
+    const primary = q
+      ? visibleGroups
+      : visibleGroups.filter(
+          (g) => g.github || samePath(g.path, workspace) || g.chats.some((c) => runningByChat[c.id] || c.id === activeChat?.id),
+        );
+    const rest = q ? [] : visibleGroups.filter((g) => !primary.includes(g));
+    for (const g of primary) pushGroup(g);
+    if (rest.length) {
+      rows.push({ kind: "other", id: "other-folders", count: rest.length, open: otherOpen });
+      if (otherOpen) for (const g of rest) pushGroup(g);
     }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, hiddenChatSet, runningByChat, workspace, activeChat?.id]);
+  }, [visibleGroups, q, prefs.expanded, allChats, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen]);
+
+  // A newly opened chat shows in the list, once: collapsing its project afterwards stays collapsed.
+  const shownChat = useRef<string | null>(null);
+  useEffect(() => {
+    const id = activeChat?.id;
+    if (!id || shownChat.current === id || !prefsReady.current) return;
+    const key = groups.find((g) => g.chats.some((c) => c.id === id))?.key;
+    if (key === undefined) return;
+    shownChat.current = id;
+    if (!prefs.expanded[key]) patchPrefs({ expanded: { ...prefs.expanded, [key]: true } });
+  }, [activeChat?.id, groups]);
 
   const openMenu = (e: ReactMouseEvent, extra: Partial<CtxMenu> = {}) => {
     e.preventDefault();
@@ -1400,12 +1437,19 @@ export function App() {
           <Windowed
             className="tree"
             items={sideRows}
-            heightOf={sideRowHeight}
+            heightOf={sideHeight}
             keyOf={(row) => row.id}
             onContextMenu={(e) => openMenu(e)}
           >
             {(row) => {
               if (row.kind === "note") return <div className="tree-note">{row.text}</div>;
+              if (row.kind === "other") {
+                return (
+                  <button type="button" className="more-link other-folders" onClick={() => setOtherOpen((open) => !open)}>
+                    {row.open ? "Hide" : "Show"} {row.count} other folder{row.count === 1 ? "" : "s"}
+                  </button>
+                );
+              }
               if (row.kind === "more") {
                 const g = row.group;
                 return (
@@ -1414,7 +1458,7 @@ export function App() {
                     className="more-link"
                     onClick={(e) => {
                       e.stopPropagation();
-                      patchPrefs({ expanded: { ...prefs.expanded, [g.key]: true } });
+                      setAllChats((all) => new Set(all).add(g.key));
                     }}
                   >
                     {row.count} more
@@ -1429,7 +1473,11 @@ export function App() {
                     className="more-link"
                     onClick={(e) => {
                       e.stopPropagation();
-                      patchPrefs({ expanded: { ...prefs.expanded, [g.key]: false } });
+                      setAllChats((all) => {
+                        const next = new Set(all);
+                        next.delete(g.key);
+                        return next;
+                      });
                     }}
                   >
                     Show less
@@ -1442,6 +1490,7 @@ export function App() {
                 return (
                   <button
                     type="button"
+                    title={c.title}
                     draggable={!q && renamingId !== c.id}
                     className={`list-item nested ${activeChat?.id === c.id ? "active" : ""} ${runningByChat[c.id] ? `running phase-${progressByChat[c.id]?.phase ?? "starting"}` : ""} ${dragging === `c:${c.id}` ? "dragging" : ""} ${dragOver === `c:${c.id}` ? "drag-over" : ""}`}
                     onDragStart={(e: DragEvent) => {
@@ -1491,7 +1540,7 @@ export function App() {
                       }
                     }}
                   >
-                    <span className="row-icon chat"><Glyph name="chat" /></span>
+                    <span className="row-icon"><Glyph name="chat" /></span>
                     {renamingId === c.id ? (
                       <input
                         className="rename-input"
@@ -1538,6 +1587,7 @@ export function App() {
                   type="button"
                   className={`project-row ${current ? "current" : ""} ${dragging === `p:${g.key}` ? "dragging" : ""} ${dragOver === `p:${g.key}` ? "drag-over" : ""}`}
                   title={g.path || g.slug}
+                  aria-expanded={showAll}
                   draggable={!q}
                   onDragStart={(e: DragEvent) => {
                     setDragData(e, { kind: "project", key: g.key });
@@ -1561,18 +1611,13 @@ export function App() {
                   }}
                   onContextMenu={(e) => openMenu(e, { projectKey: g.key })}
                   onClick={() => {
-                    void openProjectLatest(g.path, liveChats);
+                    if (!q) toggleGroup(g.key);
+                    // Opening another project also goes to its last chat. Collapsing never changes the chat on screen.
+                    if (q || (!showAll && !current)) void openProjectLatest(g.path, liveChats);
                   }}
                 >
-                  <span
-                    className={`row-icon ${showAll ? "open" : ""}`}
-                    title={showAll ? "Show fewer chats" : "Show chats"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleGroup(g.key);
-                    }}
-                  >
-                    <Glyph name="project" />
+                  <span className={`row-icon ${showAll ? "open" : ""}`}>
+                    <Glyph name="caret" />
                   </span>
                   <span className="list-title">{g.name}</span>
                   {g.projectId && !g.exists && <span className="list-sub" title="This project's folder is not on this computer. Right-click to locate it.">no folder</span>}
@@ -1598,7 +1643,7 @@ export function App() {
           </Windowed>
           {visibleGroups.length === 0 && (
             <div className="bubble system" style={{ margin: 10 }}>
-              {hiddenGroupList.length ? "All projects hidden. Right-click to unhide." : "No projects yet. Use Add to open a folder."}
+              {hiddenGroupList.length ? "All projects hidden. They come back from Settings." : "No projects yet. Use Add to open a folder."}
             </div>
           )}
           </>
@@ -1903,23 +1948,21 @@ export function App() {
               <button onClick={() => hideProject(menu.projectKey!)}>Hide project</button>
             </>
           ) : null}
-          {(menu.chatId || menu.projectKey) &&
-          (hiddenGroupList.length > 0 || hiddenChatList.length > 0) ? (
-            <div className="ctx-sep" />
-          ) : null}
-          {hiddenGroupList.length === 0 && hiddenChatList.length === 0 && !menu.chatId && !menu.projectKey ? (
+          {hiddenGroupList.length + hiddenChatList.length > 0 ? (
+            <>
+              {(menu.chatId || menu.projectKey) && <div className="ctx-sep" />}
+              <button
+                onClick={() => {
+                  setMenu(null);
+                  setShowSettings(true);
+                }}
+              >
+                Hidden ({hiddenGroupList.length + hiddenChatList.length})…
+              </button>
+            </>
+          ) : !menu.chatId && !menu.projectKey ? (
             <div className="ctx-empty">Nothing hidden</div>
           ) : null}
-          {hiddenGroupList.map((g) => (
-            <button key={g.key} onClick={() => unhideProject(g.key)}>
-              Unhide {g.name}
-            </button>
-          ))}
-          {hiddenChatList.map((c) => (
-            <button key={c.id} onClick={() => unhideChat(c.id)}>
-              Unhide chat: {c.title}
-            </button>
-          ))}
         </div>
       )}
 
@@ -2026,7 +2069,6 @@ export function App() {
               Found {askStorage.cursorChats} Cursor chats. Passwords and tokens are hidden in anything pushed to GitHub. Your choice can be changed in Settings.
             </p>
             <ChatStorage
-              url={askStorage.url}
               onChosen={(mode) => {
                 setPrefs((p) => ({ ...p, chatStorage: mode }));
                 setAskStorage(null);
@@ -2204,7 +2246,7 @@ export function App() {
             <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
             <p className="settings-hint">
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
-              Drag items to reorder. Each folder shows two chats; use the project icon or more link for the rest.
+              Drag items to reorder. GitHub projects stay in the list. Other folders are one row at the bottom.
             </p>
             {(hiddenGroupList.length > 0 || hiddenChatList.length > 0) && (
               <div className="settings-hidden">

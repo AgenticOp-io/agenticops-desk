@@ -219,6 +219,21 @@ test("synced projects attach by remote only when there is no doubt", async () =>
   assert.deepEqual(matchSyncedProjects([{ id: "l" }], [{ id: "x", name: "R", remotes: [] }]), {});
 });
 
+test("duplicate chats keep the one used last, and an empty folder that is gone can leave", async () => {
+  const { copiesToDrop, emptyGoneProjectIds } = await import("./pureFeatures.ts");
+  assert.deepEqual(copiesToDrop([
+    { id: "old", key: "same", at: 1 },
+    { id: "new", key: "same", at: 5 },
+    { id: "only", key: "other", at: 1 },
+    { id: "blank", key: "", at: 9 },
+  ]), ["old"]);
+  assert.deepEqual(emptyGoneProjectIds([
+    { id: "ghost", exists: false, chats: 0 },
+    { id: "kept", exists: false, chats: 2 },
+    { id: "live", exists: true, chats: 0 },
+  ]), ["ghost"]);
+});
+
 test("cleanup proposes moved folders and only offers live duplicates", async () => {
   const { cleanupProposals } = await import("./pureFeatures.ts");
   const row = (id: string, p: string, exists: boolean, chats: number) => ({ id, name: id, path: p, exists, chats });
@@ -288,6 +303,17 @@ test("a chat opened after an empty one still shows its rounds", async () => {
   assert.equal(roundsToShow(12, 13, 12), 13);
   assert.equal(roundsToShow(13, 14, 12), 14);
   assert.equal(roundsToShow(24, 40, 12), 24);
+});
+
+test("rows keep their place, and new ones go on top", async () => {
+  const { stableOrder } = await import("../src/sideChats.ts");
+  const places = new Map<string, number>();
+  const same = (x: string) => x;
+  assert.deepEqual(stableOrder(["a", "b", "c"], same, places), ["a", "b", "c"]);
+  assert.deepEqual(stableOrder(["c", "a", "b"], same, places), ["a", "b", "c"]);
+  assert.deepEqual(stableOrder(["c", "new", "a", "b"], same, places), ["new", "a", "b", "c"]);
+  assert.deepEqual(stableOrder(["newer", "new", "a", "b", "c"], same, places), ["newer", "new", "a", "b", "c"]);
+  assert.deepEqual(stableOrder(["b"], same, places), ["b"]);
 });
 
 test("a patch must be newer, match this install and stay in its folder", async () => {

@@ -17,12 +17,12 @@ const SECTIONS: Section[] = [
     title: "Projects and chats",
     body: [
       "Add puts a folder on the list. The search box filters projects and chat titles. Click a folder to open the chat you used there last. Click any older chat to read it. Starting a new chat does not throw the old ones away.",
-      "Each project shows the chat you used last, and the project you are in shows five. The project icon, or the more link, shows the rest. Folders stay open or closed as you left them.",
+      "GitHub projects stay in the list. Everything else is under Other folders at the bottom. Click a project to open it and see its five most recent chats, and click it again to collapse it. Opening another project also goes to the chat you used there last.",
       "Drag a project or a chat to reorder it. Right-click to hide one. Hidden items come back from Settings, or from the same right-click menu.",
       "When chats from the editor you used before are found, the first start asks where chats should live: synced through GitHub, synced with that editor keeping its files, or left in that editor's local database. Settings can change this. In GitHub mode, Settings can also delete that editor's folders. What you type in the message box stays with its chat when you switch. Catch up hands one of those chats to the agent as a briefing. Nothing is written into the project folder.",
       "A chat stays in its project until you right-click it and choose Move to project. If a project's folder moves or disappears, the project shows no folder and its chats stay put; right-click it and choose Locate folder. Settings › Project cleanup offers to merge one project found in two places.",
       "Code updates download by themselves on Windows setup installs and load the next time the app starts. Settings › Check for updates looks now and offers Restart to update. Updates that change more than the app's own code still need the full installer.",
-      "Settings › Sync points at a private git repository. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project keeps its chats on every computer; Clone puts its repository on this computer, or Locate folder points at a copy you already have. The same page chooses whether Cursor chats stay on that computer, are archived into the repository, or are also added back to Cursor's chat list.",
+      "Settings › Sync creates a private git repository on your GitHub account, or uses an address you paste. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project keeps its chats on every computer; Clone puts its repository on this computer, or Locate folder points at a copy you already have. The same page chooses whether Cursor chats stay on that computer, are archived into the repository, or are also added back to Cursor's chat list.",
     ],
   },
   {

@@ -32,6 +32,7 @@ import {
   forgetSession,
   keepChanges,
   liveRunCount,
+  runningChats,
   listModels,
   onNotificationClick,
   pendingRuns,
@@ -83,6 +84,7 @@ import {
   scheduleDeskSync,
   setCursorIntegration,
   setSyncUrl,
+  createSyncRepo,
   syncApplying,
   syncNow,
   syncStatus,
@@ -563,9 +565,9 @@ ipcMain.handle("cursor:review-removal", () => reviewCursorRemoval());
 ipcMain.handle("storage:status", async () => {
   const { chatStorage: mode } = await loadSettings();
   const found = mode ? 0 : (await listCursorChats().catch(() => [])).length;
-  return { mode, cursorChats: found, url: (await syncStatus()).url };
+  return { mode, cursorChats: found };
 });
-ipcMain.handle("storage:set", async (_e, raw: string, address: string) => {
+ipcMain.handle("storage:set", async (_e, raw: string) => {
   const mode = chatStorage(raw);
   if (!mode) return { ok: false, note: "Pick where chats should live." };
   if (mode === "local") {
@@ -573,20 +575,18 @@ ipcMain.handle("storage:set", async (_e, raw: string, address: string) => {
     await patchSettings({ chatStorage: mode });
     return { ok: true, note: "Chats stay in Cursor's local database, and nothing goes to GitHub." };
   }
-  const url = String(address ?? "").trim();
-  if (!url) return { ok: false, note: "Paste the address of an empty private repository first." };
   const before = (await syncStatus()).url;
   const previous = (await loadSettings()).chatStorage;
   await patchSettings({ chatStorage: mode });
   const report = await convertIfChosen();
-  const view = await setSyncUrl(url);
+  const view = await (before ? syncNow() : createSyncRepo());
   if (!view.ok) {
     // A choice that cannot reach its repository is not made: the user is asked again.
     await setSyncUrl(before);
     await patchSettings({ chatStorage: previous });
     return { ok: false, note: view.note || "That repository could not be reached." };
   }
-  return { ok: true, note: `Chats now sync to ${url}. ${convertNote(report)}`.trim() };
+  return { ok: true, note: `Chats now sync to ${view.url}. ${convertNote(report)}`.trim() };
 });
 // The one thing that deletes Cursor's folders. Only this dialog can start it, and Cancel is the default.
 ipcMain.handle("cursor:remove-folders", async () => {
@@ -986,6 +986,7 @@ ipcMain.handle("fs:delete", async (_e, target: string) => {
   return true;
 });
 
+ipcMain.handle("claude:running", () => runningChats());
 ipcMain.handle("claude:stop", (_e, chatId?: string) => {
   cancelAuto(chatId);
   stopClaude(win, chatId);
@@ -1039,6 +1040,7 @@ ipcMain.handle("git:checkout", (_e, cwd: string, branch: string) => gitCheckout(
 ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(cwd, title, body));
 ipcMain.handle("sync:status", () => syncStatus());
 ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
+ipcMain.handle("sync:create", () => createSyncRepo());
 ipcMain.handle("sync:cursor", (_e, mode: string) => setCursorIntegration(String(mode ?? "")));
 ipcMain.handle("sync:now", () => syncNow());
 ipcMain.handle("sync:clone", async (_e, remote: string, projectId: string) => {

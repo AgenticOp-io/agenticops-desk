@@ -37,14 +37,15 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
       <div className="settings-label">Sync</div>
       <p className="settings-hint">
         A private git repository shared by your computers. Chats, memory and settings are pushed there. API keys stay on this
-        computer, and passwords and tokens in a chat are hidden in the pushed copy. Create an empty private repository and paste its address. Each project keeps its chats on every computer;
+        computer, and passwords and tokens in a chat are hidden in the pushed copy. Leave the address empty and a private repository is created on your GitHub account. On another computer, paste the same address. Each project keeps its chats on every computer;
         clone it here when you want the files, or locate its folder from the sidebar.
       </p>
       <div className="provider-line">
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://github.com/you/desk-sync.git"
+          aria-label="Private repository address"
+          placeholder="Created for you, or paste an address"
           spellCheck={false}
         />
       </div>
@@ -54,13 +55,13 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
           disabled={busy}
           onClick={() => {
             setBusy(true);
-            void window.desk.setSyncUrl(url).then((status) => {
+            void (url.trim() ? window.desk.setSyncUrl(url) : window.desk.createSyncRepo()).then((status) => {
               apply(status);
               setBusy(false);
             });
           }}
         >
-          Save and sync
+          {url.trim() ? "Save and sync" : "Create repository and sync"}
         </button>
         <button
           className="btn"
@@ -74,6 +75,19 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
           }}
         >
           Sync now
+        </button>
+        <button
+          className="btn"
+          disabled={busy || !view?.url}
+          onClick={() => {
+            setBusy(true);
+            void window.desk.setSyncUrl("").then((status) => {
+              apply(status);
+              setBusy(false);
+            });
+          }}
+        >
+          Turn off
         </button>
       </div>
       <div className="settings-label">Cursor</div>
