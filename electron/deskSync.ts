@@ -31,6 +31,8 @@ import {
   type SyncChat,
   type SyncProject,
 } from "./pureFeatures";
+import { privacyVault } from "./privacy";
+import { hideForSync, hideThreadForSync } from "./redact";
 import { loadSettings, patchSettings, type UiPrefs } from "./settings";
 
 // The desk's own copy of chats, memory and settings. Project source stays in each project's repo.
@@ -114,7 +116,7 @@ function asChats(value: unknown): SyncChat[] {
 function chatToSync(chat: CursorChat): SyncChat {
   return {
     id: chat.id,
-    title: chat.title,
+    title: hideForSync(chat.title, privacyVault().pinnedValues()),
     updatedAt: chat.updatedAt ?? 0,
     lastUsedAt: chat.lastUsedAt,
     projectId: chat.projectId ?? null,
@@ -168,14 +170,24 @@ export async function refreshProjectRemotes() {
   await rememberProjectRemotes(found);
 }
 
-// Copies a file only when the bytes differ, so a sync does not dirty the repo forever.
 async function copyIfDifferent(from: string, to: string) {
-  let bytes: Buffer;
-  try {
-    bytes = await fs.readFile(from);
-  } catch {
-    return;
-  }
+  const bytes = await fs.readFile(from).catch(() => null);
+  if (bytes) await writeIfDifferent(bytes, to);
+}
+
+// A chat in the repository has its secrets hidden; the copy on this computer keeps them.
+// Unchanged files are skipped, because hiding is too slow to repeat on all of them every few minutes.
+const pushedAt = new Map<string, number>();
+async function pushThread(local: string, remote: string) {
+  const { mtimeMs } = await fs.stat(local);
+  if (pushedAt.get(local) === mtimeMs && existsSync(remote)) return;
+  const messages = JSON.parse(await fs.readFile(local, "utf8")) as unknown;
+  await writeIfDifferent(Buffer.from(JSON.stringify(hideThreadForSync(messages, privacyVault().pinnedValues()))), remote);
+  pushedAt.set(local, mtimeMs);
+}
+
+// Writes only when the bytes differ, so a sync does not dirty the repo forever.
+async function writeIfDifferent(bytes: Buffer, to: string) {
   try {
     const cur = await fs.readFile(to);
     if (cur.equals(bytes)) return;
@@ -247,6 +259,9 @@ async function ensureRepo(dir: string, remote: string): Promise<{ ok: boolean; o
       if (!added.ok) return added;
     }
   }
+  // Commits here are the app's own; git refuses to commit on a computer with no name set.
+  await runGit(dir, ["config", "user.name", "AgenticOps Desk"]);
+  await runGit(dir, ["config", "user.email", "desk@agenticop.io"]);
   const ignore = path.join(dir, ".gitignore");
   if (!existsSync(ignore)) await fs.writeFile(ignore, "*.tmp\n", "utf8");
   const attrs = path.join(dir, ".gitattributes");
@@ -395,7 +410,10 @@ async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<st
     const remote = path.join(remoteDir, `${chat.id}.json`);
     const remoteWon = (chat.updatedAt ?? 0) > (previous.get(chat.id) ?? 0) && existsSync(remote);
     if (remoteWon) await copyIfDifferent(remote, local);
-    else if (existsSync(local)) await copyIfDifferent(local, remote);
+    else if (existsSync(local)) {
+      // A thread that cannot be read as JSON stays out of the repository, where it could not be cleaned.
+      await pushThread(local, remote).catch((err) => console.error(`AgenticOps Desk did not sync thread ${chat.id}`, err));
+    }
     else if (existsSync(remote)) await copyIfDifferent(remote, local);
   }
 }

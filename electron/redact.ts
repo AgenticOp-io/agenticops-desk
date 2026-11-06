@@ -153,7 +153,7 @@ export class Vault {
 }
 
 function keep(value: string) {
-  return value.length < 3 || NOT_A_SECRET.test(value) || value.includes("{{SECRET_");
+  return value.length < 3 || NOT_A_SECRET.test(value) || value.includes("{{SECRET_") || value.startsWith("[hidden");
 }
 
 // Walk any JSON-shaped value and apply fn to every string. Base64 payloads (images, PDFs) are left alone.
@@ -169,6 +169,52 @@ export function mapStrings<T>(value: T, fn: (s: string) => string, key = ""): T 
     return out as T;
   }
   return value;
+}
+
+// How logins appear in chats: "user password123!", "username ADMIN password PASSWORD", "Pass: `abc`", "admin / abc".
+const TYPED_LOGINS = [
+  /\b((?:user(?:name)?|login)\s+\S+\s+(?:password|passwd|pass|pwd)\s+)(\S+)/gi,
+  /\b((?:password|passwd|pwd|passphrase)\s+)(\S*[\d!@#$%^&*]\S*)/gi,
+  /\b((?:pass(?:word|wd)?|pwd)\*{0,2}\s*[:=]\s*\*{0,2}\s*[`"'])([^`"'\n]+)/gi,
+  /\b(pass\*{0,2}\s*[:=]\s*\*{0,2}\s*)([^\s`"']{3,})/gi,
+  /\b((?:admin|administrator|root|ubnt)\s+\/\s+[`"']?)([^\s`"',;]+)/gi,
+  /()\bpass(?:word|wd)?\d+\S*/gi,
+];
+
+// Generated passwords flip between cases and digits far more often than a camelCase name does.
+export function looksRandom(word: string): boolean {
+  if (!/[a-z]/.test(word) || !/[A-Z]/.test(word) || !/\d/.test(word)) return false;
+  return (word.match(/[a-z]+|[A-Z]+|\d+|[^A-Za-z0-9]+/g)?.length ?? 0) / word.length > 0.4;
+}
+
+// For a copy leaving this computer: nothing there can put a value back, so this errs towards hiding and keeps no values.
+// Placeholders become [hidden] too, because on another computer a placeholder would restore to a different secret.
+export function hideForSync(text: string, pinned: string[] = [], found?: Set<string>): string {
+  const vault = new Vault({ pinned });
+  let out = vault.scrub(text).text;
+  for (const re of TYPED_LOGINS) {
+    out = out.replace(re, (whole: string, head: string, value?: string) => {
+      const secret = typeof value === "string" ? value : whole.slice(head.length);
+      if (secret === "[hidden]" || secret.includes("<")) return whole;
+      found?.add(secret);
+      return `${head}[hidden]`;
+    });
+  }
+  out = out.replace(/[A-Za-z0-9%!@#$^&*+]{12,64}/g, (word) => {
+    if (!looksRandom(word)) return word;
+    found?.add(word);
+    return "[hidden]";
+  });
+  for (const value of Object.values(vault.toJSON().values)) found?.add(value);
+  return out.replace(/\{\{SECRET_\d+\}\}/g, "[hidden]");
+}
+
+// A value found once is hidden everywhere in the chat, since agents repeat passwords back.
+export function hideThreadForSync<T>(messages: T, pinned: string[] = []): T {
+  const found = new Set<string>();
+  mapStrings(messages, (text) => hideForSync(text, pinned, found));
+  const known = [...pinned, ...[...found].filter((value) => value.length >= 4 && value !== "[hidden]")];
+  return mapStrings(messages, (text) => hideForSync(text, known));
 }
 
 // Files that are secrets as a whole, often binary, so scrubbing their text cannot help.

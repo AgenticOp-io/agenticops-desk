@@ -37,7 +37,7 @@ export function SyncSettings({ onChanged }: { onChanged: () => void }) {
       <div className="settings-label">Sync</div>
       <p className="settings-hint">
         A private git repository shared by your computers. Chats, memory and settings are pushed there. API keys stay on this
-        computer. Create an empty private repository and paste its address. Each project keeps its chats on every computer;
+        computer, and passwords and tokens in a chat are hidden in the pushed copy. Create an empty private repository and paste its address. Each project keeps its chats on every computer;
         clone it here when you want the files, or locate its folder from the sidebar.
       </p>
       <div className="provider-line">

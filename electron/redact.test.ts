@@ -1,8 +1,40 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { commandTouchesSecretFile, isSecretFile, mapStrings, Vault, wrapCommand } from "./redact.ts";
+import { commandTouchesSecretFile, hideForSync, hideThreadForSync, isSecretFile, mapStrings, Vault, wrapCommand } from "./redact.ts";
 
 const hidden = (text: string, v = new Vault()) => v.scrub(text).text;
+
+test("a copy leaving this computer hides typed logins and keeps ordinary words", () => {
+  assert.equal(hideForSync("dpeterson password123! is the login"), "dpeterson [hidden] is the login");
+  assert.equal(hideForSync("ssh in, username ADMIN password PASSWORD, find it"), "ssh in, username ADMIN password [hidden] find it");
+  assert.equal(hideForSync("the password is hunter2secret"), "the password is [hidden]");
+  assert.equal(hideForSync("my vpn key abc-pin", ["abc-pin"]), "my vpn key [hidden]");
+  assert.equal(hideForSync("see {{SECRET" + "_3}} here"), "see [hidden] here");
+  assert.equal(hideForSync("- User: `bob`\n- Pass: `Abc123xyz%`"), "- User: `bob`\n- Pass: `[hidden]`");
+  assert.equal(hideForSync("Default login: admin / unl0ck"), "Default login: admin / [hidden]");
+  assert.equal(hideForSync("mongodb+srv://u:<db_password>@host"), "mongodb+srv://u:<db_password>@host");
+  const plain = "add a password reset link. the password field is wrong";
+  assert.equal(hideForSync(plain), plain);
+  // Applied again on every sync, so the result must not change.
+  for (const t of ["username ADMIN password PASSWORD", "password123!", "password: hunter2secret"]) assert.equal(hideForSync(hideForSync(t)), hideForSync(t));
+});
+
+test("random-looking words are hidden and code names are kept", () => {
+  assert.equal(hideForSync("KEY=aB3dE9xQ2mZ7pL4k and `Xy7Qa2Bn9Kd4Lm1Z`"), "KEY=[hidden] and `[hidden]`");
+  for (const name of ["getUserAccountById", "readComposerBubbles", "handleLogin2Factor", "chatLastUsedMap", "HTTP2ServerPush", "4f9a2b7c1d3e5f60"]) {
+    assert.equal(hideForSync(name), name);
+  }
+});
+
+test("a value found once is hidden everywhere in the chat", () => {
+  const out = hideThreadForSync([
+    { role: "user", text: "password airdata3 on the tower" },
+    { role: "assistant", text: "`airdata3` did not help", parts: [{ kind: "text", text: "tried airdata3" }] },
+  ]);
+  assert.ok(!JSON.stringify(out).includes("airdata3"));
+  assert.equal(out[0].role, "user");
+  assert.deepEqual(hideThreadForSync(out), out);
+});
 
 test("config assignments are hidden and restore exactly", () => {
   const v = new Vault();
