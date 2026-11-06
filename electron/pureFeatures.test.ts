@@ -280,6 +280,15 @@ test("a collapsed project shows the last used chat, plus any that must stay in v
   assert.deepEqual(collapsedChats([], 1, () => true), []);
 });
 
+test("a chat opened after an empty one still shows its rounds", async () => {
+  const { roundsToShow } = await import("../src/sideChats.ts");
+  assert.equal(roundsToShow(12, 0, 12), 12);
+  assert.equal(roundsToShow(roundsToShow(12, 0, 12), 21, 12), 12);
+  assert.equal(roundsToShow(12, 13, 12), 13);
+  assert.equal(roundsToShow(13, 14, 12), 14);
+  assert.equal(roundsToShow(24, 40, 12), 24);
+});
+
 test("a patch must be newer, match this install and stay in its folder", async () => {
   const { isNewerVersion, patchRefusal, patchShell } = await import("./pureFeatures.ts");
   assert.equal(isNewerVersion("v0.1.10", "0.1.9"), true);

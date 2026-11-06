@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { roundsToShow } from "./sideChats";
 
 export type TranscriptPart = { kind: "text"; text: string } | { kind: "step"; text: string };
 export type TranscriptMsg = {
@@ -272,7 +273,7 @@ export function Conversation({
     replay: (index: number) => handlers.current.onReplay(index),
   });
   useEffect(() => {
-    setShown((count) => (count >= turns.length - 1 ? turns.length : count));
+    setShown((count) => roundsToShow(count, turns.length, PAGE));
   }, [turns.length]);
   const start = Math.max(0, turns.length - shown);
   const hidden = start;

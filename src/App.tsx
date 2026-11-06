@@ -563,10 +563,15 @@ export function App() {
     void openChat(first);
   }, [chats, workspace]);
 
+  // A chat always opens at its last message, wherever the previous one was scrolled to.
+  useEffect(() => {
+    stickToBottom.current = true;
+  }, [activeChat?.id]);
+
   useEffect(() => {
     const el = messagesRef.current;
     if (stickToBottom.current && el) el.scrollTop = el.scrollHeight;
-  }, [msgs, running]);
+  }, [msgs, running, activeChat?.id]);
 
   useEffect(() => {
     const ids = [...persistIds.current].filter(
@@ -1678,6 +1683,7 @@ export function App() {
                 </ul>
               )}
               <Conversation
+                key={activeChat?.id}
                 msgs={msgs}
                 live={running}
                 liveStatus={running ? runProgress?.status : undefined}
