@@ -71,6 +71,20 @@ function phaseWord(progress?: RunProgress) {
   return "Working";
 }
 
+// The left panel only says what kind of work is going on. What the agent is saying or running stays in the chat.
+const SIDE_WORD: Record<RunPhase, string> = {
+  starting: "Starting",
+  thinking: "Thinking",
+  tool: "Working",
+  writing: "Writing",
+  pushing: "Pushing",
+  approval: "Needs permission",
+};
+
+function sideWord(progress?: RunProgress) {
+  return progress?.phase ? SIDE_WORD[progress.phase] : "Working";
+}
+
 function phaseRank(progress?: RunProgress) {
   if (progress?.phase === "approval") return 4;
   if (progress?.phase === "pushing") return 3;
@@ -1569,7 +1583,7 @@ export function App() {
                       ⋯
                     </span>
                     <span className="list-sub">
-                      {runningByChat[c.id] ? phaseWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
+                      {runningByChat[c.id] ? sideWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
                     </span>
                   </button>
                 );
@@ -1622,9 +1636,7 @@ export function App() {
                   <span className="list-title">{g.name}</span>
                   {g.projectId && !g.exists && <span className="list-sub" title="This project's folder is not on this computer. Right-click to locate it.">no folder</span>}
                   {projectRun && (
-                    <span className={`phase phase-${projectRun.phase ?? "tool"}`} title={projectRun.status}>
-                      {phaseWord(projectRun)}
-                    </span>
+                    <span className={`phase phase-${projectRun.phase ?? "tool"}`}>{sideWord(projectRun)}</span>
                   )}
                   <span className="count">{liveChats.length}</span>
                   <span

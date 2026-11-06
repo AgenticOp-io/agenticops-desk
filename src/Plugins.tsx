@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AutoStatus, AvailablePlugin, InstalledPlugin, Marketplace, ModelOption, PluginCommand, PluginResult } from "./vite-env";
 
 const errText = (err: unknown) =>
@@ -184,6 +184,7 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
   const [details, setDetails] = useState<{ id: string; text: string } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [shown, setShown] = useState(40);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const load = async (refresh = false) => {
     setLoading(true);
@@ -206,6 +207,9 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    if (pending) cardRef.current?.scrollIntoView({ block: "nearest" });
+  }, [pending]);
 
   const act = async (label: string, fn: () => Promise<PluginResult>) => {
     setBusy(label);
@@ -260,6 +264,37 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
     .sort((a, b) => (b.installCount ?? 0) - (a.installCount ?? 0));
   const browse = matches.slice(0, shown);
   const marketNames = [...new Set(available.map((p) => p.marketplaceName))].sort();
+  // Shown under the row that asked: this list is long, and a card at the top of it opens out of sight.
+  const confirmCard = pending && (
+    <div className="provider plugin-confirm" ref={cardRef}>
+      <strong>Install {pending.id}?</strong>
+      {pending.confirm ? (
+        <>
+          <p className="settings-hint">This plugin runs a setup command on your computer when it installs:</p>
+          <pre className="plugin-cmd">{pending.confirm.command}</pre>
+        </>
+      ) : (
+        <p className="settings-hint">
+          {pending.marketplace ? `Adds the ${pending.marketplace} marketplace from GitHub, then installs it. ` : ""}
+          It can run commands and read files in the folders your chats open. Details shows what it adds.
+        </p>
+      )}
+      <div className="provider-line">
+        <button className="btn primary" onClick={() => void install(pending)}>
+          {pending.confirm ? "Run it and install" : "Install"}
+        </button>
+        {!pending.confirm && !pending.marketplace && (
+          <button className="btn" onClick={() => void showDetails(pending.id)}>
+            Details
+          </button>
+        )}
+        <button className="btn" onClick={() => setPending(null)}>
+          Cancel
+        </button>
+      </div>
+      {details?.id === pending.id && <pre className="plugin-details">{details.text}</pre>}
+    </div>
+  );
 
   return (
     <div className="plugins" id="settings-plugins">
@@ -270,37 +305,6 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
         commands. A plugin runs on your computer with Claude Code's permissions, so install ones you trust.
       </p>
       {msg && <div className={`plugin-status ${busy ? "busy" : ""}`}>{msg}</div>}
-
-      {pending && (
-        <div className="provider plugin-confirm">
-          <strong>Install {pending.id}?</strong>
-          {pending.confirm ? (
-            <>
-              <p className="settings-hint">This plugin runs a setup command on your computer when it installs:</p>
-              <pre className="plugin-cmd">{pending.confirm.command}</pre>
-            </>
-          ) : (
-            <p className="settings-hint">
-              {pending.marketplace ? `Adds the ${pending.marketplace} marketplace from GitHub, then installs it. ` : ""}
-              It can run commands and read files in the folders your chats open. Details shows what it adds.
-            </p>
-          )}
-          <div className="provider-line">
-            <button className="btn primary" onClick={() => void install(pending)}>
-              {pending.confirm ? "Run it and install" : "Install"}
-            </button>
-            {!pending.confirm && !pending.marketplace && (
-              <button className="btn" onClick={() => void showDetails(pending.id)}>
-                Details
-              </button>
-            )}
-            <button className="btn" onClick={() => setPending(null)}>
-              Cancel
-            </button>
-          </div>
-          {details?.id === pending.id && <pre className="plugin-details">{details.text}</pre>}
-        </div>
-      )}
 
       <div className="plugin-sub">Recommended</div>
       {FEATURED.map((f) => {
@@ -318,6 +322,7 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
                 Install
               </button>
             )}
+            {pending?.id === f.id && <div className="plugin-more">{confirmCard}</div>}
           </div>
         );
       })}
@@ -433,7 +438,11 @@ export function PluginsSettings({ onChanged }: { onChanged?: () => void }) {
           <button className="btn" disabled={Boolean(busy)} onClick={() => setPending({ id: p.pluginId })}>
             Install
           </button>
-          {details?.id === p.pluginId && <pre className="plugin-details">{details.text}</pre>}
+          {pending?.id === p.pluginId ? (
+            <div className="plugin-more">{confirmCard}</div>
+          ) : (
+            details?.id === p.pluginId && <pre className="plugin-details">{details.text}</pre>
+          )}
         </div>
       ))}
       {matches.length > shown && (
