@@ -74,7 +74,8 @@ Removing a login leaves it on the Always hide list, because it may already appea
 - **Permissions:** see `electron/gate.ts` and `electron/allows.ts`. A trusted folder runs ordinary commands without asking, including deletes, pushes and network calls. Trust a folder only if you would let the agent do those things there.
 - **Folder boundary:** file reads and writes follow the real path. A shortcut inside the project cannot place an edit outside it. A shell in a trusted folder still can.
 - **Credential files:** with Privacy Mode on, commands and reads naming key, certificate and credential files are blocked. The check is on the file's name in the command, so a script that opens one indirectly isn't caught.
-- **Team rules:** a repository's `.agenticops/orders.json` can add rules and protected paths, but its `checks` are ignored, so cloning can't run commands.
+- **Team rules:** a repository's `.agenticops/orders.json` can add rules and protected paths, but its `checks` are ignored, so cloning can't run commands. Checks you save yourself run on both engines.
+- **Dependencies:** `npm audit` reports advisories in Electron 36, the DOMPurify copy inside Monaco 0.57, KaTeX's math plugins, and electron-builder. Monaco and KaTeX run in the window. Electron is the app's runtime. There is no forward fix for Monaco or KaTeX yet, and Electron needs its own upgrade, so `npm audit fix --force` is not used: it would downgrade packages.
 - **Plugins:** a plugin runs with the agent's permissions. Install ones you trust.
 - **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret. The private repository is read with the GitHub CLI sign-in on this computer. The app does not carry a token.
 - **Binary download:** the Claude Code binary is checked against npm's SHA-512 fingerprint.
@@ -87,7 +88,7 @@ The only way the sidebar removes a project's folder is `project:trash` in `elect
 ## If something leaks
 
 1. Change the secret at its source. Hiding or deleting it afterwards doesn't undo exposure.
-2. Replace it in **Settings → Saved logins** or **Direct AI providers**.
+2. Replace it in **Settings → Privacy & logins → Saved logins** or **Settings → AI models → Direct AI providers**.
 3. If it reached the sync repository, remember that git keeps history. Treat it as exposed even after the file is fixed.
 
 ## Reporting a problem

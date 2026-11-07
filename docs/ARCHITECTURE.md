@@ -49,11 +49,13 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `plugins.ts` | `claude plugin` commands |
 | `watch.ts`, `provenance.ts` | Log watches, and which chat changed which file |
 | `patcher.ts`, `tarMember.ts` | Signed code patches |
-| `pureFeatures.ts` | Logic with no Electron or Node dependency, so it can be unit tested |
+| `pureFeatures.ts` | Logic with no Electron dependency, so plain Node can unit test it. `staysInside` reads the disk to follow links |
 
 The renderer's main files: `App.tsx` (sidebar, chat pane, settings), `Composer.tsx`, `Conversation.tsx`, `Dock.tsx`, `CodePane.tsx`, `Windowed.tsx` (virtualized sidebar), `SyncSettings.tsx`, `SavedLogins.tsx`, `PrivacySettings.tsx`, `Plugins.tsx`, `Help.tsx`.
 
 `boot/boot.mjs` is the packaged entry point. It chooses between the installed code and a patch, and falls back if a patch fails to open a window.
+
+`build/installer.nsh` adds the Windows setup's two pages (where chats live, and importing Cursor) and runs the app with `--apply-install`.
 
 ## App data
 
@@ -74,6 +76,7 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `orders\`, `watches.json`, `provenance.json` | Standing orders, log watches, file origins | No |
 | `cursor-archive\`, `cursor-converted.json`, `cursor-import.json` | Cursor import state | Partly, by Cursor mode |
 | `backups\` | `library.json` and settings copies taken before cleanups | No |
+| `install-choices.json`, `install-result.txt` | The setup's answers until the app applies them, and the line the setup prints | No |
 
 Project memory lives in Claude Code's folder: `~/.claude/projects/<encoded-path>/memory`. Project folders on disk are per computer.
 
@@ -93,8 +96,24 @@ In `claude.ts`, under `hooks`:
 - **PreToolUse, Bash and PowerShell:** restore placeholders, block secret files, check logins (`approveLogins`), ask permission, fill logins (`fillCredentials`), then `wrapCommand`, so a failing command's output still goes through the scrub.
 - **PreToolUse, edits:** apply protected paths, snapshot the file for undo, and restore placeholders.
 - **PostToolUse, every tool:** scrub the output before the agent sees it.
+- **Stop:** standing-order checks run when the run changed files. A failure blocks the finish and goes back with the output, up to `maxFixes` times.
 
-`direct.ts` does the equivalent in `runPrivateTool` and `runTool`.
+`direct.ts` does the equivalent in `runPrivateTool` and `runTool`, and runs the same checks through `orderFeedback` before a turn with no tool calls ends.
+
+### Folder boundary
+
+`staysInside` in `pureFeatures.ts` resolves links and junctions with `realpath`. A file that doesn't exist yet is judged by its nearest existing parent. `resolveIn` in `direct.ts` and `inWorkspace` in `main.ts` use it, so the agent's file tools and the editor's IPC can't reach outside the folder through a link. `insideFolder` in `gate.ts` is a string check that only decides whether to ask; it stays free of Node.
+
+### Steering a Direct run
+
+A message sent while a Direct run is going sets `session.guide`. For DeepSeek it also aborts `session.steer`, which cancels the HTTP call and any `run_command`, `web_fetch` or check in flight (`stopSignal`). The loop then adds the guide as the next user message. Only that abort is treated as a steer. Any other error from the call ends the run with the error. `session.abort` still stops the whole run.
+
+### Install
+
+1. The setup writes `install-choices.json` (`{"storage":"github"|"hybrid"|"local","importCursor":bool}`) and waits on `--apply-install`.
+2. `applyInstallChoices` in `main.ts` reads and deletes the file, imports Cursor or writes the skip marker, runs `ensureGitHubLogin` for Git and Hybrid, then `chooseChatStorage`.
+3. The result line goes to `install-result.txt` for the setup to print. A non-zero exit stops the setup.
+4. When the app is already open, `--apply-install` can't take the single-instance lock. It leaves the file in place, and the next normal start applies it.
 
 ### Saved login
 
@@ -140,10 +159,12 @@ To fake a git remote that looks like GitHub, use an `ssh://git@github.com/...` a
 
 ## Releasing
 
-1. Bump `version` in `package.json` and the lockfile.
+1. Bump `version` in `package.json` and the lockfile. Use a plain `X.Y.Z`: the patch manifest takes its version from there, and `patchRefusal` only accepts that form. Beta is the GitHub prerelease flag, not part of the tag.
 2. Commit, tag `vX.Y.Z` on that commit, and push both.
 3. The **Release** workflow builds Windows, macOS and Linux, both chip types, signs the patch, and publishes a **beta** prerelease with every installer. Installed copies read the private repository with the GitHub CLI sign-in on that computer.
-4. A beta is visible to installed copies. They read git tags, then download the patch. A draft is not.
+4. A beta is visible to installed copies. They read git tags with `gh auth token` (`checkForUpdate` in `features.ts`), then download the patch. A draft is not.
+
+Runtime packages that Vite bundles (`openai`, React, Monaco, KaTeX) stay in `devDependencies`. Only `dependencies` are copied into the installer, and the main build keeps only `@anthropic-ai/claude-agent-sdk` and `node:sqlite` external.
 
 An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. The signing key exists only as the `PATCH_SIGNING_KEY` secret. If it is lost, make a new pair and ship one full install.
 

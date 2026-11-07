@@ -18,10 +18,10 @@ const SECTIONS: Section[] = [
     body: [
       "Add puts a folder on the list. The search box filters projects and chat titles. Click any older chat to read it. Starting a new chat does not throw the old ones away.",
       "GitHub projects stay in the list. Everything else is under Other folders at the bottom. A project not opened for three months moves to the archive under them, and you can drag one onto the archive row or back out. Search still finds it, nothing on disk moves, and opening it brings it back. To take a project off the disk, right-click it and choose Delete folder from this computer: the folder goes to the Recycle Bin, you are told first what is not pushed, and its chats stay. Click a project to go to the chat you used there last and see its five most recent chats. Click the project you are in to collapse it or open it again.",
-      "Drag a project or a chat to reorder it. Right-click to hide one. Hidden items come back from Settings, or from the same right-click menu.",
-      "When chats from the editor you used before are found, the first start asks where chats should live: synced through GitHub, synced with that editor keeping its files, or left in that editor's local database. Settings can change this. In GitHub mode, Settings can also delete that editor's folders. What you type in the message box stays with its chat when you switch. Catch up hands one of those chats to the agent as a briefing. Nothing is written into the project folder.",
-      "A chat stays in its project until you right-click it and choose Move to project. If a project's folder moves or disappears, the project shows no folder and its chats stay put; right-click it and choose Locate folder. Settings › Project cleanup offers to merge one project found in two places.",
-      "Code updates download by themselves on Windows setup installs and load the next time the app starts. Settings › Updates looks now and offers Restart to update. Updates that change more than the app's own code still need the full installer.",
+      "Drag a project or a chat to reorder it. Right-click to hide one. Hidden items come back from Settings › Chats & projects, or from the same right-click menu.",
+      "The Windows setup asks where chats live: Git, Hybrid or Local. When chats from the editor you used before are found and no choice was made, the first start asks: synced through GitHub, synced with that editor keeping its files, or left in that editor's local database. Settings › Chats & projects can change this. In Git mode, the same page can also delete that editor's folders. What you type in the message box stays with its chat when you switch. Catch up hands one of those chats to the agent as a briefing. Nothing is written into the project folder.",
+      "A chat stays in its project until you right-click it and choose Move to project. If a project's folder moves or disappears, the project shows no folder and its chats stay put; right-click it and choose Locate folder. Settings › Chats & projects › Project cleanup offers to merge one project found in two places.",
+      "Code updates download by themselves on Windows setup installs and load the next time the app starts. They need the GitHub CLI signed in (gh auth login), because the repository is private. Settings › Updates looks now and offers Restart to update. Updates that change more than the app's own code still need the full installer.",
       "Settings › Sync finds your sync repository or creates a private one on your GitHub account, or uses an address you paste. To set up another computer: install the app, sign in to the GitHub CLI (gh auth login), and turn on sync the same way. Repositories already on that computer are linked to their projects, and Clone all fetches the rest. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project keeps its chats on every computer; Clone puts its repository on this computer, or Locate folder points at a copy you already have. The same page chooses whether Cursor chats stay on that computer, are archived into the repository, or are also added back to Cursor's chat list.",
     ],
   },
@@ -32,7 +32,7 @@ const SECTIONS: Section[] = [
       "Type in the box and press Enter or Send. Shift+Enter starts a new line. While a chat is already working, Send guides that run instead of starting over.",
       "Type @ to attach a file from the open folder, or a function, class or type by name (@handleLogin points the agent at its file and line; this needs a git repository). You can also paste or drop images (up to 10, each under 5 MB).",
       "Agent is the usual mode: the agent edits files and runs commands. Plan reads and writes a plan, and waits for you before changing anything. Auto-edit applies file edits without an extra prompt. The permission rules below still apply.",
-      "The model menu's first entry is the default engine, which uses the account you signed in with under Settings. Direct lists API models: pick one and paste its key there, or add the key under Settings. Those calls are billed per token. Auto moves between the ones already set up (see The Auto model).",
+      "The model menu's first entry is the default engine, which uses the account you signed in with under Settings › Engine & sign-in. Direct lists API models: pick one and paste its key there, or add the key under Settings › AI models. Those calls are billed per token. Auto moves between the ones already set up (see The Auto model).",
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
       "The meter under the box is how full this chat’s context is, and a rough cost since this window opened.",
     ],
@@ -41,7 +41,7 @@ const SECTIONS: Section[] = [
     id: "auto",
     title: "The Auto model",
     body: [
-      "Auto, at the top of the model menu, uses every AI you have set up: the default engine with your sign-in, plus any provider with a key under Direct AI providers. Settings › Auto model can narrow that to the ones you pick, in your order. /autopick opens it.",
+      "Auto, at the top of the model menu, uses every AI you have set up: the default engine with your sign-in, plus any provider with a key under Direct AI providers. Settings › AI models › Auto model can narrow that to the ones you pick, in your order. /autopick opens it.",
       "Each message goes to the first AI on the list. If it hits a rate limit, runs out of quota or credit, has its key rejected, cannot be reached, or declines the request, the same message goes to the next one. A line in the chat says which AI failed and why. The one that failed rests for 5 minutes after a rate limit or quota error, or 1 minute otherwise. Settings shows which AIs are resting and can wake them early.",
       "Errors about the work itself, such as a failing test or a standing-order check, do not switch AIs.",
       "A chat keeps using the AI that last worked for it, so its context carries over. The label next to the model menu shows which AI answered. If an AI fails after it has already changed files, the next one is told which files so it does not redo the work.",
@@ -63,7 +63,7 @@ const SECTIONS: Section[] = [
     id: "privacy",
     title: "Privacy Mode and secrets",
     body: [
-      "Privacy Mode is on by default (Settings, at the top). Passwords, keys and tokens in what you send, in files the agent reads and in command output are swapped for placeholders like {{SECRET_3}} before anything reaches the AI. The same value always gets the same placeholder.",
+      "Privacy Mode is on by default (Settings › Privacy & logins). Passwords, keys and tokens in what you send, in files the agent reads and in command output are swapped for placeholders like {{SECRET_3}} before anything reaches the AI. The same value always gets the same placeholder.",
       "The agent works with the placeholders. When it runs a command or edits a file, AgenticOps Desk puts the real value back on this computer just before the tool runs, so a config can be fixed without the AI ever seeing the password. Approval prompts show you the real command.",
       "Key, certificate and credential files (.key, .pem, .pfx, SSH keys, password databases) are blocked outright. Values with no label next to them, like a VPN key, can be added under “Always hide these values”.",
       "Local only runs chats on an Ollama model on this computer and turns cloud models off. Standard turns filtering off. Images you attach are never filtered, so crop out anything secret before attaching.",
@@ -74,7 +74,7 @@ const SECTIONS: Section[] = [
     id: "logins",
     title: "Saved logins",
     body: [
-      "Settings › Saved logins keeps passwords, tokens and SSH keys encrypted for your Windows account on this computer. The agent uses them by name without seeing them. Nothing can read a saved value back, so keep your own copy if you need one elsewhere. They do not sync, so add them again on another computer. Privacy Mode must be on.",
+      "Settings › Privacy & logins › Saved logins keeps passwords, tokens and SSH keys encrypted for your Windows account on this computer. The agent uses them by name without seeing them. Nothing can read a saved value back, so keep your own copy if you need one elsewhere. They do not sync, so add them again on another computer. Privacy Mode must be on.",
       "Ask in plain words, like “check uptime on the core router using core-router”. The agent runs desk-ssh, desk-scp or desk-sftp NAME for SSH, desk-telnet NAME for telnet, desk-git NAME for git, or the variable DESK_SECRET_NAME for anything else.",
       "You are asked once per chat before each login is first used. Read where the command sends it: a command you allow could pass the secret on, and hiding only catches the exact value. Unknown SSH servers are refused until you agree to trust them.",
       "Telnet sends the password unencrypted across the network, so use SSH where you can. SSH keys with a passphrase are not supported yet.",
@@ -86,7 +86,7 @@ const SECTIONS: Section[] = [
     body: [
       "The words next to the chat title are the current step: getting ready, thinking, reading or editing a file, searching, running a command, writing the reply, or pushing to main. The list shows one word for the kind of work.",
       "Each message you send starts a round. While it works, that round lists what it is doing. The list stays open for the round in progress and closes when the reply is in, so the answer is what you read. Open it again to see the steps. A long chat shows the latest rounds. Earlier rounds open from the top.",
-      "You can type another instruction and press Enter while it is still working. That guides the run in progress. The added line shows in the same round. It does not wait for the run to finish, and it does not throw away the steps already done.",
+      "You can type another instruction and press Enter while it is still working. That guides the run in progress. The added line shows in the same round. It does not wait for the run to finish, and it does not throw away the steps already done. With some Direct providers it also stops the reply and any command still running, so your instruction is taken up at once.",
       "When the agent edits files, a small bar lists them. The changes are already kept: review a diff or undo a file if you want, or just keep working. Sending your next message clears the bar.",
     ],
   },
@@ -94,10 +94,10 @@ const SECTIONS: Section[] = [
     id: "permissions",
     title: "Permissions",
     body: [
-      "File edits inside the open folder never wait for you: they happen, then show on the change bar to review or undo. The first time the agent needs to run a command in a folder, the app asks once. Allow means ordinary coding in that folder just runs: tests, git (including push), delete, and network.",
+      "File edits inside the open folder never wait for you: they happen, then show on the change bar to review or undo. A shortcut in the folder that points somewhere else counts as outside. The first time the agent needs to run a command in a folder, the app asks once. Allow means ordinary coding in that folder just runs: tests, git (including push), delete, and network.",
       "Disk format, administrator commands (sudo or runas), and shutdown still ask, once each, and are remembered if you allow them. Saved logins ask once per chat, even in a trusted folder.",
       "Questions and plan approvals always ask, even in a trusted folder. Allow on those does not by itself trust the folder. Deny never gets remembered.",
-      "Sign in from Settings if a chat says you are not signed in.",
+      "Sign in from Settings › Engine & sign-in if a chat says you are not signed in.",
     ],
   },
   {
@@ -109,7 +109,7 @@ const SECTIONS: Section[] = [
       "Right-click a file to make a new file or folder, rename, delete, copy the path, reveal it in the system folder, or add it to the chat.",
       "Code blocks in a reply can be opened in the editor as a read-only snippet.",
       "Quick edit: select some code (or just put the cursor on a line), press Ctrl+I or right-click › Edit with AI, type what to change, and press Enter. A small fast model rewrites only that part in a few seconds, without a full agent run. Ctrl+Z undoes it, and nothing is saved until you press Ctrl+S. With Local only, it uses your Ollama model.",
-      "Autocomplete: pick a fast model under Settings › Editor autocomplete (a Claude API key with Haiku, or a local Ollama model). After a short pause in typing, grey text suggests the next lines; Tab accepts, and typing on ignores it. Each pause is one call to that model, so it is off until you choose one.",
+      "Autocomplete: pick a fast model under Settings › AI models › Editor autocomplete (a Claude API key with Haiku, or a local Ollama model). After a short pause in typing, grey text suggests the next lines; Tab accepts, and typing on ignores it. Each pause is one call to that model, so it is off until you choose one.",
     ],
   },
   {
@@ -129,10 +129,10 @@ const SECTIONS: Section[] = [
     body: [
       "Terminal, Git, Preview, and Instructions sit under the message box. Git shows the branch and changes, commits tracked files, and can open a pull request with GitHub’s gh command. Preview loads a web address. Instructions edits CLAUDE.md, AGENTS.md, and the project’s .mcp.json for connected tools.",
       "When the agent writes a plan or a task list, they show above the messages.",
-      "Rules holds standing orders for the folder: rules added to every run, protected paths the agent may not edit, and checks that must pass. A team can commit .agenticops/orders.json in the repo with the same rules and protected paths, so everyone gets them; checks in that file are ignored, so a cloned repo can never run commands on its own.",
-      "Second opinion (Settings): after a run changes files, a model from another provider checks the change against what you asked. If it raises concerns, they go back to the agent to fix, up to two rounds, and both sides show in the chat.",
+      "Rules holds standing orders for the folder: rules added to every run, protected paths the agent may not edit, and checks that must pass. Checks run with every model once a run has changed files, and a failure goes back to the agent. A team can commit .agenticops/orders.json in the repo with the same rules and protected paths, so everyone gets them; checks in that file are ignored, so a cloned repo can never run commands on its own.",
+      "Second opinion (Settings › AI models): after a run changes files, a model from another provider checks the change against what you asked. If it raises concerns, they go back to the agent to fix, up to two rounds, and both sides show in the chat.",
       "If you close the window while a chat is still working, AgenticOps Desk hides to the tray and keeps going. Quit from the tray icon stops it. A notice appears when a chat finishes in the background or needs you and the window is not in front.",
-      "Settings can switch to a light theme and check GitHub for a newer release. Installers are not code-signed; signing needs a certificate.",
+      "Settings › Appearance switches to a light theme. Settings › Updates checks for a newer release. Installers are not code-signed; signing needs a certificate.",
     ],
   },
   {

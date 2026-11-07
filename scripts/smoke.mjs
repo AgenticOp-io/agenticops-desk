@@ -33,6 +33,7 @@ try {
   await page.keyboard.press("Escape");
 
   await page.locator('button[title="Settings"]').click();
+  await page.locator(".settings-entry", { hasText: "AI models" }).click();
   await page.locator("#settings-auto").waitFor();
   await page.keyboard.press("Escape");
   await page.mouse.click(5, 300);

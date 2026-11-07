@@ -22,6 +22,8 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 - Run `npx tsc --noEmit` before calling a change done
 - Send every `library.json` read-modify-write through `withLibrary` (`electron/library.ts`), and write JSON with `writeJsonAtomic`
 - Test UI or main-process changes on a copy with its own `userData` (see below), not on the real app data
+- Check folder boundaries with `staysInside` (`pureFeatures.ts`), which follows links, not with a path-string comparison
+- Keep packages that Vite bundles (`openai`, React, Monaco…) in `devDependencies`; `dependencies` are copied into the installer as well
 - Keep vendor product names (Claude, Claude Code, Cursor, OpenAI…) out of the app's own name and general UI text; say "the agent" or "the default engine". They may appear where the user picks or configures something: Settings, provider names, and the model menus
 
 ## Do not
@@ -29,6 +31,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 - Replace the Claude Code engine with the Direct one; Direct is an addition, and Claude Code stays the default
 - Add a way to read a saved login back into the renderer, put its value in command text, or let a placeholder fill it in. Every use goes through `approveLogins`
 - Sync `credentials.json`, `providers.json` or `privacy-vault.json`
+- Build a GitHub token or key into the app. Update checks use the GitHub CLI sign-in on that computer
 - Call the Claude API with anything but `@anthropic-ai/sdk`, or send provider API keys to the renderer (they stay encrypted in the main process)
 - Require a separately installed Claude CLI. Use `ensureClaudeBinary()` (`electron/claudeBinary.ts`): source runs use `node_modules`, packaged runs download the matching binary
 - Let folder trust answer `AskUserQuestion` or `ExitPlanMode`; the user must read those

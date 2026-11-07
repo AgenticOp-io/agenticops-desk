@@ -5,6 +5,7 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 ## Contents
 
 - [The window](#the-window)
+- [Settings](#settings)
 - [Projects and the sidebar](#projects-and-the-sidebar)
 - [Chats](#chats)
 - [Sending a message](#sending-a-message)
@@ -30,7 +31,24 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 - **Right side:** the conversation and message box. **Code** opens the editor beside it.
 - **Under the message box:** Terminal, Git, Preview, Instructions and Rules.
 
-There is no status bar. Sign-in state and the agent engine's state are in **Settings**. If you are signed out, sending a message shows the error in the chat.
+There is no status bar. Sign-in state and the agent engine's state are in **Settings → Engine & sign-in**. If you are signed out, sending a message shows the error in the chat.
+
+## Settings
+
+**Settings** opens a list of sections. Pick one, and **‹ Back** returns to the list. Closing Settings starts at the list again.
+
+| Section | What is in it |
+|---|---|
+| **Appearance** | Theme, window font size, agent list font size |
+| **Privacy & logins** | Privacy Mode, Always hide these values, Saved logins |
+| **Sync** | The sync repository, and what Cursor chats do |
+| **Chats & projects** | Hidden items, Project cleanup, Where chats live, and Cursor folders in Git mode |
+| **Engine & sign-in** | Claude Code status, Sign in, Check |
+| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Auto model |
+| **Plugins** | Browse, install and manage plugins |
+| **Updates** | Check for a newer release, and Restart to update |
+
+The command palette opens **Plugins** and **AI models** directly.
 
 ## Projects and the sidebar
 
@@ -62,9 +80,9 @@ The list has three sections, top to bottom:
 - **Add** puts a folder on the list. **New chat** starts one in the open project.
 - Drag projects or chats to reorder them.
 - Right-click a project to change or locate its folder, hide it, archive it, or delete its folder. Right-click a chat to rename, pin, branch, move, hide or delete it.
-- Hidden items are listed at the top of **Settings**, with **Unhide all**.
+- Hidden items are listed in **Settings → Chats & projects**, with **Unhide all**.
 
-**Projects keep their identity.** A project has a permanent ID. If its folder moves or disappears, it shows **no folder** and its chats stay with it. Use **Locate folder…** to point it at the new place. A chat stays in its project until you use **Move to project…**. **Settings → Project cleanup** offers to merge one project found in two places.
+**Projects keep their identity.** A project has a permanent ID. If its folder moves or disappears, it shows **no folder** and its chats stay with it. Use **Locate folder…** to point it at the new place. A chat stays in its project until you use **Move to project…**. **Settings → Chats & projects → Project cleanup** offers to merge one project found in two places.
 
 ## Chats
 
@@ -72,6 +90,7 @@ The list has three sections, top to bottom:
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
 - Closing the window while a chat is working hides the app to the tray and keeps going. **Quit** from the tray icon stops it. A run cut off by quitting resumes the next time you send.
+- Closing the window when nothing is running saves open chats first. On macOS the app stays open after its window closes, and a reopened window saves its chats the same way.
 - On a message you sent: **Rewind** drops everything after it, **Retry** sends it again, and **Branch** copies the chat up to that point.
 - Search looks inside messages as well as titles.
 
@@ -90,13 +109,14 @@ The list has three sections, top to bottom:
 Picked in the model menu, per chat.
 
 - **Claude Code** (default): the official agent, using your Claude sign-in and subscription. No separate CLI install is needed.
-- **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought, and a new command replaces the reply that is still streaming. The other providers load their model list when you add a key, from the menu or from **Settings → Direct AI providers**.
-- **Auto:** uses all of these, or the ones you pick in **Settings → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs.
+- **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought. A new command stops the DeepSeek reply that is streaming and any command it is running, and the run continues with your command. A failed call, such as a rejected key or a rate limit, still shows as an error. The other providers load their model list when you add a key, from the menu or from **Settings → AI models → Direct AI providers**.
+- **Auto:** uses all of these, or the ones you pick in **Settings → AI models → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs.
 - **Second opinion:** a model from another provider reviews each change against your request, and sends concerns back to the agent, for up to two rounds.
 
 ## Permissions
 
 - File edits inside the open folder happen without asking, and appear on the change bar to review or undo.
+- "Inside the folder" means where the file really is. A shortcut or junction in the project that points elsewhere is treated as outside, for the agent's file tools and for the editor.
 - The first command in a folder asks once. After **Allow**, tests, git (including push), deletes and network commands run without asking.
 - Disk format, administrator commands and shutdown still ask, once each, and are remembered if you allow them.
 - Questions and plan approvals always ask.
@@ -104,7 +124,7 @@ Picked in the model menu, per chat.
 
 ## Privacy Mode
 
-On by default, at the top of **Settings**.
+On by default, in **Settings → Privacy & logins**.
 
 - Passwords, keys and tokens in what you send, in files the agent reads and in command output become placeholders like `{{SECRET_n}}` before anything reaches the AI. The real value goes back on your computer just before a tool runs.
 - Key, certificate and credential files are blocked outright.
@@ -114,7 +134,7 @@ On by default, at the top of **Settings**.
 
 ## Saved logins
 
-**Settings → Saved logins** stores passwords, tokens and SSH keys that the agent can use by name without seeing them. Privacy Mode must be on.
+**Settings → Privacy & logins → Saved logins** stores passwords, tokens and SSH keys that the agent can use by name without seeing them. Privacy Mode must be on.
 
 **To add one:** give it a name such as `core-router`, pick **Password**, **Token or PAT**, or **SSH private key**, optionally add a username and host, and save. To change a value, use **Replace** and save with the same name. A saved value can't be read back, so keep your own copy if you might need it elsewhere.
 
@@ -173,12 +193,12 @@ Other git hosts work with a pasted address if it is `owner/repo` shaped. GitLab 
 
 1. Install [Git for Windows](https://git-scm.com) and the [GitHub CLI](https://cli.github.com) if you want Git or Hybrid. The setup signs in with `gh auth login`.
 2. Install the app from the release's `-win-setup.exe`. Windows SmartScreen asks once, because the build isn't code-signed: choose **More info → Run anyway**. The setup asks Git, Local, or Hybrid, then whether to import Cursor. Git and Hybrid sign in to GitHub if needed and create the repository.
-3. Sign in under **Settings → Claude Code**.
+3. Sign in under **Settings → Engine & sign-in**.
 4. A computer that skipped the questions can use **Settings → Sync**: leave the address empty and click **Create repository and sync**. It finds your existing repository, so your chats do not split across two.
 5. Your chats, projects and memory come down. Passwords and tokens stay hidden in those chats, because the repository only holds the hidden copy.
 6. On the first sync after each app start, projects with no folder here are matched against clones in your home folder, up to three levels deep. A match links only when there is no doubt.
 7. For the rest, use **Find repositories…** to search a folder you pick, or **Clone all (N)…** to download them into one folder. These buttons appear only when a project with a remote has no folder on this computer.
-8. Add your saved logins again in **Settings → Saved logins**.
+8. Add your saved logins again in **Settings → Privacy & logins → Saved logins**.
 
 **Needs a hand:**
 
@@ -187,9 +207,9 @@ Other git hosts work with a pasted address if it is `owner/repo` shaped. GitLab 
 
 ## Where chats live and Cursor
 
-The Windows setup asks where chats live, then which installed AI IDE to import. Git and Hybrid open GitHub sign-in when the GitHub CLI is not already signed in, and create the private repository. If the app is already open, or sign-in does not finish, setup stops and the choice stays on disk. Opening the app applies it. A silent install skips both questions. The first start still asks when Cursor chats are found and no choice was saved. **Settings → Where chats live** can change it.
+The Windows setup asks where chats live, then which installed AI IDE to import. Git and Hybrid open GitHub sign-in when the GitHub CLI is not already signed in, and create the private repository. If the app is already open, or sign-in does not finish, setup stops and the choice stays on disk. Opening the app applies it. A silent install skips both questions. The first start still asks when Cursor chats are found and no choice was saved. **Settings → Chats & projects → Where chats live** can change it.
 
-- **Git:** every chat is copied here at full length and synced through a private repository. **Settings → Cursor folders** can then delete Cursor's folders. That's permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees`.
+- **Git:** every chat is copied here at full length and synced through a private repository. **Settings → Chats & projects → Cursor folders** can then delete Cursor's folders. That's permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees`.
 - **Hybrid:** the same copying and sync, and Cursor keeps its files.
 - **Local:** chats stay in Cursor's database and are read from there. Nothing is copied or pushed.
 
@@ -212,7 +232,8 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 - **Code** shows the editor, which loads the first time you open it. **Ctrl+S** saves.
 - Right-click a file to create, rename, delete, copy its path, reveal it, or add it to the chat.
 - **Quick edit (Ctrl+I):** select code, say what to change, and a small fast model rewrites that part. Ctrl+Z undoes it.
-- **Autocomplete** (opt-in, **Settings → Editor autocomplete**): grey text suggests the next lines, and Tab accepts. Each pause in typing is one call to that model.
+- **Autocomplete** (opt-in, **Settings → AI models → Editor autocomplete**): grey text suggests the next lines, and Tab accepts. Each pause in typing is one call to that model.
+- Saving writes the file in place. The editor opens files up to 2 MB.
 - **The change bar** lists files the agent edited, with a diff and undo for each.
 
 ## Around the chat
@@ -221,7 +242,7 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 - **Git:** branch, changes, commit, fetch, pull, push, checkout, history, and a pull request through GitHub's `gh` command.
 - **Preview:** loads a web address.
 - **Instructions:** edits `CLAUDE.md`, `AGENTS.md` and the project's `.mcp.json`.
-- **Rules:** standing orders for the folder: rules added to every run, paths the agent may not edit, and checks that must pass. A team can commit `.agenticops/orders.json` with rules and protected paths. Any `checks` in that file are ignored, so a cloned repository can't run commands by itself.
+- **Rules:** standing orders for the folder: rules added to every run, paths the agent may not edit, and checks that must pass. Checks run on both engines when a run changed files. A failure goes back to the agent with the output, up to the attempt limit you set. A team can commit `.agenticops/orders.json` with rules and protected paths. Any `checks` in that file are ignored, so a cloned repository can't run commands by itself.
 - **Inbox** lists everything waiting on you across chats. **Briefing** shows where recent chats stand. **Ctrl+Shift+P** opens the command palette.
 
 ## Memory
@@ -242,11 +263,11 @@ Clicking **Install** opens a confirmation under that row. If a plugin runs a set
 
 ## Updates
 
-On Windows setup installs, the app checks git tags every six hours and when you press **Settings → Updates**. A beta prerelease counts.
+On Windows setup installs, the app checks git tags every six hours and when you press **Settings → Updates**. A beta prerelease counts. A draft release does not.
 
 - If only the app's own code changed, it downloads a signed patch, which loads at the next start or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it.
 - A change to Electron or an installed package needs the full installer, and so do portable copies, macOS and Linux.
-- The private repository is read with the GitHub CLI sign-in on this computer (`gh auth login`). The app does not carry a token.
+- The private repository is read with the GitHub CLI sign-in on this computer (`gh auth login`). The app does not carry a token. Without that sign-in, Settings → Updates says so and nothing is downloaded.
 
 ## Keyboard
 
