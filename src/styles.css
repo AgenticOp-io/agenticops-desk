@@ -1143,6 +1143,43 @@ select.pill { appearance: auto; }
 
 /* Settings: Claude Code sign-in and Direct providers */
 .settings { width: min(620px, 94vw); max-height: 88vh; overflow: auto; }
+.settings-index { display: flex; flex-direction: column; gap: 6px; }
+.settings-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: #1e1e1e;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.settings-entry:hover { border-color: var(--accent); background: #243044; }
+.settings-entry strong { font-size: 13px; }
+.settings-entry span { color: var(--muted); font-size: 12px; }
+.settings-sub { animation: settings-in 0.12s ease; }
+.settings-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  background: #1e1e1e;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 10px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.settings-back:hover { border-color: var(--accent); }
+@keyframes settings-in {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
 .signin-row { display: flex; align-items: center; gap: 6px; margin: 6px 0 14px; font-size: 13px; }
 .providers { margin: 4px 0 14px; }
 .provider { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: #1e1e1e; }
@@ -1327,6 +1364,8 @@ select.pill { appearance: auto; }
 .app[data-theme="light"] .sidebar,
 .app[data-theme="light"] .titlebar,
 .app[data-theme="light"] .settings,
+.app[data-theme="light"] .settings-entry,
+.app[data-theme="light"] .settings-back,
 .app[data-theme="light"] .help,
 .app[data-theme="light"] .permit,
 .app[data-theme="light"] .palette,
@@ -1344,6 +1383,8 @@ select.pill { appearance: auto; }
   color: #18181b;
   border-color: #e4e4e7;
 }
+.app[data-theme="light"] .settings-entry:hover,
+.app[data-theme="light"] .settings-back:hover { background: #f4f4f5; border-color: var(--accent); }
 .app[data-theme="light"] .ghost.on { background: #e4e4e7; color: #18181b; }
 .app[data-theme="light"] .work.live .work-toggle { color: #166534; }
 .app[data-theme="light"] .work-list { border-left-color: #e4e4e7; }

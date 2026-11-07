@@ -227,6 +227,7 @@ export function App() {
   const [filter, setFilter] = useState("");
   const [prefs, setPrefs] = useState<UiPrefs>(() => defaultPrefs());
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsSection, setSettingsSection] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
@@ -1171,10 +1172,10 @@ export function App() {
     setStatus("Rewound this chat. Send continues from here.");
   };
 
-  // Opens Settings scrolled to one section (Plugins, Auto model).
+  // Opens Settings to one sub-panel (Plugins, Auto model, etc.).
   const openSettingsAt = (id: string) => {
+    setSettingsSection(id);
     setShowSettings(true);
-    setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: "start" }), 50);
   };
 
   const runCommand = (command: string) => {
@@ -1191,8 +1192,8 @@ export function App() {
     else if (command === "branch" && chat) void branchFrom(chat, threadsRef.current[chat.id] ?? []);
     else if (command === "theme") patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" });
     else if (command === "palette") setPaletteOpen(true);
-    else if (command === "plugins") openSettingsAt("settings-plugins");
-    else if (command === "autopick") openSettingsAt("settings-auto");
+    else if (command === "plugins") openSettingsAt("plugins");
+    else if (command === "autopick") openSettingsAt("models");
     else if (command === "inbox") setInboxOpen(true);
     else if (command === "briefing") showBriefing();
     else if (command === "watch" && chat) watchLog(chat.id);
@@ -1201,9 +1202,9 @@ export function App() {
   const paletteActions: PaletteAction[] = [
     { id: "new", label: "New chat", hint: "Ctrl+N", run: () => newAgent() },
     { id: "help", label: "Help", hint: "F1", run: () => setShowHelp(true) },
-    { id: "settings", label: "Settings", run: () => setShowSettings(true) },
-    { id: "plugins", label: "Plugins: browse and install", run: () => openSettingsAt("settings-plugins") },
-    { id: "auto", label: "Auto model: which AIs and in what order", run: () => openSettingsAt("settings-auto") },
+    { id: "settings", label: "Settings", run: () => { setSettingsSection(""); setShowSettings(true); } },
+    { id: "plugins", label: "Plugins: browse and install", run: () => openSettingsAt("plugins") },
+    { id: "auto", label: "Auto model: which AIs and in what order", run: () => openSettingsAt("models") },
     { id: "auto-use", label: "Use the Auto model in this chat", run: () => {
       setModel("auto");
       if (activeChat) storeChat({ ...activeChat, model: "auto" });
@@ -1522,7 +1523,7 @@ export function App() {
         <button className="ghost" onClick={() => setShowHelp(true)} title="Help (F1)">
           Help
         </button>
-        <button className="ghost" onClick={() => setShowSettings(true)} title="Settings">
+        <button className="ghost" onClick={() => { setSettingsSection(""); setShowSettings(true); }} title="Settings">
           Settings
         </button>
       </header>
@@ -1843,7 +1844,7 @@ export function App() {
           )}
           </>
           )}
-          <button className="settings-item" onClick={() => setShowSettings(true)}>
+          <button className="settings-item" onClick={() => { setSettingsSection(""); setShowSettings(true); }}>
             Settings
           </button>
           </div>
@@ -2174,7 +2175,7 @@ export function App() {
               <button
                 onClick={() => {
                   setMenu(null);
-                  setShowSettings(true);
+                  openSettingsAt("projects");
                 }}
               >
                 Hidden ({hiddenGroupList.length + hiddenChatList.length})…
@@ -2332,194 +2333,279 @@ export function App() {
       {paletteOpen && <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />}
 
       {showSettings && (
-        <div className="modal" onClick={() => setShowSettings(false)}>
+        <div className="modal" onClick={() => { setShowSettings(false); setSettingsSection(""); }}>
           <div className="settings" onClick={(e) => e.stopPropagation()}>
             <div className="settings-head">
               <strong>Settings</strong>
-              <button className="ghost" onClick={() => setShowSettings(false)}>
+              <button className="ghost" onClick={() => { setShowSettings(false); setSettingsSection(""); }}>
                 Close
               </button>
             </div>
-            {(hiddenGroupList.length > 0 || hiddenChatList.length > 0) && (
-              <div className="settings-hidden">
-                <div className="settings-label">Hidden items</div>
-                <button
-                  className="btn"
-                  onClick={() => patchPrefs({ hiddenProjects: [], hiddenChats: [] })}
-                >
-                  Unhide all
+
+            {settingsSection && (
+              <div className="settings-sub">
+                <button className="settings-back" onClick={() => setSettingsSection("")}>
+                  ‹ Back
                 </button>
-                {hiddenGroupList.map((g) => (
-                  <button key={g.key} className="more-link" onClick={() => unhideProject(g.key)}>
-                    Unhide {g.name}
-                  </button>
-                ))}
-                {hiddenChatList.map((c) => (
-                  <button key={c.id} className="more-link" onClick={() => unhideChat(c.id)}>
-                    Unhide chat: {c.title}
-                  </button>
-                ))}
+
+                {settingsSection === "appearance" && (
+                  <>
+                    <div className="settings-label">Appearance</div>
+                    <label className="settings-row">
+                      <span>Theme</span>
+                      <select
+                        value={prefs.theme}
+                        onChange={(e) => patchPrefs({ theme: e.target.value === "light" ? "light" : "dark" })}
+                      >
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                      </select>
+                      <em />
+                    </label>
+                    <label className="settings-row">
+                      <span>Window font size</span>
+                      <input
+                        type="range"
+                        min={12}
+                        max={28}
+                        value={prefs.windowFont}
+                        onChange={(e) => patchPrefs({ windowFont: Number(e.target.value) })}
+                      />
+                      <em>{prefs.windowFont}px</em>
+                    </label>
+                    <label className="settings-row">
+                      <span>Agent list font size</span>
+                      <input
+                        type="range"
+                        min={10}
+                        max={22}
+                        value={prefs.itemFont}
+                        onChange={(e) => patchPrefs({ itemFont: Number(e.target.value) })}
+                      />
+                      <em>{prefs.itemFont}px</em>
+                    </label>
+                  </>
+                )}
+
+                {settingsSection === "privacy" && (
+                  <>
+                    <PrivacySettings mode={prefs.privacy} onMode={(privacy) => patchPrefs({ privacy })} />
+                    <SavedLogins privacyOn={prefs.privacy !== "standard"} />
+                  </>
+                )}
+
+                {settingsSection === "sync" && (
+                  <SyncSettings
+                    onChanged={() => {
+                      void window.desk.listCursorProjects().then(setProjects);
+                      void window.desk.getWorkspace().then((ws) => {
+                        setWorkspace(ws);
+                        if (ws) void refreshTree(ws);
+                      });
+                    }}
+                  />
+                )}
+
+                {settingsSection === "projects" && (
+                  <>
+                    {(hiddenGroupList.length > 0 || hiddenChatList.length > 0) && (
+                      <div className="settings-hidden">
+                        <div className="settings-label">Hidden items</div>
+                        <button
+                          className="btn"
+                          onClick={() => patchPrefs({ hiddenProjects: [], hiddenChats: [] })}
+                        >
+                          Unhide all
+                        </button>
+                        {hiddenGroupList.map((g) => (
+                          <button key={g.key} className="more-link" onClick={() => unhideProject(g.key)}>
+                            Unhide {g.name}
+                          </button>
+                        ))}
+                        {hiddenChatList.map((c) => (
+                          <button key={c.id} className="more-link" onClick={() => unhideChat(c.id)}>
+                            Unhide chat: {c.title}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {!hiddenGroupList.length && !hiddenChatList.length && (
+                      <p className="settings-hint">Nothing is hidden.</p>
+                    )}
+                    <ProjectCleanup
+                      onDone={() =>
+                        void reloadCursor().then((list) => {
+                          setChats(list);
+                          setActiveChat((cur) => (cur ? list.find((c) => c.id === cur.id) ?? cur : cur));
+                        })
+                      }
+                    />
+                    <p className="settings-hint">Drag a project or chat to reorder it. Drag a project onto the archive row, or back out of it.</p>
+                    <div className="settings-label">Where chats live</div>
+                    <ChatStorage current={prefs.chatStorage} onChosen={(mode) => setPrefs((p) => ({ ...p, chatStorage: mode }))} />
+                    {prefs.chatStorage === "github" && <CursorFolders />}
+                  </>
+                )}
+
+                {settingsSection === "engine" && (
+                  <>
+                    <div className="settings-label">Claude Code</div>
+                    <div className="signin-row">
+                      <span>
+                        {cli?.bundled ? "Ready" : cli?.found ? "Installed CLI" : "Not found"}
+                        {" · "}
+                        {authOk === null ? "checking sign-in…" : authOk ? "signed in" : "not signed in"}
+                      </span>
+                      <span className="grow" />
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          void window.desk.signIn().then((opened) =>
+                            setStatus(
+                              opened
+                                ? "Finish signing in in the window that opened, then come back here."
+                                : "No terminal app found. Run \"claude auth login\" in a terminal, then press Check.",
+                            ),
+                          );
+                        }}
+                      >
+                        {authOk ? "Sign in again" : "Sign in"}
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() =>
+                          void window.desk.authStatus().then((a) => {
+                            setAuthOk(a.ok);
+                            setStatus(a.ok ? "Claude Code signed in" : "Not signed in yet");
+                          })
+                        }
+                      >
+                        Check
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {settingsSection === "models" && (
+                  <>
+                    <ProvidersSettings onChanged={() => void window.desk.listModels().then(setModels)} />
+                    <div className="settings-label">Second opinion</div>
+                    <label className="settings-row">
+                      <span>
+                        After a run changes files, this model checks the change against your request. Its concerns go back to the agent
+                        to fix, up to two rounds.
+                      </span>
+                      <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
+                        <option value="">Off</option>
+                        {models
+                          .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
+                          .map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.group?.replace(/^Direct · /, "")} · {m.displayName}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
+                      <p className="settings-hint">Add a provider key above (OpenAI, Gemini, Claude API…) to pick a reviewer.</p>
+                    )}
+                    <div className="settings-label">Editor autocomplete</div>
+                    <label className="settings-row">
+                      <span>Suggest the next lines as grey text while you type (Tab accepts). Each pause in typing is one call to this model.</span>
+                      <select value={prefs.autocomplete} onChange={(e) => patchPrefs({ autocomplete: e.target.value })}>
+                        <option value="">Off</option>
+                        {models
+                          .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
+                          .map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.group?.replace(/^Direct · /, "")} · {m.displayName}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
+                      <p className="settings-hint">Needs a Direct provider: a Claude API key (Haiku is fast and cheap) or a local Ollama model.</p>
+                    )}
+                    <AutoSettings models={models} chosen={prefs.autoModels} onChange={(autoModels) => patchPrefs({ autoModels })} />
+                  </>
+                )}
+
+                {settingsSection === "plugins" && (
+                  <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
+                )}
+
+                {settingsSection === "updates" && (
+                  <>
+                    <div className="settings-label">Updates</div>
+                    <div className="signin-row">
+                      <button
+                        className="btn"
+                        onClick={() =>
+                          void window.desk.checkForUpdate().then((info) => {
+                            setUpdateReady(info.patch.ready);
+                            setUpdateNote(
+                              info.patch.note
+                                ? `This copy is ${info.current}. ${info.patch.note}`
+                                : info.latest
+                                  ? `This copy is ${info.current}. Latest release is ${info.latest}. ${info.url ?? ""} ${info.note}`
+                                  : `${info.note} This copy is ${info.current}.`,
+                            );
+                          })
+                        }
+                      >
+                        Check for updates
+                      </button>
+                      {updateReady && (
+                        <button className="btn" onClick={() => void window.desk.restartForUpdate()}>
+                          Restart to update
+                        </button>
+                      )}
+                    </div>
+                    {updateNote && <p className="settings-hint">{updateNote}</p>}
+                  </>
+                )}
               </div>
             )}
-            <PrivacySettings mode={prefs.privacy} onMode={(privacy) => patchPrefs({ privacy })} />
-            <SavedLogins privacyOn={prefs.privacy !== "standard"} />
-            <SyncSettings
-              onChanged={() => {
-                void window.desk.listCursorProjects().then(setProjects);
-                void window.desk.getWorkspace().then((ws) => {
-                  setWorkspace(ws);
-                  if (ws) void refreshTree(ws);
-                });
-              }}
-            />
-            <ProjectCleanup
-              onDone={() =>
-                void reloadCursor().then((list) => {
-                  setChats(list);
-                  setActiveChat((cur) => (cur ? list.find((c) => c.id === cur.id) ?? cur : cur));
-                })
-              }
-            />
-            <div className="settings-label">Where chats live</div>
-            <ChatStorage current={prefs.chatStorage} onChosen={(mode) => setPrefs((p) => ({ ...p, chatStorage: mode }))} />
-            {prefs.chatStorage === "github" && <CursorFolders />}
-            <label className="settings-row">
-              <span>Theme</span>
-              <select
-                value={prefs.theme}
-                onChange={(e) => patchPrefs({ theme: e.target.value === "light" ? "light" : "dark" })}
-              >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-              <em />
-            </label>
-            <label className="settings-row">
-              <span>Window font size</span>
-              <input
-                type="range"
-                min={12}
-                max={28}
-                value={prefs.windowFont}
-                onChange={(e) => patchPrefs({ windowFont: Number(e.target.value) })}
-              />
-              <em>{prefs.windowFont}px</em>
-            </label>
-            <label className="settings-row">
-              <span>Agent list font size</span>
-              <input
-                type="range"
-                min={10}
-                max={22}
-                value={prefs.itemFont}
-                onChange={(e) => patchPrefs({ itemFont: Number(e.target.value) })}
-              />
-              <em>{prefs.itemFont}px</em>
-            </label>
-            <div className="settings-label">Updates</div>
-            <div className="signin-row">
-              <button
-                className="btn"
-                onClick={() =>
-                  void window.desk.checkForUpdate().then((info) => {
-                    setUpdateReady(info.patch.ready);
-                    setUpdateNote(
-                      info.patch.note
-                        ? `This copy is ${info.current}. ${info.patch.note}`
-                        : info.latest
-                          ? `This copy is ${info.current}. Latest release is ${info.latest}. ${info.url ?? ""} ${info.note}`
-                          : `${info.note} This copy is ${info.current}.`,
-                    );
-                  })
-                }
-              >
-                Check for updates
-              </button>
-              {updateReady && (
-                <button className="btn" onClick={() => void window.desk.restartForUpdate()}>
-                  Restart to update
+
+            {!settingsSection && (
+              <div className="settings-index">
+                <button className="settings-entry" onClick={() => setSettingsSection("appearance")}>
+                  <strong>Appearance</strong>
+                  <span>Theme and font sizes</span>
                 </button>
-              )}
-            </div>
-            {updateNote && <p className="settings-hint">{updateNote}</p>}
-            <div className="settings-label">Claude Code</div>
-            <div className="signin-row">
-              <span>
-                {cli?.bundled ? "Ready" : cli?.found ? "Installed CLI" : "Not found"}
-                {" · "}
-                {authOk === null ? "checking sign-in…" : authOk ? "signed in" : "not signed in"}
-              </span>
-              <span className="grow" />
-              <button
-                className="btn"
-                onClick={() => {
-                  void window.desk.signIn().then((opened) =>
-                    setStatus(
-                      opened
-                        ? "Finish signing in in the window that opened, then come back here."
-                        : "No terminal app found. Run \"claude auth login\" in a terminal, then press Check.",
-                    ),
-                  );
-                }}
-              >
-                {authOk ? "Sign in again" : "Sign in"}
-              </button>
-              <button
-                className="btn"
-                onClick={() =>
-                  void window.desk.authStatus().then((a) => {
-                    setAuthOk(a.ok);
-                    setStatus(a.ok ? "Claude Code signed in" : "Not signed in yet");
-                  })
-                }
-              >
-                Check
-              </button>
-            </div>
-            <ProvidersSettings onChanged={() => void window.desk.listModels().then(setModels)} />
-            <div className="settings-label">Second opinion</div>
-            <label className="settings-row">
-              <span>
-                After a run changes files, this model checks the change against your request. Its concerns go back to the agent
-                to fix, up to two rounds.
-              </span>
-              <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
-                <option value="">Off</option>
-                {models
-                  .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
-                  .map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.group?.replace(/^Direct · /, "")} · {m.displayName}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
-              <p className="settings-hint">Add a provider key above (OpenAI, Gemini, Claude API…) to pick a reviewer.</p>
+                <button className="settings-entry" onClick={() => setSettingsSection("privacy")}>
+                  <strong>Privacy & logins</strong>
+                  <span>Privacy Mode and saved passwords</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("sync")}>
+                  <strong>Sync</strong>
+                  <span>Share chats, memory and settings across computers</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("projects")}>
+                  <strong>Chats & projects</strong>
+                  <span>Hidden items, cleanup, and where chats live</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("engine")}>
+                  <strong>Engine & sign-in</strong>
+                  <span>Claude Code status and sign-in</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("models")}>
+                  <strong>AI models</strong>
+                  <span>Providers, second opinion, autocomplete, Auto</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("plugins")}>
+                  <strong>Plugins</strong>
+                  <span>Browse, install and manage plugins</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("updates")}>
+                  <strong>Updates</strong>
+                  <span>Check for a newer release</span>
+                </button>
+                <p className="settings-hint">
+                  Saved on disk and kept after restart. Right-click a project or chat to hide it.
+                </p>
+              </div>
             )}
-            <div className="settings-label">Editor autocomplete</div>
-            <label className="settings-row">
-              <span>Suggest the next lines as grey text while you type (Tab accepts). Each pause in typing is one call to this model.</span>
-              <select value={prefs.autocomplete} onChange={(e) => patchPrefs({ autocomplete: e.target.value })}>
-                <option value="">Off</option>
-                {models
-                  .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
-                  .map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.group?.replace(/^Direct · /, "")} · {m.displayName}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
-              <p className="settings-hint">Needs a Direct provider: a Claude API key (Haiku is fast and cheap) or a local Ollama model.</p>
-            )}
-            <AutoSettings models={models} chosen={prefs.autoModels} onChange={(autoModels) => patchPrefs({ autoModels })} />
-            <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
-            <p className="settings-hint">
-              Saved on disk and kept after restart. Right-click a project or chat to hide it.
-              Drag items to reorder. GitHub projects stay in the list. Other folders are one row at the bottom, and projects not opened for three months are in the archive below them. Drag a project onto the archive row or back out of it.
-            </p>
           </div>
         </div>
       )}

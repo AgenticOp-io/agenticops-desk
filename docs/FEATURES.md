@@ -242,11 +242,11 @@ Clicking **Install** opens a confirmation under that row. If a plugin runs a set
 
 ## Updates
 
-On Windows setup installs, the app checks for a new release every six hours and when you press **Settings → Check for updates**.
+On Windows setup installs, the app checks git tags every six hours and when you press **Settings → Updates**. A beta prerelease counts.
 
 - If only the app's own code changed, it downloads a signed patch, which loads at the next start or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it.
 - A change to Electron or an installed package needs the full installer, and so do portable copies, macOS and Linux.
-- Patches download through the GitHub CLI's sign-in while the repository is private.
+- The build carries an encrypted read credential for the private repository. A GitHub App key mints a token that expires after an hour. A build without that credential uses the GitHub CLI's sign-in.
 
 ## Keyboard
 
