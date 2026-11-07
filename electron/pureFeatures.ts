@@ -654,9 +654,9 @@ export function isNewerVersion(a: string, b: string): boolean {
   return false;
 }
 
-// v1.2.3 or v1.2.3-beta. The beta flag on the GitHub release is separate from the tag text.
+// Plain v1.2.3 only: patch manifests carry a plain version. Beta is the prerelease flag on the GitHub release.
 export function isReleaseTag(tag: string): boolean {
-  return /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(tag);
+  return /^v\d+\.\d+\.\d+$/.test(tag);
 }
 
 // Where a path lands after shortcuts. A file that does not exist yet keeps its name under the nearest real parent,

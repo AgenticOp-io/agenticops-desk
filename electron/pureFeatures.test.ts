@@ -506,8 +506,8 @@ test("the newest tag is the highest release", async () => {
   const { newestTag } = await import("./pureFeatures.ts");
   assert.equal(newestTag(["refs/tags/v0.1.16", "refs/tags/v0.1.18", "refs/tags/v0.1.18^{}", "refs/tags/v0.1.17"], "0.1.17"), "v0.1.18");
   assert.equal(newestTag(["refs/tags/v0.1.16"], "0.1.17"), null);
-  assert.equal(newestTag(["refs/tags/v0.1.18-beta"], "0.1.17"), "v0.1.18-beta");
-  assert.equal(newestTag(["refs/tags/v0.1.18", "refs/tags/v0.1.18-beta"], "0.1.17"), "v0.1.18");
+  assert.equal(newestTag(["refs/tags/v0.1.18-beta"], "0.1.17"), null);
+  assert.equal(newestTag(["refs/tags/v0.1.18", "refs/tags/v0.1.19-beta"], "0.1.17"), "v0.1.18");
 });
 
 test("SDK version is found by walking up from its entry file", async () => {
