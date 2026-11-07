@@ -29,9 +29,9 @@ import {
   withHistory,
 } from "./claude";
 import { prepareMemory } from "./memory";
-import { ordersPrompt, protectedBy, runOrders } from "./orders";
+import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
-import { stripDeepSeekReasoning } from "./pureFeatures";
+import { staysInside, stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
@@ -144,10 +144,7 @@ function clip(text: string, max = OUTPUT_LIMIT) {
 function resolveIn(ctx: Ctx, raw: unknown): string {
   if (typeof raw !== "string" || !raw.trim()) throw new Error("path is required");
   const target = path.resolve(ctx.cwd, raw);
-  const ok = ctx.roots.some((root) => {
-    const rel = path.relative(root, target);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  });
+  const ok = ctx.roots.some((root) => staysInside(root, target));
   if (!ok) throw new Error(`${target} is outside the project folder`);
   return target;
 }
@@ -180,6 +177,45 @@ function shellCommand(command: string): { exe: string; args: string[] } {
   return { exe, args: ["-NoProfile", "-NonInteractive", "-Command", command] };
 }
 
+// The session stop, or a new DeepSeek command, ends the work in front of it.
+function stopSignal(ctx: Ctx): AbortSignal {
+  const steer = ctx.session.steer?.signal;
+  if (!steer) return ctx.signal;
+  return AbortSignal.any([ctx.signal, steer]);
+}
+
+// Standing orders the user saved on this computer. A failure goes back to the model, up to maxFixes times.
+async function orderFeedback(ctx: Ctx): Promise<string | null> {
+  const orders = runOrders(ctx.cwd);
+  if (!orders.checks.length || ctx.session.guide) return null;
+  pruneChanges(ctx.session);
+  if (!ctx.session.changes.size) return null;
+  const result = await runChecks(ctx.cwd, orders.checks, stopSignal(ctx), (cmd) =>
+    sendPhase(ctx.win, ctx.chatId, ctx.session, "tool", `Checking: ${cmd}`, true),
+  );
+  if (ctx.signal.aborted || ctx.session.guide) return null;
+  if (result.ok) {
+    sendPhase(ctx.win, ctx.chatId, ctx.session, "tool", "Standing-order checks passed", true);
+    return null;
+  }
+  ctx.session.fixAttempts = (ctx.session.fixAttempts ?? 0) + 1;
+  if (ctx.session.fixAttempts > orders.maxFixes) {
+    send(ctx.win, {
+      kind: "error",
+      text: `Standing-order check still fails after ${orders.maxFixes} fix attempts: ${result.command}`,
+      chatId: ctx.chatId,
+      running: true,
+    });
+    return null;
+  }
+  sendPhase(ctx.win, ctx.chatId, ctx.session, "tool", `Check failed, sending it back: ${result.command}`, true);
+  return (
+    `AgenticOps Desk standing order: \`${result.command}\` must pass before you finish, and it failed ` +
+    `(attempt ${ctx.session.fixAttempts} of ${orders.maxFixes}). Fix the cause, then finish. Output:\n` +
+    scrubOutgoing(result.output).text
+  );
+}
+
 function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string> {
   return new Promise((resolve) => {
     const { exe, args } = shellCommand(command);
@@ -210,7 +246,9 @@ function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string
       out += `\n(stopped after ${timeoutSec}s)`;
       kill();
     }, timeoutSec * 1000);
-    ctx.signal.addEventListener("abort", kill, { once: true });
+    const stop = stopSignal(ctx);
+    if (stop.aborted) kill();
+    else stop.addEventListener("abort", kill, { once: true });
     child.on("error", (err) => {
       clearTimeout(timer);
       resolve(`Could not start ${SHELL_NAME}: ${err.message}`);
@@ -355,7 +393,9 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 20_000);
       const onAbort = () => ctrl.abort();
-      ctx.signal.addEventListener("abort", onAbort);
+      const stop = stopSignal(ctx);
+      if (stop.aborted) ctrl.abort();
+      else stop.addEventListener("abort", onAbort, { once: true });
       try {
         const res = await fetch(url, { signal: ctrl.signal });
         // Stop reading after 2 MB instead of pulling an arbitrarily large body into memory.
@@ -380,7 +420,7 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
         return { text: clip(`${res.status} ${url}\n${text}`) };
       } finally {
         clearTimeout(timer);
-        ctx.signal.removeEventListener("abort", onAbort);
+        stop.removeEventListener("abort", onAbort);
       }
     }
     if (name === "todo_write") {
@@ -542,6 +582,14 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     const calls = message.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
     if (!calls.length) {
       messages.push({ role: "assistant", content: message.content });
+      if (ctx.session.guide) continue;
+      const feedback = await orderFeedback(ctx);
+      if (ctx.signal.aborted) return;
+      if (ctx.session.guide) continue;
+      if (feedback) {
+        messages.push({ role: "user", content: feedback });
+        continue;
+      }
       return;
     }
     if (message.stop_reason === "max_tokens") throw new Error("The reply hit the length limit in the middle of a tool call.");
@@ -593,7 +641,10 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
     sendPhase(ctx.win, ctx.chatId, ctx.session, "thinking", "Thinking…");
     // Thinking is on by default and runs again before every tool. That is the lag between commands.
     if (provider === "deepseek") stripDeepSeekReasoning(messages as Array<{ reasoning_content?: string }>);
-    const turnAbort = new AbortController();
+    if (provider === "deepseek" && (!ctx.session.steer || ctx.session.steer.signal.aborted)) {
+      ctx.session.steer = new AbortController();
+    }
+    const turnAbort = provider === "deepseek" && ctx.session.steer ? ctx.session.steer : new AbortController();
     const onStop = () => turnAbort.abort();
     ctx.signal.addEventListener("abort", onStop);
     let text = "";
@@ -633,12 +684,14 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
         }
       }
     } catch (err) {
-      steered = provider === "deepseek" && Boolean(ctx.session.guide) && !ctx.signal.aborted;
+      // A new command aborts this call on purpose. A rejected key, a rate limit, or a dropped connection still fails the run.
+      steered = provider === "deepseek" && turnAbort.signal.aborted && Boolean(ctx.session.guide) && !ctx.signal.aborted;
       if (!steered) throw err;
     } finally {
       ctx.signal.removeEventListener("abort", onStop);
     }
     if (ctx.signal.aborted) return;
+    if (provider === "deepseek" && ctx.session.guide) steered = true;
     const live = steered ? [] : calls.filter(Boolean);
     if (text || live.length) {
       messages.push({
@@ -650,9 +703,23 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       });
     }
     if (steered) continue;
-    if (!live.length) return;
+    if (!live.length) {
+      if (provider === "deepseek" && ctx.session.guide) continue;
+      const feedback = await orderFeedback(ctx);
+      if (ctx.signal.aborted) return;
+      if (provider === "deepseek" && ctx.session.guide) continue;
+      if (feedback) {
+        messages.push({ role: "user", content: feedback });
+        continue;
+      }
+      return;
+    }
     for (const [i, c] of live.entries()) {
       const id = c.id || `call_${turn}_${i}`;
+      if (provider === "deepseek" && ctx.session.guide) {
+        messages.push({ role: "tool", tool_call_id: id, content: "Stopped. A new instruction arrived." });
+        continue;
+      }
       let input: Record<string, unknown> = {};
       let bad = "";
       try {
@@ -694,6 +761,7 @@ export function runDirect(opts: {
   }
   if (session.engine === "direct" && session.abort && !session.query && !session.child && !session.stopping) {
     session.guide = [session.guide, guidePrompt(scrubOutgoing(opts.prompt).text)].filter(Boolean).join("\n\n");
+    session.steer?.abort();
     send(win, { kind: "status", running: true, phase: "thinking", text: "Following your instruction…", chatId });
     return;
   }
@@ -757,6 +825,7 @@ export function runDirect(opts: {
       }
       const stopped = abort.signal.aborted;
       if (session.abort === abort) session.abort = undefined;
+      session.steer = undefined;
       session.stopping = false;
       dropApprovals(win, chatId, session);
       pruneChanges(session);

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
-import { chatStorage, deleteFolderRefusal, deleteWarnings, installChoices, parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
+import { chatStorage, deleteFolderRefusal, deleteWarnings, installChoices, parseSymbolHits, staysInside, SYMBOL_KINDS } from "./pureFeatures";
 import {
   addMarketplace,
   installPlugin,
@@ -231,6 +231,8 @@ function guardNavigation(w: BrowserWindow) {
 }
 
 function createWindow() {
+  // A Mac can close the window and leave the app running. The next window has to flush its chats too.
+  allowQuit = false;
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -417,7 +419,7 @@ async function applyInstallChoices(): Promise<number> {
 app.whenReady().then(async () => {
   // The installer runs this and waits, so the choice is on disk before the first window.
   if (process.argv.includes("--apply-install")) {
-    // shortcut: a sign-in window left open holds the installer for 10 minutes, then the install continues and the app asks again.
+    // shortcut: a sign-in window left open holds the installer for 10 minutes, then setup stops. Opening the app applies a choice that was never started.
     const giveUp = setTimeout(() => app.exit(1), 10 * 60_000);
     let code = 1;
     if (app.requestSingleInstanceLock()) {
@@ -428,6 +430,8 @@ app.whenReady().then(async () => {
         await noteInstall(err instanceof Error ? err.message : "The install choice could not be applied.");
         code = 1;
       }
+    } else {
+      await noteInstall("AgenticOps Desk is already open. Close it, then run the installer again.");
     }
     clearTimeout(giveUp);
     app.exit(code);
@@ -456,6 +460,14 @@ app.whenReady().then(async () => {
   if (!(await claimSingleInstance())) {
     app.quit();
     return;
+  }
+  // The installer could not apply this because the app was already open. The choice file is still here.
+  if (existsSync(path.join(app.getPath("userData"), "install-choices.json"))) {
+    try {
+      await applyInstallChoices();
+    } catch (err) {
+      console.error("AgenticOps Desk could not apply the install choice", err);
+    }
   }
   // Import from Cursor once. People without Cursor would otherwise rescan on every launch.
   const imported = existsSync(path.join(app.getPath("userData"), "cursor-import.json"));
@@ -1068,10 +1080,7 @@ ipcMain.handle("claude:keep", (_e, chatId: string, paths?: string[]) => keepChan
 
 // Explorer actions only touch paths inside the open folder.
 function inWorkspace(target: string, allowRoot = false) {
-  if (!workspace) return false;
-  const rel = path.relative(path.resolve(workspace), path.resolve(target));
-  if (rel === "") return allowRoot;
-  return !rel.startsWith("..") && !path.isAbsolute(rel);
+  return Boolean(workspace) && staysInside(workspace, target, allowRoot);
 }
 
 function insideWorkspace(target: string) {

@@ -32,13 +32,6 @@ jobs:
         run: npx tsc --noEmit
       - name: Test
         run: npm test
-      - name: Seal the update credential
-        env:
-          UPDATE_PAT: ${{ secrets.UPDATE_PAT }}
-          UPDATE_APP_ID: ${{ secrets.UPDATE_APP_ID }}
-          UPDATE_APP_INSTALLATION_ID: ${{ secrets.UPDATE_APP_INSTALLATION_ID }}
-          UPDATE_APP_PRIVATE_KEY: ${{ secrets.UPDATE_APP_PRIVATE_KEY }}
-        run: node --experimental-strip-types scripts/seal-update-token.mjs
       - name: Bundle
         # Monaco makes the bundle large; Node's default heap runs out on the runner.
         env:

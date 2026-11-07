@@ -187,7 +187,7 @@ Other git hosts work with a pasted address if it is `owner/repo` shaped. GitLab 
 
 ## Where chats live and Cursor
 
-The Windows setup asks where chats live, then which installed AI IDE to import. Git and Hybrid open GitHub sign-in when the GitHub CLI is not already signed in, and create the private repository. A silent install skips both questions. The first start still asks when Cursor chats are found and no choice was saved. **Settings → Where chats live** can change it.
+The Windows setup asks where chats live, then which installed AI IDE to import. Git and Hybrid open GitHub sign-in when the GitHub CLI is not already signed in, and create the private repository. If the app is already open, or sign-in does not finish, setup stops and the choice stays on disk. Opening the app applies it. A silent install skips both questions. The first start still asks when Cursor chats are found and no choice was saved. **Settings → Where chats live** can change it.
 
 - **Git:** every chat is copied here at full length and synced through a private repository. **Settings → Cursor folders** can then delete Cursor's folders. That's permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees`.
 - **Hybrid:** the same copying and sync, and Cursor keeps its files.
@@ -246,7 +246,7 @@ On Windows setup installs, the app checks git tags every six hours and when you 
 
 - If only the app's own code changed, it downloads a signed patch, which loads at the next start or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it.
 - A change to Electron or an installed package needs the full installer, and so do portable copies, macOS and Linux.
-- The build carries an encrypted read credential for the private repository. A GitHub App key mints a token that expires after an hour. A build without that credential uses the GitHub CLI's sign-in.
+- The private repository is read with the GitHub CLI sign-in on this computer (`gh auth login`). The app does not carry a token.
 
 ## Keyboard
 

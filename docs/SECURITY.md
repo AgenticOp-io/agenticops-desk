@@ -72,10 +72,11 @@ Removing a login leaves it on the Always hide list, because it may already appea
 
 - **Renderer isolation:** the window talks to the main process through `electron/preload.ts`. API keys and saved logins stay in the main process.
 - **Permissions:** see `electron/gate.ts` and `electron/allows.ts`. A trusted folder runs ordinary commands without asking, including deletes, pushes and network calls. Trust a folder only if you would let the agent do those things there.
+- **Folder boundary:** file reads and writes follow the real path. A shortcut inside the project cannot place an edit outside it. A shell in a trusted folder still can.
 - **Credential files:** with Privacy Mode on, commands and reads naming key, certificate and credential files are blocked. The check is on the file's name in the command, so a script that opens one indirectly isn't caught.
 - **Team rules:** a repository's `.agenticops/orders.json` can add rules and protected paths, but its `checks` are ignored, so cloning can't run commands.
 - **Plugins:** a plugin runs with the agent's permissions. Install ones you trust.
-- **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret. The private repository is read with a credential sealed into the build. A GitHub App key mints a token that lasts one hour. The seal key ships in the app, so that credential must only be able to read this repository.
+- **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret. The private repository is read with the GitHub CLI sign-in on this computer. The app does not carry a token.
 - **Binary download:** the Claude Code binary is checked against npm's SHA-512 fingerprint.
 - **Installers are not code-signed**, so Windows and macOS can't vouch for who built them.
 

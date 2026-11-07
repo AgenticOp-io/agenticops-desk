@@ -133,6 +133,8 @@ type Session = {
   backgroundTasks?: number;
   // A steer waiting for the next Direct turn, applied before the following model call.
   guide?: string;
+  // Aborts only the Direct HTTP call in flight, so a new command does not stop the whole run.
+  steer?: AbortController;
   // Files Claude edited in this chat, keyed by lower-case path, with their contents before the first edit
   // (null when Claude created the file). Cleared when the user keeps or undoes them.
   changes: Map<string, { path: string; before: string | null }>;

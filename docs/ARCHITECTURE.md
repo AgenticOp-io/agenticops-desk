@@ -142,7 +142,7 @@ To fake a git remote that looks like GitHub, use an `ssh://git@github.com/...` a
 
 1. Bump `version` in `package.json` and the lockfile.
 2. Commit, tag `vX.Y.Z` on that commit, and push both.
-3. The **Release** workflow builds Windows, macOS and Linux, both chip types, signs the patch, and publishes a **beta** prerelease with every installer. It seals `UPDATE_APP_PRIVATE_KEY` (with the app id and installation id) or `UPDATE_PAT` into the app before bundling.
+3. The **Release** workflow builds Windows, macOS and Linux, both chip types, signs the patch, and publishes a **beta** prerelease with every installer. Installed copies read the private repository with the GitHub CLI sign-in on that computer.
 4. A beta is visible to installed copies. They read git tags, then download the patch. A draft is not.
 
 An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. The signing key exists only as the `PATCH_SIGNING_KEY` secret. If it is lost, make a new pair and ship one full install.

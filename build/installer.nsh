@@ -123,6 +123,7 @@ FunctionEnd
     ${Else}
       DetailPrint "Saving where chats live..."
     ${EndIf}
+    Delete "$APPDATA\AgenticOps Desk\install-result.txt"
     ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --apply-install' $0
     ${If} ${FileExists} "$APPDATA\AgenticOps Desk\install-result.txt"
       FileOpen $1 "$APPDATA\AgenticOps Desk\install-result.txt" r
@@ -130,6 +131,9 @@ FunctionEnd
       FileClose $1
       DetailPrint $2
       Delete "$APPDATA\AgenticOps Desk\install-result.txt"
+    ${EndIf}
+    ${If} $0 <> 0
+      Abort "The storage choice was not saved. Close AgenticOps Desk and run the installer again."
     ${EndIf}
   ${EndIf}
 !macroend

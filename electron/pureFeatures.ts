@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 // Electron-free helpers for standing orders, org memory and the second opinion, so plain Node can test them.
@@ -640,11 +640,50 @@ export function cursorRemovalRefusal(state: { mode: string; running: boolean; er
   return null;
 }
 
+function versionParts(v: string): number[] {
+  return v
+    .replace(/^v/, "")
+    .split(".")
+    .slice(0, 3)
+    .map((n) => Number(/^(\d+)/.exec(n)?.[1] ?? 0));
+}
+
 export function isNewerVersion(a: string, b: string): boolean {
-  const parts = (v: string) => v.replace(/^v/, "").split(".").map((n) => Number(n) || 0);
-  const [x, y] = [parts(a), parts(b)];
+  const [x, y] = [versionParts(a), versionParts(b)];
   for (let i = 0; i < 3; i += 1) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
   return false;
+}
+
+// v1.2.3 or v1.2.3-beta. The beta flag on the GitHub release is separate from the tag text.
+export function isReleaseTag(tag: string): boolean {
+  return /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(tag);
+}
+
+// Where a path lands after shortcuts. A file that does not exist yet keeps its name under the nearest real parent,
+// so creating notes\new.txt through a link is judged by where that link points.
+function landed(target: string): string {
+  let cur = path.resolve(target);
+  const rest: string[] = [];
+  while (!existsSync(cur)) {
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    rest.push(path.basename(cur));
+    cur = parent;
+  }
+  try {
+    cur = realpathSync(cur);
+  } catch {
+    /* gone between the exists check and the resolve */
+  }
+  return rest.length ? path.join(cur, ...rest.reverse()) : cur;
+}
+
+// True when target is root, or a file inside it, after links and junctions are followed.
+export function staysInside(root: string, target: string, allowRoot = true): boolean {
+  if (!root || !target) return false;
+  const rel = path.relative(landed(root), landed(target));
+  if (rel === "") return allowRoot;
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 // The newest vX.Y.Z tag after current. Annotated tags arrive twice; the peeled name is the same tag.
@@ -654,34 +693,12 @@ export function newestTag(refs: string[], current: string): string | null {
   const seen = new Set<string>();
   for (const ref of refs) {
     const tag = ref.trim().replace(/^refs\/tags\//, "").replace(/\^\{\}$/, "");
-    if (!/^v\d+\.\d+\.\d+$/.test(tag) || seen.has(tag)) continue;
+    if (!isReleaseTag(tag) || seen.has(tag)) continue;
     seen.add(tag);
     if (!isNewerVersion(tag, here)) continue;
     if (!best || isNewerVersion(tag, best)) best = tag;
   }
   return best || null;
-}
-
-// shortcut: this key ships in the app, so the seal only stops the credential sitting in plaintext. The credential must only be able to read this one repository. Remove the seal when the repository is public.
-export const UPDATE_SEAL_KEY = Buffer.from("hO63CeU96RV+RzcyjmSVTwWIXgB0T1JY7zIuRlQ6uFc=", "base64");
-
-export type SecretBox = { iv: string; tag: string; data: string };
-
-export function sealSecret(plain: string, key: Buffer): SecretBox {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const data = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-  return { iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64") };
-}
-
-export function openSecret(box: SecretBox, key: Buffer): string | null {
-  try {
-    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(box.iv, "base64"));
-    decipher.setAuthTag(Buffer.from(box.tag, "base64"));
-    return Buffer.concat([decipher.update(Buffer.from(box.data, "base64")), decipher.final()]).toString("utf8");
-  } catch {
-    return null;
-  }
 }
 
 export type PatchManifest = { version: string; shell: string; tar: string; files: Array<{ path: string; sha256: string }> };

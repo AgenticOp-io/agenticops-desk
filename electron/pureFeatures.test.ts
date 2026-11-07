@@ -439,6 +439,7 @@ test("a patch must be newer, match this install and stay in its folder", async (
   assert.equal(isNewerVersion("v0.1.10", "0.1.9"), true);
   assert.equal(isNewerVersion("0.1.6", "0.1.6"), false);
   assert.equal(isNewerVersion("0.1.5", "0.2.0"), false);
+  assert.equal(isNewerVersion("0.1.19-beta", "0.1.18"), true);
   const shell = patchShell("36.9.5", { sdk: "1" });
   const here = { current: "0.1.6", shell, bad: [] as string[] };
   const main = { path: "dist-electron/main.js", sha256: "a".repeat(64) };
@@ -469,6 +470,29 @@ test("a run stays open while background tasks can still report", async () => {
   assert.equal(turnIsOver({ type: "assistant" }, 0), false);
 });
 
+test("a shortcut inside the folder cannot point a file outside it", async () => {
+  const { staysInside } = await import("./pureFeatures.ts");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "desk-root-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "desk-out-"));
+  try {
+    fs.writeFileSync(path.join(outside, "secret.txt"), "x");
+    fs.writeFileSync(path.join(root, "real.txt"), "y");
+    fs.symlinkSync(outside, path.join(root, "link"), process.platform === "win32" ? "junction" : "dir");
+    assert.equal(staysInside(root, path.join(root, "real.txt")), true);
+    assert.equal(staysInside(root, path.join(root, "new.txt")), true);
+    assert.equal(staysInside(root, root, false), false);
+    assert.equal(staysInside(root, path.join(root, "link", "secret.txt")), false);
+    assert.equal(staysInside(root, path.join(root, "link", "new.txt")), false);
+    assert.equal(staysInside(root, path.join(root, "..", "secret.txt")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("the installer choice is Git, Local, or Hybrid, and import is only an explicit yes", async () => {
   const { installChoices } = await import("./pureFeatures.ts");
   assert.deepEqual(installChoices({ storage: "github", importCursor: true }), { storage: "github", importCursor: true });
@@ -478,16 +502,12 @@ test("the installer choice is Git, Local, or Hybrid, and import is only an expli
   assert.equal(installChoices(null), null);
 });
 
-test("the newest tag is the highest release, and a sealed secret round-trips", async () => {
-  const { newestTag, openSecret, sealSecret } = await import("./pureFeatures.ts");
-  const { randomBytes } = await import("node:crypto");
+test("the newest tag is the highest release", async () => {
+  const { newestTag } = await import("./pureFeatures.ts");
   assert.equal(newestTag(["refs/tags/v0.1.16", "refs/tags/v0.1.18", "refs/tags/v0.1.18^{}", "refs/tags/v0.1.17"], "0.1.17"), "v0.1.18");
   assert.equal(newestTag(["refs/tags/v0.1.16"], "0.1.17"), null);
-  assert.equal(newestTag(["refs/tags/v0.1.18-beta"], "0.1.17"), null);
-  const key = randomBytes(32);
-  const box = sealSecret("github_pat_example", key);
-  assert.equal(openSecret(box, key), "github_pat_example");
-  assert.equal(openSecret({ ...box, data: box.data.slice(0, -2) + (box.data.endsWith("A") ? "B" : "A") }, key), null);
+  assert.equal(newestTag(["refs/tags/v0.1.18-beta"], "0.1.17"), "v0.1.18-beta");
+  assert.equal(newestTag(["refs/tags/v0.1.18", "refs/tags/v0.1.18-beta"], "0.1.17"), "v0.1.18");
 });
 
 test("SDK version is found by walking up from its entry file", async () => {

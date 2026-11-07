@@ -5,8 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import { realStorePwsh } from "./claude";
-import { isNewerVersion, newestTag } from "./pureFeatures";
-import { sealedGithubToken } from "./updateAccess";
+import { isNewerVersion, isReleaseTag, newestTag } from "./pureFeatures";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
@@ -206,8 +205,6 @@ const REPO = "AgenticOp-io/agenticops-desk";
 const REPO_URL = `https://github.com/${REPO}.git`;
 
 async function githubToken(): Promise<string> {
-  const sealed = await sealedGithubToken();
-  if (sealed) return sealed;
   const viaCli = await run("gh", ["auth", "token"], app.getPath("home"), 20_000);
   return viaCli.ok ? viaCli.output.trim() : "";
 }
@@ -256,10 +253,10 @@ async function githubBytes(url: string, token: string): Promise<Buffer | null> {
   return null;
 }
 
-// Downloads named release files with the sealed credential. The GitHub CLI remains the fallback.
+// Downloads named release files with the GitHub CLI sign-in.
 export async function downloadReleaseAssets(tag: string, dir: string, names: string[]): Promise<boolean> {
   const token = await githubToken();
-  if (!token || !/^v\d+\.\d+\.\d+$/.test(tag)) return false;
+  if (!token || !isReleaseTag(tag)) return false;
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, { headers: authHeaders(token) });
     if (!res.ok) return false;
@@ -291,7 +288,7 @@ export async function checkForUpdate(): Promise<{ current: string; latest: strin
     }
     if (latest) return { current, latest: null, url: null, note: `You're on the latest release (${latest}). ${note}` };
   }
-  // A build with no sealed credential, or git missing: the GitHub CLI's sign-in can still see the private repository.
+  // No git tag listing: ask the GitHub CLI for releases directly.
   const viaCli = await run("gh", ["api", `repos/${REPO}/releases?per_page=20`, "--jq", ".[] | select(.draft | not) | .tag_name"], app.getPath("home"));
   const latest = viaCli.ok ? newestTag(viaCli.output.split(/\r?\n/), "v0.0.0") : null;
   if (latest && isNewerVersion(latest, current)) return { current, latest, url: `https://github.com/${REPO}/releases/tag/${latest}`, note };
