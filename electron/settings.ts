@@ -30,6 +30,8 @@ export type UiPrefs = {
   cursorIntegration: "off" | "partial" | "full";
   /** Where chats live, per computer. Empty until the user has chosen. */
   chatStorage: "github" | "hybrid" | "local" | "";
+  /** A project moved by hand: "in" is archived, a time is brought out then. Per computer, keyed like hiddenProjects. */
+  projectArchive: Record<string, "in" | number>;
 };
 
 const defaults = (): UiPrefs => ({
@@ -53,6 +55,7 @@ const defaults = (): UiPrefs => ({
   privacy: "protect",
   cursorIntegration: "off",
   chatStorage: "",
+  projectArchive: {},
 });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -97,6 +100,10 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
     cursorIntegration: cursorMode(r.cursorIntegration),
     chatStorage: chatStorage(r.chatStorage),
+    projectArchive:
+      r.projectArchive && typeof r.projectArchive === "object" && !Array.isArray(r.projectArchive)
+        ? Object.fromEntries(Object.entries(r.projectArchive).filter(([, v]) => v === "in" || typeof v === "number"))
+        : {},
   };
 }
 

@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
+import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials } from "./credentials";
+import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { prepareMemory } from "./memory";
 import { turnIsOver } from "./pureFeatures";
@@ -88,7 +90,7 @@ type PendingApproval = {
   toolName: string;
   input: Record<string, unknown>;
   suggestions?: PermissionUpdate[];
-  gate: "trust" | "risk" | "question";
+  gate: "trust" | "risk" | "question" | "login";
   risks?: string[];
   settled?: boolean;
   resolve: (result: PermissionResult) => void;
@@ -326,13 +328,15 @@ export function askPermission(
     description?: string;
     suppressAlwaysAllowRule?: boolean;
     requestId: string;
+    // Always asks, in any folder: nothing the folder's trust covers.
+    login?: { summary: string; note: string };
   },
 ): Promise<PermissionResult> {
   const requestId = options.requestId;
   const questions =
     toolName === "AskUserQuestion" && Array.isArray(input.questions) ? (input.questions as ApprovalQuestion[]) : undefined;
   const description = typeof input.description === "string" ? input.description : undefined;
-  const gate = permissionGate(session.workspace, toolName, input);
+  const gate: PermissionGate = options.login ? { ask: true, kind: "login", ...options.login } : permissionGate(session.workspace, toolName, input);
   if (!gate.ask) return Promise.resolve({ behavior: "allow", updatedInput: input });
   const summary = gate.kind === "question" ? options.title || approvalSummary(toolName, input) : gate.summary;
   const reason =
@@ -957,6 +961,36 @@ export function restoreInput(input: Record<string, unknown>): Record<string, unk
   return mapStrings(input, (s) => vault.restore(s));
 }
 
+// The one check before a command may use saved logins: Privacy Mode on, every name known, and the user has said yes
+// to each in this chat. Returns a reason to refuse, or null. A prompt-injected command cannot get past the question.
+export async function approveLogins(
+  win: BrowserWindow | null,
+  chatId: string,
+  session: Session,
+  toolName: "Bash" | "PowerShell",
+  command: string,
+  signal: AbortSignal,
+  requestId: string,
+): Promise<string | null> {
+  const logins = credentialsIn(command, toolName);
+  if (!logins) return null;
+  if ("error" in logins) return logins.error;
+  if (!protecting()) return "Saved logins need Privacy Mode, which hides a value if a command prints it. Ask the user to turn it on in Settings.";
+  const asked = askedForCredentials(chatId, logins.names);
+  if (!asked.length) return null;
+  const result = await askPermission(win, chatId, session, toolName, { command }, {
+    signal,
+    requestId: `${requestId}-login`,
+    login: {
+      summary: `Use saved login${asked.length === 1 ? "" : "s"} ${asked.join(", ")}`,
+      note: "The agent runs this command with the login but does not see its value. Allow covers this login for the rest of this chat. Check where the command sends it.",
+    },
+  });
+  if (result.behavior === "deny") return result.message || "The user did not allow this login.";
+  grantCredentials(chatId, asked);
+  return null;
+}
+
 export function secretFileMessage(file: string) {
   return `Privacy Mode blocked this: ${file} is a key, certificate or credential file, so its contents must not be sent to the model. Ask the user to check it themselves, or work from a copy with the secret parts removed.`;
 }
@@ -1298,6 +1332,9 @@ export function runClaude(opts: RunOptions) {
                 const secretFile = privacy ? commandTouchesSecretFile(String(toolInput.command ?? "")) : null;
                 if (secretFile) return deny(secretFileMessage(secretFile));
                 const requestId = input.tool_use_id || _toolUseId || `shell-${Date.now()}`;
+                const shell = input.tool_name === "Bash" ? "Bash" : "PowerShell";
+                const refused = await approveLogins(opts.win, chatId, session, shell, String(toolInput.command ?? ""), signal, requestId);
+                if (refused) return deny(refused);
                 const result = await askPermission(opts.win, chatId, session, input.tool_name, toolInput, {
                   signal,
                   requestId,
@@ -1308,7 +1345,7 @@ export function runClaude(opts: RunOptions) {
                 }
                 let updated = result.updatedInput ?? (privacy ? toolInput : undefined);
                 if (privacy && updated && typeof updated.command === "string") {
-                  updated = { ...updated, command: wrapCommand(input.tool_name === "Bash" ? "Bash" : "PowerShell", updated.command) };
+                  updated = { ...updated, command: wrapCommand(shell, fillCredentials(updated.command, shell)) };
                 }
                 session.decisions.set(requestId, updated ? { ...result, updatedInput: updated } : result);
                 return {

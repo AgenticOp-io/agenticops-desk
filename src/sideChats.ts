@@ -9,6 +9,11 @@ export function collapsedChats<T extends { id: string; updatedAt: number; lastUs
   return chats.filter((c) => recent.has(c.id) || mustShow(c));
 }
 
+// Unopened for about three months: its project moves to the archive row in the sidebar.
+export function isStale(lastUsedAt: number, now: number): boolean {
+  return now - lastUsedAt > 90 * 86_400_000;
+}
+
 // How many rounds of a chat to show. A new round stays in view once everything is showing, and an empty chat
 // never lowers the count below a page: at 0, every chat opened after it would show nothing.
 export function roundsToShow(count: number, rounds: number, page: number): number {

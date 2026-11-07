@@ -305,6 +305,107 @@ test("a chat opened after an empty one still shows its rounds", async () => {
   assert.equal(roundsToShow(24, 40, 12), 24);
 });
 
+test("a command names a saved login, and the secret stays out of its text", async () => {
+  const { credEnvName, credNameRefusal, planCredentials } = await import("./pureFeatures.ts");
+  const creds = [
+    { name: "core-router", kind: "password" as const, username: "admin", host: "10.0.0.1" },
+    { name: "gh", kind: "token" as const, username: "", host: "" },
+    { name: "deploy", kind: "ssh-key" as const, username: "ops", host: "" },
+  ];
+  const wroteKeyFor: string[] = [];
+  const bin = { askpass: "C:\\d\\desk-askpass.cmd", telnet: "C:\\d\\desk-telnet.cmd", keyFile: (name: string) => (wroteKeyFor.push(name), `C:\\run\\${name}`) };
+  const plan = (cmd: string, shell: "Bash" | "PowerShell" = "PowerShell") => planCredentials(cmd, shell, creds, bin) as Exclude<ReturnType<typeof planCredentials>, null | { error: string }>;
+
+  assert.equal(planCredentials("git status", "Bash", creds, bin), null);
+
+  const ssh = plan(`cd x; desk-ssh core-router admin@10.0.0.1 "uptime"`);
+  assert.equal(ssh.command, `cd x; ssh -o NumberOfPasswordPrompts=1 admin@10.0.0.1 "uptime"`);
+  assert.deepEqual(ssh.reads, [{ env: "DESK_ASKPASS_SECRET", name: "core-router" }]);
+  assert.ok(ssh.set.some(([k, v]) => k === "SSH_ASKPASS" && v === bin.askpass));
+  assert.deepEqual(wroteKeyFor, [], "a password never gets a key file");
+
+  const key = plan("desk-scp deploy a.txt ops@h:/tmp", "Bash");
+  assert.equal(key.command, `scp -i "C:/run/deploy" -o IdentitiesOnly=yes a.txt ops@h:/tmp`);
+  assert.deepEqual(key.reads, []);
+
+  const telnet = plan(`desk-telnet core-router 10.0.0.1 --run "show ver"`);
+  assert.equal(telnet.command, `& "C:\\d\\desk-telnet.cmd" 10.0.0.1 --run "show ver"`);
+  assert.ok(telnet.set.some(([k, v]) => k === "DESK_TELNET_USER" && v === "admin"));
+  assert.ok("error" in planCredentials("desk-telnet deploy h", "Bash", creds, bin)!);
+
+  const git = plan("desk-git gh push origin main");
+  assert.equal(git.command, "git push origin main");
+  assert.ok(git.set.some(([k, v]) => k === "DESK_ASKPASS_USER" && v === "x-access-token"));
+
+  const env = plan(`curl -H "Authorization: Bearer $DESK_SECRET_GH" https://api.example.com`, "Bash");
+  assert.deepEqual(env.names, ["gh"]);
+  assert.deepEqual(env.reads, [{ env: credEnvName("gh"), name: "gh" }]);
+
+  assert.match((planCredentials("desk-ssh nope h", "Bash", creds, bin) as { error: string }).error, /No saved login named nope.*core-router/);
+  assert.match((planCredentials("echo $DESK_SECRET_NOPE", "Bash", creds, bin) as { error: string }).error, /No saved login matches/);
+  assert.match((planCredentials("desk-ssh core-router a; desk-ssh gh b", "Bash", creds, bin) as { error: string }).error, /one saved password/);
+  // A word that only ends the same is not the command.
+  assert.equal(planCredentials("my-desk-ssh core-router a", "Bash", creds, bin), null);
+
+  assert.equal(credNameRefusal("core-router", creds), null);
+  assert.match(credNameRefusal("core_router", creds)!, /too close/);
+  assert.match(credNameRefusal("bad name", creds)!, /letters/);
+});
+
+test("repos on a new computer link only when there is no doubt", async () => {
+  const { matchLocalRepos } = await import("./pureFeatures.ts");
+  const p = (id: string, remote: string, placedAt = "") => ({ id, path: placedAt, placed: Boolean(placedAt), remotes: remote ? [remote] : [] });
+  const https = (r: string) => `https://github.com/o/${r}.git`;
+  // Same repo written the other way still matches.
+  assert.deepEqual(matchLocalRepos([p("a", https("a"))], [{ path: "C:/x/a", remote: "git@github.com:O/a.git" }]), { links: [{ id: "a", path: "C:/x/a" }], unsure: [] });
+  // Two clones of one repo: the user picks.
+  assert.deepEqual(matchLocalRepos([p("a", https("a"))], [{ path: "C:/x/a", remote: https("a") }, { path: "C:/y/a", remote: https("a") }]), { links: [], unsure: ["a"] });
+  // Two projects on one repo: the user picks.
+  assert.deepEqual(matchLocalRepos([p("a", https("a")), p("b", https("a"))], [{ path: "C:/x/a", remote: https("a") }]), { links: [], unsure: ["a", "b"] });
+  // A folder already in use by a placed project is not offered again, and a project with no remote or no clone stays as it is.
+  assert.deepEqual(matchLocalRepos([p("a", https("a"), "C:/x/a"), p("b", https("a")), p("c", ""), p("d", https("d"))], [{ path: "c:/X/a", remote: https("a") }]), { links: [], unsure: [] });
+});
+
+test("the sidebar refuses to delete anything that holds more than the project", async () => {
+  const { deleteFolderRefusal } = await import("./pureFeatures.ts");
+  const guard = { home: "C:\\Users\\me", keep: ["C:\\Users\\me\\AppData\\Roaming\\Desk", "C:\\Users\\me\\projects\\desk"], projects: ["C:\\Users\\me\\work\\one", "C:\\Users\\me\\work\\group\\two"], running: false };
+  assert.equal(deleteFolderRefusal("C:\\Users\\me\\work\\one", guard), null);
+  assert.equal(deleteFolderRefusal("c:/users/me/WORK/one/", guard), null);
+  assert.match(deleteFolderRefusal("C:\\", guard)!, /drive/);
+  assert.match(deleteFolderRefusal("C:\\Users\\me", guard)!, /home/);
+  assert.match(deleteFolderRefusal("C:\\Users", guard)!, /home/);
+  assert.match(deleteFolderRefusal("C:\\Users\\me\\AppData", guard)!, /data/);
+  assert.match(deleteFolderRefusal("C:\\Users\\me\\projects\\desk", guard)!, /runs from/);
+  assert.match(deleteFolderRefusal("C:\\Users\\me\\work\\group", guard)!, /1 other project\b/);
+  assert.match(deleteFolderRefusal("C:\\Users\\me\\work", guard)!, /2 other projects/);
+  assert.match(deleteFolderRefusal("C:\\Users\\me\\work\\one", { ...guard, running: true })!, /running/);
+  // A sibling whose name only starts the same is not inside it.
+  assert.equal(deleteFolderRefusal("C:\\Users\\me\\work\\on", guard), null);
+});
+
+test("the delete confirmation says what is only here", async () => {
+  const { deleteWarnings } = await import("./pureFeatures.ts");
+  const clean = { repo: true, remote: true, dirty: 0, unpushed: 0, stashed: 0 };
+  assert.deepEqual(deleteWarnings(clean), []);
+  assert.match(deleteWarnings({ ...clean, repo: false })[0], /only copy/);
+  assert.match(deleteWarnings({ ...clean, remote: false })[0], /no remote/);
+  assert.deepEqual(deleteWarnings({ ...clean, dirty: 1, unpushed: 2, stashed: 1 }), [
+    "1 file has changes that are not committed.",
+    "2 commits are not pushed anywhere.",
+    "1 stash is saved only here.",
+  ]);
+});
+
+test("a project moves to the archive after three months unopened", async () => {
+  const { isStale } = await import("../src/sideChats.ts");
+  const day = 86_400_000;
+  const now = 1000 * day;
+  assert.equal(isStale(now - 89 * day, now), false);
+  assert.equal(isStale(now - 90 * day, now), false);
+  assert.equal(isStale(now - 91 * day, now), true);
+  assert.equal(isStale(0, now), true);
+});
+
 test("rows keep their place, and new ones go on top", async () => {
   const { stableOrder } = await import("../src/sideChats.ts");
   const places = new Map<string, number>();

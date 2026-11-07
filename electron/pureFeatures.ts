@@ -305,6 +305,255 @@ export function matchSyncedProjects(local: Array<{ id: string; remotes?: string[
   return out;
 }
 
+export type CredKind = "password" | "token" | "ssh-key";
+export type CredMeta = { name: string; kind: CredKind; username: string; host: string };
+
+export const credEnvName = (name: string) => `DESK_SECRET_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+
+const CRED_TOOL = /(^|[\s;&|(])desk-(ssh|scp|sftp|git|telnet)[ \t]+([A-Za-z0-9][\w-]*)/g;
+const CRED_ENV = /\bDESK_SECRET_[A-Z0-9_]+\b/g;
+
+export function credNameRefusal(name: string, kept: CredMeta[]): string | null {
+  if (!/^[A-Za-z0-9][\w-]{0,63}$/.test(name)) return "Use a name of letters, numbers, dashes or underscores, up to 64 characters.";
+  const clash = kept.find((c) => c.name !== name && credEnvName(c.name) === credEnvName(name));
+  return clash ? `That name is too close to ${clash.name}.` : null;
+}
+
+export type CredPlan = {
+  names: string[];
+  command: string;
+  // Filled from a one-time file, so the value is never part of any command text.
+  reads: Array<{ env: string; name: string }>;
+  set: Array<[string, string]>;
+  keys: string[];
+};
+
+// Turns a command that names saved logins into one that uses them. The command keeps names only; the secrets arrive
+// through environment variables, for this command alone. Returns a message to give the agent when it cannot be done.
+export function planCredentials(
+  command: string,
+  shell: "Bash" | "PowerShell",
+  creds: CredMeta[],
+  bin: { askpass: string; telnet: string; keyFile: (name: string) => string },
+): CredPlan | { error: string } | null {
+  const named = (name: string) => creds.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  const tools = [...command.matchAll(CRED_TOOL)];
+  const refs = [...new Set(command.match(CRED_ENV) ?? [])];
+  if (!tools.length && !refs.length) return null;
+  const list = creds.length ? creds.map((c) => c.name).join(", ") : "none saved";
+  const plan: CredPlan = { names: [], command, reads: [], set: [], keys: [] };
+  const use = (name: string) => {
+    if (!plan.names.includes(name)) plan.names.push(name);
+  };
+  const read = (env: string, name: string) => {
+    if (!plan.reads.some((r) => r.env === env)) plan.reads.push({ env, name });
+  };
+  const set = (key: string, value: string) => {
+    if (!plan.set.some(([k]) => k === key)) plan.set.push([key, value]);
+  };
+  for (const env of refs) {
+    const cred = creds.find((c) => credEnvName(c.name) === env);
+    if (!cred) return { error: `No saved login matches ${env}. Saved logins: ${list}. The user adds them in Settings.` };
+    use(cred.name);
+    read(env, cred.name);
+  }
+  // One password per command: the helper that answers the prompt can only hold one.
+  let answering = "";
+  for (const [, , tool, name] of tools) {
+    const cred = named(name);
+    if (!cred) return { error: `No saved login named ${name}. Saved logins: ${list}. The user adds them in Settings.` };
+    use(cred.name);
+    if (cred.kind === "ssh-key") {
+      if (tool === "telnet") return { error: `${cred.name} is an SSH key, so it cannot log in over telnet.` };
+      if (!plan.keys.includes(cred.name)) plan.keys.push(cred.name);
+      continue;
+    }
+    if (answering && answering !== cred.name) return { error: `One command can use one saved password. Split the use of ${answering} and ${cred.name} into separate commands.` };
+    answering = cred.name;
+  }
+  const quoteFile = (file: string) => `"${shell === "Bash" ? file.replace(/\\/g, "/") : file}"`;
+  plan.command = command.replace(CRED_TOOL, (_m, lead: string, tool: string, name: string) => {
+    const cred = named(name)!;
+    if (tool === "telnet") {
+      read("DESK_TELNET_SECRET", cred.name);
+      if (cred.username) set("DESK_TELNET_USER", cred.username);
+      return `${lead}${shell === "PowerShell" ? "& " : ""}${quoteFile(bin.telnet)}`;
+    }
+    // A function: asking for the path writes the key to its one-time file, which only a key may do.
+    const keyFlags = () => `-i ${quoteFile(bin.keyFile(cred.name))} -o IdentitiesOnly=yes`;
+    if (tool === "git") {
+      if (cred.kind === "ssh-key") set("GIT_SSH_COMMAND", `ssh ${keyFlags()}`);
+      else {
+        read("DESK_ASKPASS_SECRET", cred.name);
+        set("DESK_ASKPASS_USER", cred.username || "x-access-token");
+        set("GIT_ASKPASS", bin.askpass);
+        set("GIT_TERMINAL_PROMPT", "0");
+      }
+      return `${lead}git`;
+    }
+    if (cred.kind === "ssh-key") return `${lead}${tool} ${keyFlags()}`;
+    read("DESK_ASKPASS_SECRET", cred.name);
+    set("SSH_ASKPASS", bin.askpass);
+    set("SSH_ASKPASS_REQUIRE", "force");
+    // A wrong password tried once rather than three times, so it does not lock the account on network gear.
+    return `${lead}${tool} -o NumberOfPasswordPrompts=1`;
+  });
+  return plan;
+}
+
+// The shell lines that load a one-time file into a variable and delete it, or set a plain value.
+export function credLoadLine(shell: "Bash" | "PowerShell", env: string, file: string): string {
+  if (shell === "Bash") {
+    const f = file.replace(/\\/g, "/").replace(/'/g, `'\\''`);
+    return `export ${env}="$(cat '${f}')"; rm -f '${f}'`;
+  }
+  const f = file.replace(/'/g, "''");
+  return `$env:${env} = [IO.File]::ReadAllText('${f}'); Remove-Item -LiteralPath '${f}' -Force`;
+}
+
+export function credSetLine(shell: "Bash" | "PowerShell", key: string, value: string): string {
+  return shell === "Bash" ? `export ${key}='${value.replace(/'/g, `'\\''`)}'` : `$env:${key} = '${value.replace(/'/g, "''")}'`;
+}
+
+// Pairs projects that have no folder here with git repositories found on this computer. Only a match without doubt
+// links: a project on two found folders, or two projects on one remote, wait for the user.
+export function matchLocalRepos(
+  projects: Array<{ id: string; path: string; placed: boolean; remotes: string[] }>,
+  found: Array<{ path: string; remote: string }>,
+): { links: Array<{ id: string; path: string }>; unsure: string[] } {
+  const keys = (remotes: string[]) => remotes.map(remoteKey).filter(Boolean);
+  const taken = new Set(projects.filter((p) => p.placed).map((p) => p.path.toLowerCase()));
+  const links: Array<{ id: string; path: string }> = [];
+  const unsure: string[] = [];
+  for (const project of projects) {
+    if (project.placed) continue;
+    const mine = keys(project.remotes);
+    const paths = found.filter((f) => mine.includes(remoteKey(f.remote)) && !taken.has(f.path.toLowerCase())).map((f) => f.path);
+    if (!paths.length) continue;
+    const shared = projects.some((p) => p !== project && !p.placed && keys(p.remotes).some((k) => mine.includes(k)));
+    if (shared || paths.length > 1) unsure.push(project.id);
+    else links.push({ id: project.id, path: paths[0] });
+  }
+  return { links, unsure };
+}
+
+// A folder the sidebar must never offer to delete. Comparison ignores case and slash direction, as Windows does.
+export function deleteFolderRefusal(
+  target: string,
+  guard: { home: string; keep: string[]; projects: string[]; running: boolean },
+): string | null {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const dir = norm(target);
+  const holds = (outer: string, inner: string) => inner === outer || inner.startsWith(`${outer}/`);
+  if (!dir || !dir.includes("/") || /^[a-z]:$/.test(dir)) return "That is a whole drive, so it was not deleted.";
+  if (holds(dir, norm(guard.home))) return "That folder holds your home folder, so it was not deleted.";
+  if (guard.keep.some((k) => holds(dir, norm(k)))) return "AgenticOps Desk runs from or keeps its data in that folder, so it was not deleted.";
+  const inside = guard.projects.filter((p) => norm(p) !== dir && holds(dir, norm(p)));
+  if (inside.length) return `That folder holds ${inside.length} other project${inside.length === 1 ? "" : "s"}, so it was not deleted. Delete them one at a time.`;
+  if (guard.running) return "A chat is running in that project. Stop it first.";
+  return null;
+}
+
+// What would be lost with a folder if the Recycle Bin were emptied, in plain words for the confirmation.
+export function deleteWarnings(state: { repo: boolean; remote: boolean; dirty: number; unpushed: number; stashed: number }): string[] {
+  if (!state.repo) return ["It is not a git repository, so this may be the only copy."];
+  const out: string[] = [];
+  if (!state.remote) out.push("It has no remote, so this is the only copy of its history.");
+  if (state.dirty) out.push(`${state.dirty} file${state.dirty === 1 ? " has" : "s have"} changes that are not committed.`);
+  if (state.unpushed) out.push(`${state.unpushed} commit${state.unpushed === 1 ? " is" : "s are"} not pushed anywhere.`);
+  if (state.stashed) out.push(`${state.stashed} stash${state.stashed === 1 ? " is" : "es are"} saved only here.`);
+  return out;
+}
+
+// ---------- Saved logins in shell commands
+// The agent writes a login's name; the value never enters the command text, where logs and quoting could get at it.
+// Each value is read from a one-time file at the top of the command, into a variable only that command gets.
+
+export type LoginRow = { name: string; kind: "password" | "token" | "ssh-key"; username: string };
+export type LoginShell = "Bash" | "PowerShell";
+
+export const LOGIN_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const LOGIN_TOOL = /(?<![\w./\\-])desk-(ssh|scp|sftp|git|telnet)\s+([^\s"';&|()]+)/g;
+const LOGIN_VAR = /\bDESK_SECRET_[A-Z0-9_]+\b/g;
+
+export function loginVar(name: string): string {
+  return `DESK_SECRET_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+export function findLogins(command: string, rows: LoginRow[]): { names: string[]; missing: string[] } {
+  const names = new Set<string>();
+  const missing = new Set<string>();
+  for (const match of command.matchAll(LOGIN_TOOL)) {
+    const row = rows.find((r) => r.name === match[2]);
+    if (row) names.add(row.name);
+    else missing.add(match[2]);
+  }
+  for (const [word] of command.matchAll(LOGIN_VAR)) {
+    const row = rows.find((r) => loginVar(r.name) === word);
+    if (row) names.add(row.name);
+    else missing.add(word);
+  }
+  return { names: [...names], missing: [...missing] };
+}
+
+export function rewriteLoginCommand(
+  command: string,
+  shell: LoginShell,
+  rows: LoginRow[],
+  helper: string,
+  fileFor: (name: string) => string,
+): { command: string } | { error: string } {
+  const quote = (s: string) => (shell === "Bash" ? `'${s.replace(/'/g, `'\\''`)}'` : `'${s.replace(/'/g, "''")}'`);
+  const set = (name: string, value: string) => (shell === "Bash" ? `export ${name}=${quote(value)}` : `$env:${name} = ${quote(value)}`);
+  const read = (name: string, file: string) =>
+    shell === "Bash"
+      ? `export ${name}="$(cat ${quote(file)})"; rm -f ${quote(file)}`
+      : `$env:${name} = Get-Content -Raw -Encoding UTF8 -LiteralPath ${quote(file)}; Remove-Item -LiteralPath ${quote(file)}`;
+  const keyFiles = new Map<string, string>();
+  const keyFile = (name: string) => keyFiles.get(name) ?? keyFiles.set(name, fileFor(name)).get(name)!;
+  const prefix: string[] = [];
+  let answering = "";
+  let problem = "";
+  const answerWith = (row: LoginRow) => {
+    // The helper answers one login's prompts, so two would be ambiguous.
+    if (answering && answering !== row.name) problem = "Use one saved login per command: run them as separate commands.";
+    if (answering) return;
+    answering = row.name;
+    prefix.push(read("DESK_ASKPASS_SECRET", fileFor(row.name)), set("DESK_ASKPASS_USER", row.username));
+  };
+  const out = command.replace(LOGIN_TOOL, (whole, tool: string, name: string) => {
+    const row = rows.find((r) => r.name === name);
+    if (!row) return whole;
+    const isKey = row.kind === "ssh-key";
+    if (tool === "telnet") {
+      if (isKey) problem = `${name} is an SSH key, which telnet cannot use.`;
+      else answerWith(row);
+      return `${shell === "Bash" ? "" : "& "}${quote(helper)} telnet`;
+    }
+    if (tool === "git") {
+      if (isKey) prefix.push(set("GIT_SSH_COMMAND", `ssh -i "${keyFile(name)}" -o IdentitiesOnly=yes`));
+      else {
+        answerWith(row);
+        prefix.push(set("GIT_ASKPASS", helper), set("GIT_TERMINAL_PROMPT", "0"));
+      }
+      // Cleared so a credential manager on this computer cannot answer with a different account.
+      return `git -c credential.helper=`;
+    }
+    if (isKey) return `${tool} -i ${quote(keyFile(name))} -o IdentitiesOnly=yes`;
+    answerWith(row);
+    prefix.push(set("SSH_ASKPASS", helper), set("SSH_ASKPASS_REQUIRE", "force"));
+    // One wrong try per connection, so a bad saved password cannot lock an account out.
+    return `${tool} -o NumberOfPasswordPrompts=1`;
+  });
+  if (problem) return { error: problem };
+  for (const [word] of new Set(out.matchAll(LOGIN_VAR))) {
+    if (prefix.some((line) => line.includes(`${word}=`) || line.startsWith(`$env:${word} `))) continue;
+    const row = rows.find((r) => loginVar(r.name) === word);
+    if (row) prefix.push(read(word, fileFor(row.name)));
+  }
+  return { command: [...new Set(prefix), out].join("\n") };
+}
+
 export type CleanupRow = { id: string; name: string; path: string; exists: boolean; chats: number };
 export type CleanupProposal = { from: CleanupRow; to: CleanupRow; bothExist: boolean };
 

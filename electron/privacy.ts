@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { app, safeStorage } from "electron";
+import { credentialNote, isSavedLogin } from "./credentials";
 import { writeJsonAtomic } from "./jsonStore";
 import { providerBaseUrl, type ProviderId } from "./providers";
 import { Vault } from "./redact";
@@ -44,6 +45,7 @@ export function privacyVault(): Vault {
   }
   vault = new Vault(data);
   vault.onChange = scheduleSave;
+  vault.sealed = isSavedLogin;
   return vault;
 }
 
@@ -75,7 +77,7 @@ Passwords, keys and tokens are replaced with placeholders like {{SECRET_3}} befo
 // The system-prompt addendum, scrubbed, with the placeholder note when Privacy Mode is on.
 export function privateAppend(append: string): string {
   if (!protecting()) return append;
-  return `${privacyVault().scrub(append).text}${PLACEHOLDER_NOTE}`;
+  return `${privacyVault().scrub(append).text}${PLACEHOLDER_NOTE}${credentialNote()}`;
 }
 
 // Scrub text bound for a model. Returns it unchanged when Privacy Mode is off.

@@ -12,6 +12,7 @@ import {
   importSyncedLibrary,
   importSyncedProjects,
   libraryPending,
+  locateProject,
   rememberProjectRemotes,
   type LibrarySlice,
 } from "./library";
@@ -21,6 +22,7 @@ import {
   allowedGitRemote,
   cursorMode,
   mergeChats,
+  matchLocalRepos,
   matchSyncedProjects,
   mergeDeleted,
   mergeProjects,
@@ -54,6 +56,8 @@ let applying = false;
 let queued: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let timerAt = 0;
+let scannedForRepos = false;
+let linkNote = "";
 let urlCache = "";
 let loaded = false;
 let lastOk = true;
@@ -337,6 +341,11 @@ async function doSync(): Promise<SyncView> {
     const matches = matchSyncedProjects((await exportLibrarySlice()).projects, incomingProjects);
     const carried = await importSyncedProjects(incomingProjects, { ...incomingMerges, ...matches });
     for (const pair of carried) await carryProjectMemory(pair.from, pair.to);
+    // Once each run: this looks through folders, and a sync happens every few minutes.
+    if (!scannedForRepos) {
+      scannedForRepos = true;
+      linkNote = await linkLocalRepos();
+    }
 
     const archived = mode === "off" ? [] : await cursorArchiveChats(dir);
     await fileNewChats(archived);
@@ -388,8 +397,9 @@ async function doSync(): Promise<SyncView> {
       restore: mode === "full",
       announce: false,
     });
-    const note = changed ? "Synced." : "Already up to date.";
-    return await viewOf(url, true, link ? `${note} ${link}` : note);
+    const note = [changed ? "Synced." : "Already up to date.", linkNote, link].filter(Boolean).join(" ");
+    linkNote = "";
+    return await viewOf(url, true, note);
   } catch (err) {
     return await viewOf(url, false, err instanceof Error ? err.message : String(err));
   } finally {
@@ -547,7 +557,14 @@ export async function setSyncUrl(next: string): Promise<SyncView> {
     const link = await applyCursorLink({ mode, remote: "", syncDir: syncDir(), restore: false, announce: false });
     return emptyView("", link || "Sync is off.", true, mode);
   }
+  await letGitReach(trimmed);
   return syncNow();
+}
+
+// Signed in to gh does not always mean signed in to git, as on a computer set up moments ago.
+async function letGitReach(url: string) {
+  const home = app.getPath("home");
+  if (/github\.com/i.test(url) && !(await runGit(home, ["ls-remote", url])).ok) await run("gh", ["auth", "setup-git"], home);
 }
 
 // The address of a private repository this account can sync to, created if there is none yet.
@@ -560,20 +577,97 @@ async function findOrCreateRepo(): Promise<{ ok: boolean; output: string }> {
     if (listed.ok && (!listed.output || (await isDeskRepo(dir)).ok)) return { ok: true, output: earlier };
   }
   const home = app.getPath("home");
-  // Only a private one will do: chats must never land in a public repository that shares the name.
-  const lookUp = () => run("gh", ["repo", "view", SYNC_REPO, "--json", "url,visibility", "--jq", 'select(.visibility == "PRIVATE") | .url'], home);
-  let found = await lookUp();
-  if (!found.ok) {
+  // Searches the account and its organizations, so a second computer joins the repository the first one made instead
+  // of splitting the chats across two. Private only: chats must never land in a public repository with the same name.
+  const search = await run("gh", ["api", "user/repos", "--paginate", "--jq", `.[] | select(.private and (.name == "${SYNC_REPO}" or .name == "desksync")) | .html_url`], home, 120_000);
+  let url = search.ok ? search.output.split("\n")[0]?.trim() ?? "" : "";
+  if (!url) {
     const made = await run("gh", ["repo", "create", SYNC_REPO, "--private", "--description", "AgenticOps Desk sync: chats, memory and settings"], home);
     if (!made.ok) {
       return { ok: false, output: `Could not create a private repository. Install the GitHub CLI and run gh auth login, or paste an address in Settings. ${made.output}` };
     }
-    found = await lookUp();
+    url = made.output.split("\n").map((line) => line.trim()).find((line) => /^https:\/\//.test(line)) ?? "";
+    if (!url) return { ok: false, output: `The repository was created, but GitHub did not say where. Paste its address in Settings. ${made.output}` };
   }
-  if (!found.ok || !found.output) return { ok: false, output: `Your GitHub account has a ${SYNC_REPO} repository that is not private. Make it private, or paste another address in Settings.` };
-  // Signed in to gh does not always mean signed in to git.
-  if (!(await runGit(home, ["ls-remote", found.output])).ok) await run("gh", ["auth", "setup-git"], home);
-  return found;
+  await letGitReach(url);
+  return { ok: true, output: url };
+}
+
+// Git repositories under a folder. Stops at each repository, and skips what cannot hold one or would take forever.
+const SKIP_SCAN = new Set(["node_modules", "appdata", "library", "$recycle.bin", "windows", "program files", "program files (x86)"]);
+async function findRepos(root: string, depth: number): Promise<Array<{ path: string; remote: string }>> {
+  const out: Array<{ path: string; remote: string }> = [];
+  let visited = 0;
+  const walk = async (dir: string, left: number) => {
+    // shortcut: gives up after 20000 folders, so a huge home folder cannot stall a sync; Find repos can aim at a smaller one.
+    if (visited++ > 20_000) return;
+    if (existsSync(path.join(dir, ".git"))) {
+      const remote = await remoteOfPath(dir);
+      if (remote) out.push({ path: dir, remote });
+      return;
+    }
+    if (!left) return;
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith(".") && !SKIP_SCAN.has(entry.name.toLowerCase())) await walk(path.join(dir, entry.name), left - 1);
+    }
+  };
+  await walk(root, depth);
+  return out;
+}
+
+async function foldersMissing() {
+  return (await exportLibrarySlice()).projects.map((p) => ({ ...p, placed: Boolean(p.path) && existsSync(p.path) }));
+}
+
+// Points projects from other computers at the clones already here. Returns what it did, in words.
+export async function linkLocalRepos(root?: string): Promise<string> {
+  const projects = await foldersMissing();
+  if (!projects.some((p) => !p.placed && p.remotes.length)) return "";
+  const found = await findRepos(root ?? app.getPath("home"), root ? 4 : 3);
+  const { links, unsure } = matchLocalRepos(projects, found);
+  for (const link of links) {
+    const carried = await locateProject(link.id, link.path);
+    if (carried?.from && carried.to) await carryProjectMemory(carried.from, carried.to);
+  }
+  const parts = [
+    links.length ? `Linked ${links.length} repositor${links.length === 1 ? "y" : "ies"} already on this computer.` : "",
+    unsure.length ? `${unsure.length} matched more than one folder or project, so use Locate folder for those.` : "",
+  ];
+  return parts.filter(Boolean).join(" ");
+}
+
+// Clones every project that has a remote and no folder here into one parent folder.
+export async function cloneMissingRepos(parent: string): Promise<{ ok: boolean; output: string }> {
+  const linked = await linkLocalRepos(parent);
+  const seen = new Set<string>();
+  const notes: string[] = linked ? [linked] : [];
+  let cloned = 0;
+  let shared = 0;
+  const failed: string[] = [];
+  for (const project of await foldersMissing()) {
+    if (project.placed || !project.remotes.length) continue;
+    const remote = project.remotes.at(-1)!;
+    const key = remoteKey(remote) ?? remote;
+    // Two projects on one repository need one clone between them; the other waits for Locate folder.
+    if (seen.has(key)) {
+      shared += 1;
+      continue;
+    }
+    seen.add(key);
+    const done = await cloneSyncedProject(remote, parent);
+    if (!done.ok || !done.path) {
+      failed.push(`${project.name}: ${done.output.split("\n").pop()}`);
+      continue;
+    }
+    const carried = await locateProject(project.id, done.path);
+    if (carried?.from && carried.to) await carryProjectMemory(carried.from, carried.to);
+    cloned += 1;
+  }
+  if (cloned) notes.push(`Cloned ${cloned} repositor${cloned === 1 ? "y" : "ies"} into ${parent}.`);
+  if (shared) notes.push(`${shared} shared a repository with another project, so use Locate folder for those.`);
+  if (failed.length) notes.push(`Not cloned: ${failed.join("; ")}`);
+  return { ok: !failed.length, output: notes.join(" ") || "Nothing to clone. Every project with a remote already has a folder here." };
 }
 
 export async function createSyncRepo(): Promise<SyncView> {

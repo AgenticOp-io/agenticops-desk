@@ -54,6 +54,7 @@ export class Vault {
   private byValue = new Map<string, string>();
   private pinned = new Set<string>();
   onChange: (() => void) | null = null;
+  sealed: ((value: string) => boolean) | null = null;
 
   constructor(data?: Partial<VaultData>) {
     this.next = Math.max(1, Number(data?.next) || 1);
@@ -145,10 +146,14 @@ export class Vault {
     return { text: out, hidden: seen.size };
   }
 
-  // Put real values back in place of placeholders this vault knows.
+  // Put real values back in place of placeholders this vault knows. A sealed value stays hidden: placeholder numbers
+  // can be guessed, and a saved login must only be reached by name, where the user is asked first.
   restore(text: string): string {
     if (!text.includes("{{SECRET_")) return text;
-    return text.replace(TOKEN, (m) => this.byToken.get(m) ?? m);
+    return text.replace(TOKEN, (m) => {
+      const value = this.byToken.get(m);
+      return value === undefined || this.sealed?.(value) ? m : value;
+    });
   }
 }
 

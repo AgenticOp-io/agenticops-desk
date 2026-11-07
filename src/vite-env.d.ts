@@ -272,6 +272,15 @@ declare global {
       chatFolder: (chatId: string) => Promise<{ folder: string; changed: boolean } | null>;
       moveChat: (chatId: string, projectId: string | null) => Promise<CursorChat | null>;
       locateProject: (projectId: string) => Promise<boolean>;
+      trashProject: (dir: string) => Promise<{ ok: boolean; note: string } | null>;
+      listCredentials: () => Promise<{
+        encrypted: boolean;
+        logins: Array<{ name: string; kind: "password" | "token" | "ssh-key"; username: string; host: string; use: string }>;
+      }>;
+      saveCredential: (input: { name: string; kind: string; username: string; host: string; secret: string }) => Promise<{ ok: boolean; note: string }>;
+      removeCredential: (name: string) => Promise<{ ok: boolean; note: string }>;
+      cloneMissingRepos: () => Promise<{ ok: boolean; output: string }>;
+      findLocalRepos: () => Promise<{ ok: boolean; output: string }>;
       storageStatus: () => Promise<{ mode: string; cursorChats: number }>;
       setChatStorage: (mode: string) => Promise<{ ok: boolean; note: string }>;
       reviewCursorRemoval: () => Promise<{

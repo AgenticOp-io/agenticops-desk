@@ -5,7 +5,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app, type BrowserWindow } from "electron";
+import { fillCredentials } from "./credentials";
 import {
+  approveLogins,
   askPermission,
   clearClaudeSession,
   dropApprovals,
@@ -398,8 +400,10 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
       if (!command) return { text: "command is required", error: true };
       const denied = await allowed(ctx, SHELL_NAME, { command }, id);
       if (denied) return { text: denied, error: true };
+      const refused = await approveLogins(ctx.win, ctx.chatId, ctx.session, SHELL_NAME, command, ctx.signal, id);
+      if (refused) return { text: refused, error: true };
       const timeout = Math.min(600, Math.max(5, Number(input.timeout_seconds) || 120));
-      return { text: await runShell(ctx, command, timeout) };
+      return { text: await runShell(ctx, fillCredentials(command, SHELL_NAME), timeout) };
     }
     return { text: `Unknown tool ${name}`, error: true };
   } catch (err) {

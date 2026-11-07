@@ -46,7 +46,8 @@ export type PermissionGate =
   | { ask: false }
   | { ask: true; kind: "question" }
   | { ask: true; kind: "trust"; summary: string; note: string }
-  | { ask: true; kind: "risk"; summary: string; note: string; risks: string[] };
+  | { ask: true; kind: "risk"; summary: string; note: string; risks: string[] }
+  | { ask: true; kind: "login"; summary: string; note: string };
 
 export function permissionGateFor(
   entry: AllowEntry | undefined,

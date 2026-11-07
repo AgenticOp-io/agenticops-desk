@@ -14,6 +14,8 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 4. [`electron/memory.ts`](./electron/memory.ts) — memory folders and the system-prompt addendum
 5. [`electron/direct.ts`](./electron/direct.ts) and [`electron/providers.ts`](./electron/providers.ts) — the Direct engine and its provider keys
 6. [`electron/autoRoute.ts`](./electron/autoRoute.ts) — the Auto model; it watches events through `setSendFilter` in `claude.ts`, so failover only ever swallows an `error` that `shouldFailOver` (`pureFeatures.ts`) matches, plus that run's `done`
+7. [`electron/credentials.ts`](./electron/credentials.ts) — saved logins; read [`docs/SECURITY.md`](./docs/SECURITY.md) before changing them
+8. [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — modules, data files, flows, testing and releasing. [`docs/FEATURES.md`](./docs/FEATURES.md) is the user-facing guide: update it when behavior changes
 
 ## Do
 
@@ -25,6 +27,8 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 ## Do not
 
 - Replace the Claude Code engine with the Direct one; Direct is an addition, and Claude Code stays the default
+- Add a way to read a saved login back into the renderer, put its value in command text, or let a placeholder fill it in. Every use goes through `approveLogins`
+- Sync `credentials.json`, `providers.json` or `privacy-vault.json`
 - Call the Claude API with anything but `@anthropic-ai/sdk`, or send provider API keys to the renderer (they stay encrypted in the main process)
 - Require a separately installed Claude CLI. Use `ensureClaudeBinary()` (`electron/claudeBinary.ts`): source runs use `node_modules`, packaged runs download the matching binary
 - Let folder trust answer `AskUserQuestion` or `ExitPlanMode`; the user must read those

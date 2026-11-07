@@ -22,6 +22,19 @@ test("a copy leaving this computer hides typed logins and keeps ordinary words",
   for (const t of ["username ADMIN password PASSWORD", "password123!", "password: hunter2secret"]) assert.equal(hideForSync(hideForSync(t)), hideForSync(t));
 });
 
+test("a sealed value never comes back through its placeholder", () => {
+  const v = new Vault();
+  v.sealed = (value) => value === "saved-login-value";
+  const saved = v.scrub("password=saved-login-value").text;
+  const other = v.scrub("password=other-value-here").text;
+  // Output still hides it, and an ordinary hidden value still fills in.
+  assert.ok(!saved.includes("saved-login-value"));
+  assert.equal(v.restore(saved), saved);
+  assert.equal(v.restore(other), "password=other-value-here");
+  // Guessing the number gets nothing either.
+  for (const n of [1, 2]) assert.ok(!v.restore(`x {{SECRET` + `_${n}}}`).includes("saved-login-value"));
+});
+
 test("random-looking words are hidden and code names are kept", () => {
   assert.equal(hideForSync("KEY=aB3dE9xQ2mZ7pL4k and `Xy7Qa2Bn9Kd4Lm1Z`"), "KEY=[hidden] and `[hidden]`");
   for (const name of ["getUserAccountById", "readComposerBubbles", "handleLogin2Factor", "chatLastUsedMap", "HTTP2ServerPush", "4f9a2b7c1d3e5f60"]) {

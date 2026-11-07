@@ -9,20 +9,20 @@ const SECTIONS: Section[] = [
     body: [
       "AgenticOps Desk is a desktop workspace for AI coding agents. The left side is your projects and chats. The right side is the conversation, and Code opens the files the agent is working in.",
       "Each chat keeps its own conversation. Send continues that chat, including a short reply like “yes”. Closing the app and opening it again brings the same chats back. A run that was cut off resumes the next time you send.",
-      "Several chats can work at once. The list shows a short line for whatever each one is doing, such as “Reading src/App.tsx” or “Writing the reply”.",
+      "Several chats can work at once. The list shows one word for each, such as Thinking, Working or Writing. The detail is next to the chat title.",
     ],
   },
   {
     id: "projects",
     title: "Projects and chats",
     body: [
-      "Add puts a folder on the list. The search box filters projects and chat titles. Click a folder to open the chat you used there last. Click any older chat to read it. Starting a new chat does not throw the old ones away.",
-      "GitHub projects stay in the list. Everything else is under Other folders at the bottom. Click a project to open it and see its five most recent chats, and click it again to collapse it. Opening another project also goes to the chat you used there last.",
+      "Add puts a folder on the list. The search box filters projects and chat titles. Click any older chat to read it. Starting a new chat does not throw the old ones away.",
+      "GitHub projects stay in the list. Everything else is under Other folders at the bottom. A project not opened for three months moves to the archive under them, and you can drag one onto the archive row or back out. Search still finds it, nothing on disk moves, and opening it brings it back. To take a project off the disk, right-click it and choose Delete folder from this computer: the folder goes to the Recycle Bin, you are told first what is not pushed, and its chats stay. Click a project to go to the chat you used there last and see its five most recent chats. Click the project you are in to collapse it or open it again.",
       "Drag a project or a chat to reorder it. Right-click to hide one. Hidden items come back from Settings, or from the same right-click menu.",
       "When chats from the editor you used before are found, the first start asks where chats should live: synced through GitHub, synced with that editor keeping its files, or left in that editor's local database. Settings can change this. In GitHub mode, Settings can also delete that editor's folders. What you type in the message box stays with its chat when you switch. Catch up hands one of those chats to the agent as a briefing. Nothing is written into the project folder.",
       "A chat stays in its project until you right-click it and choose Move to project. If a project's folder moves or disappears, the project shows no folder and its chats stay put; right-click it and choose Locate folder. Settings › Project cleanup offers to merge one project found in two places.",
       "Code updates download by themselves on Windows setup installs and load the next time the app starts. Settings › Check for updates looks now and offers Restart to update. Updates that change more than the app's own code still need the full installer.",
-      "Settings › Sync creates a private git repository on your GitHub account, or uses an address you paste. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project keeps its chats on every computer; Clone puts its repository on this computer, or Locate folder points at a copy you already have. The same page chooses whether Cursor chats stay on that computer, are archived into the repository, or are also added back to Cursor's chat list.",
+      "Settings › Sync finds your sync repository or creates a private one on your GitHub account, or uses an address you paste. To set up another computer: install the app, sign in to the GitHub CLI (gh auth login), and turn on sync the same way. Repositories already on that computer are linked to their projects, and Clone all fetches the rest. Chats, memory and settings push there and come down on your other computers. API keys stay on each computer. A project keeps its chats on every computer; Clone puts its repository on this computer, or Locate folder points at a copy you already have. The same page chooses whether Cursor chats stay on that computer, are archived into the repository, or are also added back to Cursor's chat list.",
     ],
   },
   {
@@ -71,10 +71,20 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "logins",
+    title: "Saved logins",
+    body: [
+      "Settings › Saved logins keeps passwords, tokens and SSH keys encrypted for your Windows account on this computer. The agent uses them by name without seeing them. Nothing can read a saved value back, so keep your own copy if you need one elsewhere. They do not sync, so add them again on another computer. Privacy Mode must be on.",
+      "Ask in plain words, like “check uptime on the core router using core-router”. The agent runs desk-ssh, desk-scp or desk-sftp NAME for SSH, desk-telnet NAME for telnet, desk-git NAME for git, or the variable DESK_SECRET_NAME for anything else.",
+      "You are asked once per chat before each login is first used. Read where the command sends it: a command you allow could pass the secret on, and hiding only catches the exact value. Unknown SSH servers are refused until you agree to trust them.",
+      "Telnet sends the password unencrypted across the network, so use SSH where you can. SSH keys with a passphrase are not supported yet.",
+    ],
+  },
+  {
     id: "status",
     title: "While it is working",
     body: [
-      "The word next to the chat title is the current step: getting ready, thinking, reading or editing a file, searching, running a command, writing the reply, or pushing to main. The same word appears on that chat in the list.",
+      "The words next to the chat title are the current step: getting ready, thinking, reading or editing a file, searching, running a command, writing the reply, or pushing to main. The list shows one word for the kind of work.",
       "Each message you send starts a round. While it works, that round lists what it is doing. The list stays open for the round in progress and closes when the reply is in, so the answer is what you read. Open it again to see the steps. A long chat shows the latest rounds. Earlier rounds open from the top.",
       "You can type another instruction and press Enter while it is still working. That guides the run in progress. The added line shows in the same round. It does not wait for the run to finish, and it does not throw away the steps already done.",
       "When the agent edits files, a small bar lists them. The changes are already kept: review a diff or undo a file if you want, or just keep working. Sending your next message clears the bar.",
@@ -85,9 +95,9 @@ const SECTIONS: Section[] = [
     title: "Permissions",
     body: [
       "File edits inside the open folder never wait for you: they happen, then show on the change bar to review or undo. The first time the agent needs to run a command in a folder, the app asks once. Allow means ordinary coding in that folder just runs: tests, git (including push), delete, and network.",
-      "Disk format, administrator commands (sudo or runas), and shutdown still ask, once each, and are remembered if you allow them.",
+      "Disk format, administrator commands (sudo or runas), and shutdown still ask, once each, and are remembered if you allow them. Saved logins ask once per chat, even in a trusted folder.",
       "Questions and plan approvals always ask, even in a trusted folder. Allow on those does not by itself trust the folder. Deny never gets remembered.",
-      "Sign in from Settings if the footer says you are not signed in.",
+      "Sign in from Settings if a chat says you are not signed in.",
     ],
   },
   {

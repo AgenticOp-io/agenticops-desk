@@ -838,7 +838,9 @@ export async function listLibraryProjects(): Promise<ProjectRecord[]> {
       exists: Boolean(a.path) && existsSync(a.path),
       chatCount: chats?.chatCount ?? 0,
       lastChatAt: chats?.lastChatAt ?? null,
-      lastUsedAt: lib.lastUsed[k] ?? a.addedAt,
+      // Being added to the list is not being opened: a bulk import dates every row at once, and that would keep
+      // them all out of the archive. Adding a folder by hand records a real open, and chats bring their own dates.
+      lastUsedAt: lib.lastUsed[k] ?? 0,
     });
   }
 

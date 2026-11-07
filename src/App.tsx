@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChangesBar } from "./ChangesBar";
 import { appendStep, appendText, Conversation, type TranscriptMsg } from "./Conversation";
@@ -15,9 +15,10 @@ import { Briefing, Inbox, WatchChips } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
 import { ChatStorage } from "./ChatStorage";
+import { SavedLogins } from "./SavedLogins";
 import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
-import { collapsedChats } from "./sideChats";
+import { collapsedChats, isStale } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
@@ -217,7 +218,9 @@ export function App() {
   const [snippetId, setSnippetId] = useState<string | null>(null);
   const [cli, setCli] = useState<{ found: boolean; path: string; bundled?: boolean } | null>(null);
   const [authOk, setAuthOk] = useState<boolean | null>(null);
-  const [status, setStatus] = useState("Ready");
+  // The result of something the user just did, shown briefly in the title bar. A chat's progress stays in the chat.
+  const [status, setStatus] = useState("");
+  const [setupNote, setSetupNote] = useState("");
   const [treeKey, setTreeKey] = useState(0);
   const [projects, setProjects] = useState<CursorProject[]>([]);
   const [chats, setChats] = useState<CursorChat[]>([]);
@@ -281,6 +284,7 @@ export function App() {
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [otherOpen, setOtherOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [allChats, setAllChats] = useState<Set<string>>(() => new Set());
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
@@ -315,6 +319,8 @@ export function App() {
   const runningByChatRef = useRef(runningByChat);
   const threadTimers = useRef(new Map<string, number>());
   const stickToBottom = useRef(true);
+  const openTicket = useRef(0);
+  const messagesTop = useRef(0);
   const chatsRef = useRef(chats);
   const prefsReady = useRef(false);
   const persistIds = useRef(new Set<string>());
@@ -413,34 +419,34 @@ export function App() {
   };
 
 
-  const openChat = async (chat: CursorChat) => {
-    if (chat.projectPath && !samePath(chat.projectPath, workspaceRef.current)) {
-      await focusProject(chat.projectPath);
+  // Everything is fetched first and then switched together, so one click paints one change: no blank
+  // pane, and no new project over the old chat. The chat on screen stays until the next one is ready.
+  const openChat = async (chat: CursorChat, folder = chat.projectPath) => {
+    const ticket = ++openTicket.current;
+    const cached = Boolean(threadsRef.current[chat.id]);
+    const moving = Boolean(folder) && !samePath(folder!, workspaceRef.current);
+    const [detail, ws] = await Promise.all([
+      cached ? null : window.desk.readCursorChat(chat.slug, chat.id).catch(() => null),
+      moving ? window.desk.setWorkspace(folder!) : null,
+    ]);
+    if (ws) {
+      setWorkspace(ws);
+      void refreshTree(ws);
     }
+    // A later click won. The folder above still follows the click order, and only the chat is dropped.
+    if (ticket !== openTicket.current) return;
+    if (!cached) setThreads((t) => (t[chat.id] ? t : { ...t, [chat.id]: detail?.messages ?? [] }));
     setActiveChat(chat);
     setMode(chat.mode || "default");
     setModel(chat.model ?? "");
-    if (threadsRef.current[chat.id]) {
-      setStatus(chat.title);
-      return;
-    }
-    setStatus("Loading chat…");
-    const detail = await window.desk.readCursorChat(chat.slug, chat.id);
-    if (!detail) {
-      setThreads((t) => ({ ...t, [chat.id]: t[chat.id] ?? [] }));
-      setStatus(chat.title);
-      return;
-    }
-    setThreads((t) => (t[chat.id] ? t : { ...t, [chat.id]: detail.messages }));
-    setStatus(detail.title);
   };
 
   const openProjectLatest = async (path: string, projectChats: CursorChat[]) => {
-    if (path) await focusProject(path);
     const latest = [...projectChats].sort(
       (a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt),
     )[0];
-    if (latest) await openChat(latest);
+    if (latest) await openChat(latest, path || latest.projectPath);
+    else if (path) await focusProject(path);
   };
 
   useEffect(() => {
@@ -462,23 +468,29 @@ export function App() {
       try {
         const list = await reloadCursor();
         setChats(list);
-        setStatus(list.length ? `${list.length} chats` : "No chats found");
       } catch {
         setStatus("Could not load chats");
       }
-      const stopSetup = window.desk.onSetup((text) => setStatus(text));
+      // A first-launch download can run for a while, so this stays up until it ends.
+      const stopSetup = window.desk.onSetup(setSetupNote);
       try {
         setCli(await window.desk.probeClaude());
         const auth = await window.desk.authStatus();
         setAuthOk(auth.ok);
-        setStatus(auth.ok ? "Signed in" : "Not signed in. Open Settings to sign in.");
       } catch {
         setAuthOk(false);
       } finally {
         stopSetup();
+        setSetupNote("");
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!status) return;
+    const timer = setTimeout(() => setStatus(""), 8000);
+    return () => clearTimeout(timer);
+  }, [status]);
 
   useEffect(() => {
     const patchThread = (chatId: string, fn: (m: Msg[]) => Msg[]) => {
@@ -496,7 +508,6 @@ export function App() {
           ...p,
           [chatId]: { status: ev.text ?? "", steps: p[chatId]?.steps ?? [], phase: ev.phase ?? p[chatId]?.phase },
         }));
-        if (activeChatRef.current?.id === chatId) setStatus(ev.text);
       }
       if (ev.kind === "approval" && ev.approval) {
         const card = { ...ev.approval, chatId };
@@ -505,7 +516,6 @@ export function App() {
           ...p,
           [chatId]: { status: card.summary, steps: p[chatId]?.steps ?? [], phase: "approval" },
         }));
-        if (activeChatRef.current?.id === chatId) setStatus(card.summary);
       }
       if (ev.kind === "changes") {
         setChangesByChat((c) => ({ ...c, [chatId]: ev.files ?? [] }));
@@ -541,7 +551,6 @@ export function App() {
           ...p,
           [chatId]: { status: ev.text ?? "Error", steps: p[chatId]?.steps ?? [] },
         }));
-        if (activeChatRef.current?.id === chatId) setStatus(ev.text);
       }
       if (ev.kind === "todos" && ev.todos) {
         setTodosByChat((cur) => ({ ...cur, [chatId]: ev.todos ?? [] }));
@@ -565,7 +574,6 @@ export function App() {
           ...p,
           [chatId]: { status: ev.text ?? "Done.", steps: p[chatId]?.steps ?? [] },
         }));
-        if (activeChatRef.current?.id === chatId) setStatus(ev.text ?? "Done.");
         const ws = workspaceRef.current;
         if (ws) void refreshTree(ws);
         void reloadOpenFile();
@@ -605,14 +613,28 @@ export function App() {
   }, [chats, workspace]);
 
   // A chat always opens at its last message, wherever the previous one was scrolled to.
-  useEffect(() => {
+  // Layout effects, so the first paint of a chat is already at its end instead of its top.
+  useLayoutEffect(() => {
     stickToBottom.current = true;
   }, [activeChat?.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = messagesRef.current;
     if (stickToBottom.current && el) el.scrollTop = el.scrollHeight;
   }, [msgs, running, activeChat?.id]);
+
+  // Fonts and rendered blocks can grow a message after it is drawn; that must not strand the view above the end.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const grown = new ResizeObserver(() => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    // The pane itself too: opening a panel below the chat shrinks it.
+    grown.observe(el);
+    for (const child of el.children) grown.observe(child);
+    return () => grown.disconnect();
+  }, [msgs, activeChat?.id]);
 
   useEffect(() => {
     const ids = [...persistIds.current].filter(
@@ -795,7 +817,6 @@ export function App() {
     setActiveChat(chat);
     setChats((all) => [chat, ...all.filter((c) => c.id !== id)]);
     composerRef.current?.focus();
-    setStatus("New agent");
     void window.desk.upsertChat(chat);
     markUsed(id, workspace);
   };
@@ -1113,13 +1134,6 @@ export function App() {
     { id: "auto", label: "Auto-edit mode", run: () => setMode("acceptEdits") },
   ];
 
-  const cliLabel = useMemo(() => {
-    if (!cli) return "Starting the agent…";
-    if (!cli.found) return "Agent engine not found (see Settings)";
-    const auth = authOk === null ? "" : authOk ? " · signed in" : " · not signed in";
-    return `Agent ready${cli.bundled ? "" : " · installed CLI"}${auth}`;
-  }, [cli, authOk]);
-
   const q = filter.trim().toLowerCase();
   useEffect(() => {
     if (q.length < 2) {
@@ -1249,6 +1263,29 @@ export function App() {
   const visibleGroups = q ? groups : groups.filter((g) => !hiddenProjectSet.has(g.key));
   const hiddenGroupList = groups.filter((g) => hiddenProjectSet.has(g.key));
   const hiddenChatList = chats.filter((c) => hiddenChatSet.has(c.id));
+  // Unopened for three months, or dragged in by hand. A running chat keeps its project out, and so does being open now,
+  // unless it was archived by hand. Dragging one out counts as opening it, so the three months start again.
+  const archivedKeys = new Set<string>();
+  if (!q) {
+    for (const g of visibleGroups) {
+      if (g.chats.some((c) => runningByChat[c.id])) continue;
+      const mark = prefs.projectArchive[g.key];
+      const open = samePath(g.path, workspace) || g.chats.some((c) => c.id === activeChat?.id);
+      if (mark === "in" || (!open && isStale(Math.max(g.lastUsedAt, mark ?? 0), Date.now()))) archivedKeys.add(g.key);
+    }
+  }
+  const markArchive = (key: string, mark: "in" | number | null) => {
+    const { [key]: _old, ...rest } = prefs.projectArchive;
+    patchPrefs({ projectArchive: mark === null ? rest : { ...rest, [key]: mark } });
+    const name = groups.find((g) => g.key === key)?.name ?? "Project";
+    if (mark === "in") setStatus(`Moved ${name} to the archive`);
+    else if (mark !== null) setStatus(`Brought ${name} out of the archive`);
+  };
+  const bringOut = (key: string) => {
+    markArchive(key, Date.now());
+    // A project that is not on GitHub comes back under Other folders, so that row opens to show where it went.
+    if (!groups.find((g) => g.key === key)?.github) setOtherOpen(true);
+  };
   const sideHeight = useMemo(() => (row: SideRow) => sideRowHeight(row, prefs.itemFont), [prefs.itemFont]);
   const sideRows = useMemo(() => {
     const rows: SideRow[] = [];
@@ -1271,19 +1308,23 @@ export function App() {
       if (liveChats.length === 0 && (opened || current)) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
     };
     // A search shows every match. Otherwise GitHub projects stay in the list, and the rest sit behind one row.
-    const primary = q
-      ? visibleGroups
-      : visibleGroups.filter(
-          (g) => g.github || samePath(g.path, workspace) || g.chats.some((c) => runningByChat[c.id] || c.id === activeChat?.id),
-        );
-    const rest = q ? [] : visibleGroups.filter((g) => !primary.includes(g));
+    const inUse = (g: (typeof visibleGroups)[number]) =>
+      samePath(g.path, workspace) || g.chats.some((c) => runningByChat[c.id] || c.id === activeChat?.id);
+    const archived = q ? [] : visibleGroups.filter((g) => archivedKeys.has(g.key));
+    const primary = q ? visibleGroups : visibleGroups.filter((g) => !archivedKeys.has(g.key) && (g.github || inUse(g)));
+    const rest = q ? [] : visibleGroups.filter((g) => !primary.includes(g) && !archived.includes(g));
     for (const g of primary) pushGroup(g);
     if (rest.length) {
       rows.push({ kind: "other", id: "other-folders", count: rest.length, open: otherOpen });
       if (otherOpen) for (const g of rest) pushGroup(g);
     }
+    // Always there outside a search, even empty: it is also where a project is dragged to archive it.
+    if (!q) {
+      rows.push({ kind: "other", id: "archive", count: archived.length, open: archiveOpen });
+      if (archiveOpen) for (const g of archived) pushGroup(g);
+    }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, allChats, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen]);
+  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, allChats, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen]);
 
   // A newly opened chat shows in the list, once: collapsing its project afterwards stays collapsed.
   const shownChat = useRef<string | null>(null);
@@ -1294,6 +1335,7 @@ export function App() {
     if (key === undefined) return;
     shownChat.current = id;
     if (!prefs.expanded[key]) patchPrefs({ expanded: { ...prefs.expanded, [key]: true } });
+    if (prefs.projectArchive[key] === "in") markArchive(key, null);
   }, [activeChat?.id, groups]);
 
   const openMenu = (e: ReactMouseEvent, extra: Partial<CtxMenu> = {}) => {
@@ -1312,6 +1354,28 @@ export function App() {
       ? prefs.projectOrder
       : [...prefs.projectOrder.filter((k) => keys.includes(k)), ...keys.filter((k) => !prefs.projectOrder.includes(k))];
     patchPrefs({ projectOrder: moveKey(seeded.length ? seeded : keys, from, to) });
+  };
+
+  const trashProject = async (g: SideGroup) => {
+    if (g.chats.some((c) => runningByChat[c.id])) {
+      setStatus(`A chat is running in ${g.name}. Stop it first.`);
+      return;
+    }
+    const result = await window.desk.trashProject(g.path);
+    if (!result) return;
+    if (result.ok) markArchive(g.key, "in");
+    setStatus(result.note);
+    if (!result.ok) return;
+    const under = (p: string) => {
+      const file = p.toLowerCase();
+      const dir = g.path.toLowerCase();
+      return file === dir || file.startsWith(`${dir}\\`) || file.startsWith(`${dir}/`);
+    };
+    setTabs((all) => all.filter((t) => !under(t.path)));
+    setActivePath((cur) => (cur && under(cur) ? null : cur));
+    if (activeChat && g.chats.some((c) => c.id === activeChat.id)) setActiveChat(null);
+    setWorkspace(await window.desk.getWorkspace());
+    setProjects(await window.desk.listCursorProjects());
   };
 
   const moveChat = (projectKey: string, fromId: string, toId: string) => {
@@ -1354,6 +1418,7 @@ export function App() {
         <span className="path" title={workspace}>
           {workspace ? baseName(workspace) : "No folder"}
         </span>
+        {(setupNote || status) && <span className="title-note" role="status">{setupNote || status}</span>}
         <span className="grow" />
         <button
           className={`ghost inbox-button ${pendingApprovals.length ? "has" : ""}`}
@@ -1459,8 +1524,29 @@ export function App() {
               if (row.kind === "note") return <div className="tree-note">{row.text}</div>;
               if (row.kind === "other") {
                 return (
-                  <button type="button" className="more-link other-folders" onClick={() => setOtherOpen((open) => !open)}>
-                    {row.open ? "Hide" : "Show"} {row.count} other folder{row.count === 1 ? "" : "s"}
+                  <button
+                    type="button"
+                    className={`more-link other-folders ${dragOver === row.id ? "drag-over" : ""}`}
+                    aria-expanded={row.open}
+                    title={row.id === "archive" ? "Projects not opened for three months, or dragged here. Opening or dragging one out brings it back." : undefined}
+                    onClick={() => (row.id === "archive" ? setArchiveOpen : setOtherOpen)((open) => !open)}
+                    onDragOver={(e: DragEvent) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOver(row.id);
+                    }}
+                    onDrop={(e: DragEvent) => {
+                      e.preventDefault();
+                      const from = parseDrag(e);
+                      if (from?.kind === "project" && from.key) {
+                        if (row.id === "archive") markArchive(from.key, "in");
+                        else if (archivedKeys.has(from.key)) bringOut(from.key);
+                      }
+                      setDragOver(null);
+                      setDragging(null);
+                    }}
+                  >
+                    {row.open ? "Hide" : "Show"} {row.id === "archive" ? `archive (${row.count})` : `${row.count} other folder${row.count === 1 ? "" : "s"}`}
                   </button>
                 );
               }
@@ -1615,7 +1701,12 @@ export function App() {
                   onDrop={(e: DragEvent) => {
                     e.preventDefault();
                     const from = parseDrag(e);
-                    if (from?.kind === "project" && from.key && from.key !== g.key) moveProject(from.key, g.key);
+                    if (from?.kind === "project" && from.key && from.key !== g.key) {
+                      moveProject(from.key, g.key);
+                      // Dropped among the projects on the other side of the archive line: it crosses over too.
+                      if (archivedKeys.has(from.key) && !archivedKeys.has(g.key)) bringOut(from.key);
+                      if (!archivedKeys.has(from.key) && archivedKeys.has(g.key)) markArchive(from.key, "in");
+                    }
                     setDragOver(null);
                     setDragging(null);
                   }}
@@ -1625,9 +1716,12 @@ export function App() {
                   }}
                   onContextMenu={(e) => openMenu(e, { projectKey: g.key })}
                   onClick={() => {
-                    if (!q) toggleGroup(g.key);
-                    // Opening another project also goes to its last chat. Collapsing never changes the chat on screen.
-                    if (q || (!showAll && !current)) void openProjectLatest(g.path, liveChats);
+                    if (prefs.projectArchive[g.key] === "in") markArchive(g.key, null);
+                    // Another project is gone to and left open, even if its list was already showing. Only the
+                    // project you are in collapses, and collapsing never changes the chat on screen.
+                    if (current && !q) return toggleGroup(g.key);
+                    if (!showAll) toggleGroup(g.key);
+                    void openProjectLatest(g.path, liveChats);
                   }}
                 >
                   <span className={`row-icon ${showAll ? "open" : ""}`}>
@@ -1655,7 +1749,7 @@ export function App() {
           </Windowed>
           {visibleGroups.length === 0 && (
             <div className="bubble system" style={{ margin: 10 }}>
-              {hiddenGroupList.length ? "All projects hidden. They come back from Settings." : "No projects yet. Use Add to open a folder."}
+              {hiddenGroupList.length ? "All projects hidden. They come back from Settings." : "No projects yet. Use Add to open a folder, or Settings › Sync to bring them from another computer."}
             </div>
           )}
           </>
@@ -1738,7 +1832,10 @@ export function App() {
               onScroll={() => {
                 const el = messagesRef.current;
                 if (!el) return;
-                stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                // Only the reader moving up lets go of the end. Content growing above the view is not that.
+                if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) stickToBottom.current = true;
+                else if (el.scrollTop < messagesTop.current) stickToBottom.current = false;
+                messagesTop.current = el.scrollTop;
               }}
             >
               {msgs.length === 0 && (
@@ -1958,6 +2055,31 @@ export function App() {
                 );
               })()}
               <button onClick={() => hideProject(menu.projectKey!)}>Hide project</button>
+              <button
+                onClick={() => {
+                  const key = menu.projectKey!;
+                  setMenu(null);
+                  if (archivedKeys.has(key)) bringOut(key);
+                  else markArchive(key, "in");
+                }}
+              >
+                {archivedKeys.has(menu.projectKey) ? "Bring out of archive" : "Move to archive"}
+              </button>
+              {(() => {
+                const g = groups.find((x) => x.key === menu.projectKey);
+                if (!g?.path || !g.exists) return null;
+                return (
+                  <button
+                    className="danger-text"
+                    onClick={() => {
+                      setMenu(null);
+                      void trashProject(g);
+                    }}
+                  >
+                    Delete folder from this computer…
+                  </button>
+                );
+              })()}
             </>
           ) : null}
           {hiddenGroupList.length + hiddenChatList.length > 0 ? (
@@ -2124,6 +2246,7 @@ export function App() {
               </div>
             )}
             <PrivacySettings mode={prefs.privacy} onMode={(privacy) => patchPrefs({ privacy })} />
+            <SavedLogins privacyOn={prefs.privacy !== "standard"} />
             <SyncSettings
               onChanged={() => {
                 void window.desk.listCursorProjects().then(setProjects);
@@ -2279,21 +2402,12 @@ export function App() {
             <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
             <p className="settings-hint">
               Saved on disk and kept after restart. Right-click a project or chat to hide it.
-              Drag items to reorder. GitHub projects stay in the list. Other folders are one row at the bottom.
+              Drag items to reorder. GitHub projects stay in the list. Other folders are one row at the bottom, and projects not opened for three months are in the archive below them. Drag a project onto the archive row or back out of it.
             </p>
           </div>
         </div>
       )}
 
-      <footer className={`status ${cli && (!cli.found || authOk === false) ? "warn" : ""}`}>
-        <span>{status}</span>
-        <span>
-          {cliLabel}
-          {Object.values(runningByChat).filter(Boolean).length
-            ? ` · ${Object.values(runningByChat).filter(Boolean).length} running`
-            : ""}
-        </span>
-      </footer>
     </div>
   );
 }

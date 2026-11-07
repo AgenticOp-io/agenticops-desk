@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import type { ImageAttachment, ModelOption, PluginCommand, UsageInfo } from "./vite-env";
 
 export const MODES = [
@@ -120,6 +120,24 @@ export const Composer = forwardRef<
   const { value, onChange, running } = props;
   const preview = useSendPreview(value, props.activeChatId, props.chatTitle);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const shownChat = useRef(props.activeChatId);
+
+  // The box fits its text up to the CSS max-height, then scrolls. A draft reopens at its end, ready to continue.
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const top = el.scrollTop;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+    if (shownChat.current === props.activeChatId) {
+      el.scrollTop = top;
+      return;
+    }
+    shownChat.current = props.activeChatId;
+    el.scrollTop = el.scrollHeight;
+    // Next frame: a cursor set during this commit did not hold, and came back at the start of the draft.
+    requestAnimationFrame(() => el.setSelectionRange(el.value.length, el.value.length));
+  }, [props.value, props.activeChatId]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [mentions, setMentions] = useState<Record<string, string>>({});

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
-import { chatStorage, parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
+import { chatStorage, deleteFolderRefusal, deleteWarnings, parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
 import {
   addMarketplace,
   installPlugin,
@@ -22,6 +22,7 @@ import {
   updatePlugin,
 } from "./plugins";
 import { parseDirectModel, providerStatus, setProvider } from "./providers";
+import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
   answerApproval,
@@ -78,7 +79,9 @@ import { carryProjectMemory } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { confirmPatch, updateCode } from "./patcher";
 import {
+  cloneMissingRepos,
   cloneSyncedProject,
+  linkLocalRepos,
   refreshProjectRemotes,
   remoteOfPath,
   scheduleDeskSync,
@@ -102,6 +105,7 @@ import {
   gitPullRequest,
   gitPush,
   gitStatus,
+  runGit,
   openShell,
   readProjectDoc,
   writeProjectDoc,
@@ -385,6 +389,7 @@ app.whenReady().then(async () => {
   }
   const s = await loadSettings();
   setPrivacyMode(s.privacy);
+  clearCredentialFiles();
   if (s.lastWorkspace && existsSync(s.lastWorkspace)) {
     workspace = s.lastWorkspace;
   } else {
@@ -475,6 +480,10 @@ ipcMain.handle("settings:set", async (_e, prefs: Partial<UiPrefs>) => {
   scheduleDeskSync();
   return next;
 });
+// Add and remove only. There is deliberately no way to read a saved value back into the window.
+ipcMain.handle("creds:list", () => listCredentials());
+ipcMain.handle("creds:save", (_e, input: Parameters<typeof saveCredential>[0]) => saveCredential(input));
+ipcMain.handle("creds:remove", (_e, name: string) => removeCredential(String(name ?? "")));
 ipcMain.handle("privacy:status", () => privacyStatus());
 ipcMain.handle("privacy:pin", (_e, value: string) => pinSecret(value));
 ipcMain.handle("privacy:unpin", (_e, index: number) => unpinSecret(Number(index)));
@@ -1056,6 +1065,71 @@ ipcMain.handle("sync:clone", async (_e, remote: string, projectId: string) => {
     setWorkspace(cloned.path);
   }
   return cloned;
+});
+ipcMain.handle("sync:clone-all", async () => {
+  const dir = await pickFolder("Folder to clone every missing project into");
+  return dir ? cloneMissingRepos(dir) : { ok: false, output: "Clone cancelled." };
+});
+ipcMain.handle("sync:find-repos", async () => {
+  const dir = await pickFolder("Folder that holds your repositories");
+  if (!dir) return { ok: false, output: "Search cancelled." };
+  return { ok: true, output: (await linkLocalRepos(dir)) || "No matching repositories found there." };
+});
+// The one way a project's folder leaves the disk. Only this dialog can start it, Cancel is the default, and it goes to
+// the Recycle Bin. shortcut: only tested on a local drive; a network drive may have no bin, so check before trusting it there.
+ipcMain.handle("project:trash", async (_e, raw: string) => {
+  const target = path.normalize(String(raw ?? ""));
+  if (!path.isAbsolute(target) || !existsSync(target)) return { ok: false, note: "That folder is not on this computer." };
+  const inside = (file: string) => {
+    const rel = path.relative(target, file);
+    return !rel.startsWith("..") && !path.isAbsolute(rel);
+  };
+  const running = new Set(runningChats());
+  const refusal = deleteFolderRefusal(target, {
+    home: app.getPath("home"),
+    keep: [app.getAppPath(), app.getPath("userData"), process.cwd()],
+    projects: (await listLibraryProjects()).map((p) => p.path).filter(Boolean),
+    running: (await rememberedChats()).some((c) => c.projectPath && running.has(c.id) && inside(c.projectPath)),
+  });
+  if (refusal) return { ok: false, note: refusal };
+  const top = await runGit(target, ["rev-parse", "--show-toplevel"]);
+  const repo = top.ok && path.relative(top.output.trim(), target) === "";
+  const count = async (args: string[]) => {
+    const res = await runGit(target, args);
+    return res.ok && res.output ? res.output.split("\n").length : 0;
+  };
+  const warnings = deleteWarnings({
+    repo,
+    remote: repo && (await count(["remote"])) > 0,
+    dirty: repo ? await count(["status", "--porcelain"]) : 0,
+    unpushed: repo ? await count(["log", "--oneline", "--branches", "--not", "--remotes"]) : 0,
+    stashed: repo ? await count(["stash", "list"]) : 0,
+  });
+  const bin = process.platform === "win32" ? "Recycle Bin" : "Trash";
+  const { response } = await dialog.showMessageBox(win!, {
+    type: "warning",
+    message: `Move ${path.basename(target)} to the ${bin}?`,
+    detail: [
+      target,
+      ...warnings,
+      warnings.length ? "" : "Everything in it is committed and pushed.",
+      `Its chats stay, and the project moves to the archive. Empty the ${bin} to free the disk space.`,
+    ].filter(Boolean).join("\n\n"),
+    buttons: ["Cancel", `Move to ${bin}`],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  if (response !== 1) return null;
+  const wasOpen = workspace && inside(workspace) ? workspace : "";
+  // The folder watcher holds the folder open on Windows.
+  if (wasOpen) setWorkspace("");
+  try {
+    await shell.trashItem(target);
+  } catch (err) {
+    if (wasOpen) setWorkspace(wasOpen);
+    return { ok: false, note: `${path.basename(target)} was not deleted. Close anything using it, such as a terminal or editor. ${err instanceof Error ? err.message : String(err)}` };
+  }
+  return { ok: true, note: `Moved ${path.basename(target)} to the ${bin}.` };
 });
 ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc(cwd, name));
 ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(cwd, name, contents));

@@ -21,6 +21,17 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **Plugins** (**Settings → Plugins**, or `/plugins`) browses, installs, updates and turns off Claude Code plugins from any marketplace, with one-click installs for Ponytail and Agent Skills. Their commands and skills show up in the composer's `/` menu.
 
+**Saved logins** (**Settings → Saved logins**) keep passwords, tokens and SSH keys encrypted on this computer. An agent uses them by name for SSH, telnet, git and web services without seeing them, and asks you once per chat first.
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [Features](./docs/FEATURES.md) | Everything the app does and how to use it, including setting up another computer |
+| [Security](./docs/SECURITY.md) | What protects your code and secrets, and where that stops |
+| [Architecture](./docs/ARCHITECTURE.md) | How it is built, data files, key flows, testing and releasing |
+| [`AGENTS.md`](./AGENTS.md) | Rules for agents working in this repo |
+
 ## Status
 
 **Private, in daily use.** Windows only for now.
@@ -29,8 +40,9 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 - **Permissions:** the first action in a folder asks once. After that, edits, tests, git and network commands run without a prompt. Disk format, administrator commands and shutdown still ask. Questions and plans always ask.
 - **Memory:** a global index under `%APPDATA%\AgenticOps Desk\memory` and the project's Claude Code memory folder go into every run.
 - **Imports:** chats and projects from the editor you used before show up in the sidebar and can be handed to the agent with **Catch up**.
+- **Sidebar:** GitHub projects stay in the list, other folders sit behind one row, and projects not opened for 90 days move to an archive you can drag in and out of. Right-click a project to send its folder to the Recycle Bin, after being told what isn't pushed.
 - **Projects:** a chat stays in its project until you use **Move to project…**. A moved or deleted folder does not refile anything: the project shows **no folder**, and **Locate folder…** points it at the new place. A chat with no folder asks before it runs, instead of running in whichever folder is open. Editor scans only decide a chat's project the first time it is imported. **Settings → Project cleanup** offers to merge one project found in two places.
-- **Sync:** Settings creates a private repository on your GitHub account with the GitHub CLI, or uses an address you paste. Chats, memory and settings push there as soon as a message is sent, and come down on your other computers. API keys stay on each machine, and passwords and tokens in a chat are replaced with `[hidden]` in the copy that leaves this computer. A project keeps a permanent ID and its chats on every computer; its folder is per computer, and its git remote recognizes a clone or a moved folder when only one project could match. The same setting chooses whether Cursor chats stay put, are archived into that repository, or are also added back to Cursor's chat list. The Git panel fetches, pulls, pushes, checks out a branch, and shows recent history.
+- **Sync:** Settings finds your sync repository or creates a private one with the GitHub CLI, or uses an address you paste. Chats, memory and settings push there as soon as a message is sent, and come down on your other computers, where existing clones are linked and **Clone all** fetches the rest ([setup steps](./docs/FEATURES.md#setting-up-another-computer)). API keys and saved logins stay on each machine, and passwords and tokens in a chat are replaced with `[hidden]` in the copy that leaves this computer. A project keeps a permanent ID and its chats on every computer; its folder is per computer, and its git remote recognizes a clone or a moved folder when only one project could match. The same setting chooses whether Cursor chats stay put, are archived into that repository, or are also added back to Cursor's chat list. The Git panel fetches, pulls, pushes, checks out a branch, and shows recent history.
 
 ## Requirements
 
@@ -89,20 +101,7 @@ The builds are not code-signed. Windows SmartScreen asks once ("More info → Ru
 
 ## Layout
 
-| Path | Role |
-|------|------|
-| `electron/main.ts` | Window, IPC, workspace watcher |
-| `electron/claude.ts` | Claude Code engine: agent SDK runs, streaming, approvals, resume after restart |
-| `electron/claudeBinary.ts` | Downloads the Claude Code binary for this computer and checks npm's fingerprint |
-| `electron/direct.ts` | Direct engine: own tool loop for the Claude API and OpenAI-compatible providers |
-| `electron/providers.ts` | Provider presets and API keys (encrypted with Windows' safeStorage) |
-| `electron/autoRoute.ts` | The Auto model: picks an AI per run and fails over to the next on provider errors |
-| `electron/plugins.ts` | Claude Code plugins and marketplaces, through the bundled `claude plugin` commands |
-| `electron/allows.ts` | Folder trust and the commands that still ask |
-| `electron/memory.ts` | Memory folders and system-prompt addendum |
-| `electron/library.ts` | Projects, chats and saved threads (`%APPDATA%\AgenticOps Desk`) |
-| `electron/cursor.ts` | Cursor chat import and catch-up briefings |
-| `src/App.tsx` | Sidebar, chat pane, composer, approval cards, code pane |
+The full module list, data files and key flows are in [Architecture](./docs/ARCHITECTURE.md).
 
 Keys: **Enter** sends (Shift+Enter for a new line), **Ctrl+I** quick edit, **Ctrl+N** new chat, **Ctrl+K** focuses the composer, **Ctrl+P** opens a file.
 
