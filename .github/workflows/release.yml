@@ -2,8 +2,8 @@ name: Release
 
 # Packages AgenticOps Desk for Windows, macOS and Linux. The installers do not contain the
 # Claude Code binary; the app downloads the build for that computer on first launch.
-# One runner per operating system packages both chip types. Run it by hand, or push a
-# v* tag to also attach the files to a draft GitHub release.
+# One runner per operating system packages both chip types. A v* tag publishes every
+# built file as a beta prerelease. Drafts are not used: an installed copy cannot see them.
 on:
   workflow_dispatch:
   push:
@@ -32,6 +32,13 @@ jobs:
         run: npx tsc --noEmit
       - name: Test
         run: npm test
+      - name: Seal the update credential
+        env:
+          UPDATE_PAT: ${{ secrets.UPDATE_PAT }}
+          UPDATE_APP_ID: ${{ secrets.UPDATE_APP_ID }}
+          UPDATE_APP_INSTALLATION_ID: ${{ secrets.UPDATE_APP_INSTALLATION_ID }}
+          UPDATE_APP_PRIVATE_KEY: ${{ secrets.UPDATE_APP_PRIVATE_KEY }}
+        run: node --experimental-strip-types scripts/seal-update-token.mjs
       - name: Bundle
         # Monaco makes the bundle large; Node's default heap runs out on the runner.
         env:
@@ -41,11 +48,6 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder ${{ matrix.args }} --publish never
-      - name: Keep one Windows installer and one portable
-        # The all-in-one files carry x64 and ARM64 and pick the right one on the PC; the single-chip copies are dropped.
-        if: matrix.label == 'windows'
-        shell: bash
-        run: rm -f release/*-win-x64-*.exe release/*-win-arm64-*.exe
       - name: Build the code patch
         if: matrix.label == 'windows'
         env:
@@ -64,7 +66,7 @@ jobs:
             release/patch*
 
   release:
-    name: Draft release
+    name: Beta release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
@@ -75,7 +77,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create draft release
+      - name: Publish the beta
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --title "AgenticOps Desk ${GITHUB_REF_NAME}" --generate-notes
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --prerelease --title "AgenticOps Desk ${GITHUB_REF_NAME} beta" --notes "Beta. Every Windows, macOS and Linux build is attached. Installed copies check the git tags of this private repository."

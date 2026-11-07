@@ -3,7 +3,7 @@ import { useState } from "react";
 const OPTIONS = [
   {
     id: "github",
-    title: "GitHub",
+    title: "Git",
     text: "Chats are copied here and sync through a private GitHub repository, created for you. Cursor's folders are no longer needed, and Settings can delete them.",
   },
   {
@@ -13,7 +13,7 @@ const OPTIONS = [
   },
   {
     id: "local",
-    title: "Cursor on this computer",
+    title: "Local",
     text: "Chats stay in Cursor's local database and are read from there. Nothing is copied, and nothing goes to GitHub.",
   },
 ] as const;

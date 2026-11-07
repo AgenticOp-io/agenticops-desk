@@ -21,7 +21,13 @@ export type ApprovalRequest = {
 };
 
 export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
-export type ModelOption = { value: string; displayName: string; description?: string; group?: string };
+export type ModelOption = {
+  value: string;
+  displayName: string;
+  description?: string;
+  group?: string;
+  needsSetup?: "key" | "models";
+};
 export type ProviderStatus = {
   id: string;
   label: string;
@@ -184,6 +190,7 @@ declare global {
       wakeAuto: (model?: string) => Promise<AutoStatus>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
+      loadProviderModels: (id: string) => Promise<ProviderStatus[]>;
       authStatus: () => Promise<{ ok: boolean; raw: string }>;
       runClaude: (payload: {
         prompt: string;
@@ -222,6 +229,8 @@ declare global {
       forgetPlaceholders: () => Promise<PrivacyStatus>;
       onClaudeEvent: (cb: (event: ClaudeEvent) => void) => () => void;
       onWorkspaceChanged: (cb: () => void) => () => void;
+      onFlushThreads: (cb: () => void) => () => void;
+      threadsFlushed: () => void;
       forgetSession: (chatId: string) => Promise<boolean>;
       patchChat: (id: string, patch: Partial<CursorChat>) => Promise<CursorChat | null>;
       deleteChat: (id: string) => Promise<void>;

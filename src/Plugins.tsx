@@ -25,7 +25,7 @@ export function AutoSettings({
     () => [
       { value: "default", label: "Claude Code · default model" },
       ...models
-        .filter((m) => m.value !== "auto")
+        .filter((m) => m.value !== "auto" && !m.needsSetup)
         .map((m) => ({ value: m.value, label: `${(m.group ?? "Claude Code").replace(/^Direct · /, "")} · ${m.displayName}` })),
     ],
     [models],

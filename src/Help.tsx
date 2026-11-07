@@ -32,7 +32,7 @@ const SECTIONS: Section[] = [
       "Type in the box and press Enter or Send. Shift+Enter starts a new line. While a chat is already working, Send guides that run instead of starting over.",
       "Type @ to attach a file from the open folder, or a function, class or type by name (@handleLogin points the agent at its file and line; this needs a git repository). You can also paste or drop images (up to 10, each under 5 MB).",
       "Agent is the usual mode: the agent edits files and runs commands. Plan reads and writes a plan, and waits for you before changing anything. Auto-edit applies file edits without an extra prompt. The permission rules below still apply.",
-      "The model menu's first entry is the default engine, which uses the account you signed in with under Settings. Models under Direct call that provider with the key you saved in Settings and are billed per token. Auto moves between them on its own (see The Auto model).",
+      "The model menu's first entry is the default engine, which uses the account you signed in with under Settings. Direct lists API models: pick one and paste its key there, or add the key under Settings. Those calls are billed per token. Auto moves between the ones already set up (see The Auto model).",
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
       "The meter under the box is how full this chat’s context is, and a rough cost since this window opened.",
     ],

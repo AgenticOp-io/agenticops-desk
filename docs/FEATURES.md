@@ -90,7 +90,7 @@ The list has three sections, top to bottom:
 Picked in the model menu, per chat.
 
 - **Claude Code** (default): the official agent, using your Claude sign-in and subscription. No separate CLI install is needed.
-- **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, or Ollama with your key. Billed per token by that provider, except local Ollama. Keys go in **Settings → Direct AI providers**.
+- **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought, and a new command replaces the reply that is still streaming. The other providers load their model list when you add a key, from the menu or from **Settings → Direct AI providers**.
 - **Auto:** uses all of these, or the ones you pick in **Settings → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs.
 - **Second opinion:** a model from another provider reviews each change against your request, and sends concerns back to the agent, for up to two rounds.
 
@@ -171,10 +171,10 @@ Other git hosts work with a pasted address if it is `owner/repo` shaped. GitLab 
 
 ## Setting up another computer
 
-1. Install the app from the release's `-win-setup.exe`. Windows SmartScreen asks once, because the build isn't code-signed: choose **More info → Run anyway**.
-2. Install [Git for Windows](https://git-scm.com) and the [GitHub CLI](https://cli.github.com), then run `gh auth login`.
+1. Install [Git for Windows](https://git-scm.com) and the [GitHub CLI](https://cli.github.com) if you want Git or Hybrid. The setup signs in with `gh auth login`.
+2. Install the app from the release's `-win-setup.exe`. Windows SmartScreen asks once, because the build isn't code-signed: choose **More info → Run anyway**. The setup asks Git, Local, or Hybrid, then whether to import Cursor. Git and Hybrid sign in to GitHub if needed and create the repository.
 3. Sign in under **Settings → Claude Code**.
-4. In **Settings → Sync**, leave the address empty and click **Create repository and sync**. It finds your existing repository, so your chats do not split across two.
+4. A computer that skipped the questions can use **Settings → Sync**: leave the address empty and click **Create repository and sync**. It finds your existing repository, so your chats do not split across two.
 5. Your chats, projects and memory come down. Passwords and tokens stay hidden in those chats, because the repository only holds the hidden copy.
 6. On the first sync after each app start, projects with no folder here are matched against clones in your home folder, up to three levels deep. A match links only when there is no doubt.
 7. For the rest, use **Find repositories…** to search a folder you pick, or **Clone all (N)…** to download them into one folder. These buttons appear only when a project with a remote has no folder on this computer.
@@ -187,11 +187,11 @@ Other git hosts work with a pasted address if it is `owner/repo` shaped. GitLab 
 
 ## Where chats live and Cursor
 
-When Cursor chats are found, the first start asks where chats should live. **Settings → Where chats live** can change it.
+The Windows setup asks where chats live, then which installed AI IDE to import. Git and Hybrid open GitHub sign-in when the GitHub CLI is not already signed in, and create the private repository. A silent install skips both questions. The first start still asks when Cursor chats are found and no choice was saved. **Settings → Where chats live** can change it.
 
-- **GitHub:** every chat is copied here at full length and synced through a private repository. **Settings → Cursor folders** can then delete Cursor's folders. That's permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees`.
+- **Git:** every chat is copied here at full length and synced through a private repository. **Settings → Cursor folders** can then delete Cursor's folders. That's permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees`.
 - **Hybrid:** the same copying and sync, and Cursor keeps its files.
-- **Cursor on this computer:** chats stay in Cursor's database and are read from there. Nothing is copied or pushed.
+- **Local:** chats stay in Cursor's database and are read from there. Nothing is copied or pushed.
 
 **Catch up** hands one of those chats to the agent as a briefing. Nothing is written into the project folder.
 

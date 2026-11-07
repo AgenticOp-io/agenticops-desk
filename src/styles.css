@@ -824,6 +824,9 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
   outline: none;
 }
 .palette-list { max-height: 360px; overflow: auto; padding: 6px 0; }
+.palette .settings-head { margin: 12px 14px 8px; }
+.palette .settings-hint { margin: 0 14px 8px; }
+.palette .row { margin: 0 14px 12px; }
 
 .ctx-menu {
   position: fixed;

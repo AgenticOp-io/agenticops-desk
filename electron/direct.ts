@@ -31,6 +31,7 @@ import {
 import { prepareMemory } from "./memory";
 import { ordersPrompt, protectedBy, runOrders } from "./orders";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
+import { stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
@@ -562,7 +563,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
   }
 }
 
-// ---------- OpenAI-compatible loop (OpenAI, OpenRouter, Gemini, Ollama) ----------
+// ---------- OpenAI-compatible loop (OpenAI, OpenRouter, Gemini, DeepSeek, Ollama) ----------
 
 async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: string, saved: Saved, prompt: string, images: ImageAttachment[]) {
   const client = new OpenAI({ apiKey: providerKey(provider) || "local", baseURL: providerBaseUrl(provider) });
@@ -590,37 +591,65 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       messages.push({ role: "user", content: guide });
     }
     sendPhase(ctx.win, ctx.chatId, ctx.session, "thinking", "Thinking…");
-    const stream = await client.chat.completions.create(
-      { model, messages, tools, stream: true, stream_options: { include_usage: true } },
-      { signal: ctx.signal },
-    );
+    // Thinking is on by default and runs again before every tool. That is the lag between commands.
+    if (provider === "deepseek") stripDeepSeekReasoning(messages as Array<{ reasoning_content?: string }>);
+    const turnAbort = new AbortController();
+    const onStop = () => turnAbort.abort();
+    ctx.signal.addEventListener("abort", onStop);
     let text = "";
+    let steered = false;
     const calls: Array<{ id: string; name: string; args: string }> = [];
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      if (delta?.content) {
-        if (!text) sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing the reply…");
-        text += delta.content;
-        send(ctx.win, { kind: "line", text: delta.content, phase: "writing", chatId: ctx.chatId, running: true });
+    try {
+      const stream = await client.chat.completions.create(
+        {
+          model,
+          messages,
+          tools,
+          stream: true,
+          ...(provider === "deepseek" ? { thinking: { type: "disabled" } } : { stream_options: { include_usage: true } }),
+        } as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+        { signal: turnAbort.signal },
+      );
+      for await (const chunk of stream) {
+        if (provider === "deepseek" && ctx.session.guide) {
+          steered = true;
+          turnAbort.abort();
+          break;
+        }
+        const delta = chunk.choices[0]?.delta;
+        if (delta?.content) {
+          if (!text) sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing the reply…");
+          text += delta.content;
+          send(ctx.win, { kind: "line", text: delta.content, phase: "writing", chatId: ctx.chatId, running: true });
+        }
+        for (const tc of delta?.tool_calls ?? []) {
+          const slot = (calls[tc.index] ??= { id: "", name: "", args: "" });
+          if (tc.id) slot.id = tc.id;
+          if (tc.function?.name) slot.name += tc.function.name;
+          if (tc.function?.arguments) slot.args += tc.function.arguments;
+        }
+        if (chunk.usage) {
+          sendUsage(ctx, { costUsd: 0, contextTokens: chunk.usage.prompt_tokens ?? 0, contextWindow: 0, model });
+        }
       }
-      for (const tc of delta?.tool_calls ?? []) {
-        const slot = (calls[tc.index] ??= { id: "", name: "", args: "" });
-        if (tc.id) slot.id = tc.id;
-        if (tc.function?.name) slot.name += tc.function.name;
-        if (tc.function?.arguments) slot.args += tc.function.arguments;
-      }
-      if (chunk.usage) {
-        sendUsage(ctx, { costUsd: 0, contextTokens: chunk.usage.prompt_tokens ?? 0, contextWindow: 0, model });
-      }
+    } catch (err) {
+      steered = provider === "deepseek" && Boolean(ctx.session.guide) && !ctx.signal.aborted;
+      if (!steered) throw err;
+    } finally {
+      ctx.signal.removeEventListener("abort", onStop);
     }
-    const live = calls.filter(Boolean);
-    messages.push({
-      role: "assistant",
-      content: text || null,
-      ...(live.length
-        ? { tool_calls: live.map((c, i) => ({ id: c.id || `call_${turn}_${i}`, type: "function" as const, function: { name: c.name, arguments: c.args || "{}" } })) }
-        : {}),
-    });
+    if (ctx.signal.aborted) return;
+    const live = steered ? [] : calls.filter(Boolean);
+    if (text || live.length) {
+      messages.push({
+        role: "assistant",
+        content: text || null,
+        ...(live.length
+          ? { tool_calls: live.map((c, i) => ({ id: c.id || `call_${turn}_${i}`, type: "function" as const, function: { name: c.name, arguments: c.args || "{}" } })) }
+          : {}),
+      });
+    }
+    if (steered) continue;
     if (!live.length) return;
     for (const [i, c] of live.entries()) {
       const id = c.id || `call_${turn}_${i}`;
@@ -636,7 +665,6 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       const r = bad ? { text: bad } : await runPrivateTool(ctx, c.name, input, id);
       messages.push({ role: "tool", tool_call_id: id, content: r.text });
     }
-    text = "";
   }
 }
 

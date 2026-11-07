@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
-import { run } from "./features";
+import { downloadReleaseAssets, run } from "./features";
 import { writeJsonAtomic } from "./jsonStore";
 import { isNewerVersion, oneAtATime, patchRefusal, patchShell, type PatchManifest } from "./pureFeatures";
 import { extractTarGzMember } from "./tarMember";
@@ -40,13 +40,16 @@ function readyNote(version: string): PatchResult {
   return { ready: true, note: `Update ${version} is ready. It loads the next time the app starts.` };
 }
 
-// shortcut: downloads through the GitHub CLI's sign-in because the repository is private; fetch the release assets directly if it goes public.
+const PATCH_FILES = ["patch-manifest.json", "patch-manifest.sig", "patch.tar.gz"];
+
+// The sealed credential downloads the patch. The GitHub CLI is the fallback for a build that was not sealed.
 async function fetchPatch(tag: string): Promise<string | null> {
   // Tests point at a local folder. Whatever is in it still has to pass the signature check.
   if (process.env.AGENTICOPS_DESK_PATCH_FROM) return process.env.AGENTICOPS_DESK_PATCH_FROM;
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) return null;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-patch-"));
-  const args = ["release", "download", tag, "--repo", REPO, "--dir", dir, "-p", "patch-manifest.json", "-p", "patch-manifest.sig", "-p", "patch.tar.gz"];
+  if (await downloadReleaseAssets(tag, dir, PATCH_FILES)) return dir;
+  const args = ["release", "download", tag, "--repo", REPO, "--dir", dir, ...PATCH_FILES.flatMap((name) => ["-p", name])];
   const got = await run("gh", args, app.getPath("home"), 300_000);
   if (got.ok) return dir;
   await fs.rm(dir, { recursive: true, force: true });

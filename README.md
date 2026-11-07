@@ -7,7 +7,7 @@
 Each chat runs on one of two engines, picked in the composer's model menu:
 
 - **Claude Code** (default): the official Claude Code agent, through [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk). A packaged app downloads the binary for that computer on first launch. Running from source uses the copy `npm install` already fetched. Uses your Claude sign-in and subscription. No separate CLI install is needed.
-- **Direct**: AgenticOps Desk's own agent loop calling a model API with your key: the Claude API, OpenAI, OpenRouter, Google Gemini, or local models through Ollama. Billed per token by that provider. It has file, search and PowerShell tools, and uses the same approvals, change review and memory.
+- **Direct**: AgenticOps Desk's own agent loop calling a model API with your key: the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or local models through Ollama. Billed per token by that provider. DeepSeek is in the model menu; pick it and paste a key. Other providers load their models when you add a key. It has file, search and PowerShell tools, and uses the same approvals, change review and memory.
 
 **Auto** in the same menu uses all of these, or the ones you pick in **Settings → Auto model**, in your order. When one hits a rate limit, runs out of quota, has its key rejected, is unreachable or declines, the message moves to the next one and the failed one rests for a few minutes.
 
@@ -81,11 +81,11 @@ CI runs both on every push. Setting `AGENTICOPS_DESK_DATA` points any run at a s
 
 The **Release** workflow (Actions → Release → Run workflow, or push a `v*` tag) builds Windows, macOS and Linux, each for both chip types. The installers are about 100 MB. They do not contain Claude Code. On first launch, with a network connection, AgenticOps Desk downloads the one binary for that computer from npm and checks it against npm's SHA-512 fingerprint. Later launches work offline. Running from a source checkout does not download anything; it uses the binary from `node_modules`.
 
-The Windows setup lists Cursor projects and chats while it installs, and opens the most recently used project if AgenticOps Desk does not already have one. A portable copy or an update does the same the first time it starts. The first start then asks where chats should live, and **Settings → Where chats live** can change it:
+The Windows setup asks two questions before it copies files. First, where chats live: **Git**, **Local**, or **Hybrid**. Next it looks for Cursor, Visual Studio Code, Windsurf, and Claude. Cursor is the one whose projects and chats can be imported, and that box starts unchecked. Git and Hybrid then open GitHub's sign-in if the GitHub CLI is not already signed in, and create the private repository for chats. Local finishes the install without that. A silent install skips the questions. A portable copy, or a setup that did not get an answer, asks on first start when Cursor chats are found, and opens the most recently used project if AgenticOps Desk does not already have one. **Settings → Where chats live** can change it:
 
-- **GitHub:** every chat is copied at full length with a permanent project (a chat whose messages are gone falls back to what you typed, from Cursor's search index), along with Cursor's raw transcripts, plans and agent files (`%APPDATA%\AgenticOps Desk\cursor-archive`), and syncs through a private repository. **Settings → Cursor folders** can then delete Cursor's folders. That is permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees` because those hold code.
+- **Git:** every chat is copied at full length with a permanent project (a chat whose messages are gone falls back to what you typed, from Cursor's search index), along with Cursor's raw transcripts, plans and agent files (`%APPDATA%\AgenticOps Desk\cursor-archive`), and syncs through a private repository. **Settings → Cursor folders** can then delete Cursor's folders. That is permanent, needs Cursor closed, copies again and backs up Cursor's databases first, and refuses if either fails. It never touches project folders, and it keeps `.cursor\worktrees` because those hold code.
 - **Hybrid:** the same copying and sync, and Cursor keeps all its files.
-- **Cursor on this computer:** chats stay in Cursor's local database and are read from there. Nothing is copied or pushed.
+- **Local:** chats stay in Cursor's local database and are read from there. Nothing is copied or pushed.
 
 | Platform | Files |
 |----------|-------|
@@ -93,7 +93,7 @@ The Windows setup lists Cursor projects and chats while it installs, and opens t
 | macOS Apple Silicon / Intel | `.dmg`, `.zip` |
 | Linux x64 / ARM64 | `.AppImage`, `.deb` |
 
-**Code updates (Windows setup installs):** the app checks for a new release every six hours and when you press **Settings → Check for updates**. If only the app's own code changed, it downloads a small signed patch, builds it in a folder of its own and checks every file; it loads at the next start, or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it. A change to Electron or an installed package still needs the full installer, and so do portable copies, macOS and Linux. Updates only arrive once a release is published. Patches download through the GitHub CLI's sign-in (`gh auth login`) while the repository is private.
+**Code updates (Windows setup installs):** the app checks git tags on the private repository every six hours and when you press **Settings → Check for updates**. A beta prerelease counts. The build carries an encrypted read credential: a GitHub App key mints a token that expires after an hour, and a read token is the fallback. A build without that credential uses the GitHub CLI's sign-in. If only the app's own code changed, it downloads a small signed patch, builds it in a folder of its own and checks every file; it loads at the next start, or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it. A change to Electron or an installed package still needs the full installer, and so do portable copies, macOS and Linux.
 
 The builds are not code-signed. Windows SmartScreen asks once ("More info → Run anyway"). On macOS, right-click the app and choose **Open** the first time, or run `xattr -cr /Applications/AgenticOps Desk.app`.
 

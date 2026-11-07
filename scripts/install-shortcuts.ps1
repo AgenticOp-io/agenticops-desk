@@ -10,9 +10,6 @@ $targets = @(
   (Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs")
 )
 foreach ($dir in $targets) {
-  # Shortcuts from before the rename.
-  $old = Join-Path $dir "ClaudeDesk.lnk"
-  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old }
   $link = $shell.CreateShortcut((Join-Path $dir "AgenticOps Desk.lnk"))
   $link.TargetPath = $conhost
   $link.Arguments = "--headless cmd.exe /d /c `"$runner`""

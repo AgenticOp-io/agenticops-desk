@@ -5,15 +5,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import { realStorePwsh } from "./claude";
+import { isNewerVersion, newestTag } from "./pureFeatures";
+import { sealedGithubToken } from "./updateAccess";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
-export function run(cmd: string, args: string[], cwd: string, timeout = 60_000): Promise<{ ok: boolean; output: string }> {
+export function run(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  timeout = 60_000,
+  extraEnv?: Record<string, string>,
+): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     execFile(
       cmd,
       args,
-      { cwd, windowsHide: true, timeout, maxBuffer: 2_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      { cwd, windowsHide: true, timeout, maxBuffer: 2_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv } },
       (err, stdout, stderr) => {
         const output = `${stdout ?? ""}${stderr ?? ""}`.trim();
         resolve({ ok: !err, output: output || (err ? String(err.message) : "") });
@@ -194,31 +202,100 @@ export function closeAllShells() {
   for (const id of [...shells.keys()]) closeShell(id);
 }
 
-const RELEASES = "repos/AgenticOp-io/agenticops-desk/releases/latest";
+const REPO = "AgenticOp-io/agenticops-desk";
+const REPO_URL = `https://github.com/${REPO}.git`;
+
+async function githubToken(): Promise<string> {
+  const sealed = await sealedGithubToken();
+  if (sealed) return sealed;
+  const viaCli = await run("gh", ["auth", "token"], app.getPath("home"), 20_000);
+  return viaCli.ok ? viaCli.output.trim() : "";
+}
+
+function authHeaders(token: string, accept = "application/vnd.github+json"): Record<string, string> {
+  return { Accept: accept, "User-Agent": "AgenticOps-Desk", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+// The token stays in the environment, not in the git arguments, so a failure message cannot repeat it.
+async function tagsFromGit(token: string): Promise<string[] | null> {
+  const listed = await run("git", ["ls-remote", "--tags", REPO_URL], app.getPath("home"), 30_000, {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraheader",
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: bearer ${token}`,
+  });
+  if (!listed.ok) return null;
+  return listed.output.split(/\r?\n/).map((line) => line.split("\t")[1] ?? "").filter(Boolean);
+}
+
+async function releaseFor(token: string, tag: string): Promise<{ url: string } | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, { headers: authHeaders(token) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { html_url?: string; draft?: boolean };
+    if (data.draft) return null;
+    return { url: data.html_url || `https://github.com/${REPO}/releases/tag/${tag}` };
+  } catch {
+    return null;
+  }
+}
+
+async function githubBytes(url: string, token: string): Promise<Buffer | null> {
+  let next = url;
+  for (let hop = 0; hop < 5; hop++) {
+    const headers = authHeaders(next.startsWith("https://api.github.com/") ? token : "", "application/octet-stream");
+    const res = await fetch(next, { headers, redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) return null;
+      next = new URL(loc, next).href;
+      continue;
+    }
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  }
+  return null;
+}
+
+// Downloads named release files with the sealed credential. The GitHub CLI remains the fallback.
+export async function downloadReleaseAssets(tag: string, dir: string, names: string[]): Promise<boolean> {
+  const token = await githubToken();
+  if (!token || !/^v\d+\.\d+\.\d+$/.test(tag)) return false;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, { headers: authHeaders(token) });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { assets?: Array<{ name?: string; url?: string }> };
+    for (const name of names) {
+      const asset = data.assets?.find((item) => item.name === name && item.url);
+      if (!asset?.url) return false;
+      const bytes = await githubBytes(asset.url, token);
+      if (!bytes) return false;
+      await fs.writeFile(path.join(dir, name), bytes);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function checkForUpdate(): Promise<{ current: string; latest: string | null; url: string | null; note: string }> {
   const current = app.getVersion();
-  const note =
-    "Installers are not code-signed. A signed setup needs a certificate, which this project does not have.";
-  try {
-    const res = await fetch(`https://api.github.com/${RELEASES}`, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "AgenticOps-Desk" },
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { tag_name?: string; html_url?: string };
-      return { current, latest: data.tag_name ?? null, url: data.html_url ?? null, note };
+  const note = "Installers are not code-signed. A signed setup needs a certificate, which this project does not have.";
+  const token = await githubToken();
+  if (token) {
+    const refs = await tagsFromGit(token);
+    const latest = refs ? newestTag(refs, "v0.0.0") : null;
+    if (latest && isNewerVersion(latest, current)) {
+      const release = await releaseFor(token, latest);
+      if (release) return { current, latest, url: release.url, note };
+      return { current, latest: null, url: null, note: `${latest} is tagged and the beta build is not uploaded yet. ${note}` };
     }
-    if (res.status !== 404) return { current, latest: null, url: null, note: `GitHub answered ${res.status}. ${note}` };
-  } catch {
-    /* offline, or GitHub unreachable; try the CLI below */
+    if (latest) return { current, latest: null, url: null, note: `You're on the latest release (${latest}). ${note}` };
   }
-  // The repository is private, so an anonymous request gets 404. The GitHub CLI's sign-in can see it.
-  const viaCli = await run("gh", ["api", RELEASES, "--jq", "[.tag_name, .html_url] | @tsv"], app.getPath("home"));
-  if (viaCli.ok && viaCli.output) {
-    const [tag, url] = viaCli.output.split("\t");
-    return { current, latest: tag || null, url: url || null, note };
-  }
-  if (/not found|404/i.test(viaCli.output)) return { current, latest: null, url: null, note: `No published release yet. ${note}` };
+  // A build with no sealed credential, or git missing: the GitHub CLI's sign-in can still see the private repository.
+  const viaCli = await run("gh", ["api", `repos/${REPO}/releases?per_page=20`, "--jq", ".[] | select(.draft | not) | .tag_name"], app.getPath("home"));
+  const latest = viaCli.ok ? newestTag(viaCli.output.split(/\r?\n/), "v0.0.0") : null;
+  if (latest && isNewerVersion(latest, current)) return { current, latest, url: `https://github.com/${REPO}/releases/tag/${latest}`, note };
+  if (viaCli.ok) return { current, latest: null, url: null, note: latest ? `You're on the latest release (${latest}). ${note}` : note };
   return {
     current,
     latest: null,

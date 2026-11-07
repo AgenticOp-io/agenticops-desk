@@ -80,7 +80,13 @@ export type ClaudeEvent = {
 };
 
 export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
-export type ModelOption = { value: string; displayName: string; description?: string; group?: string };
+export type ModelOption = {
+  value: string;
+  displayName: string;
+  description?: string;
+  group?: string;
+  needsSetup?: "key" | "models";
+};
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
 
 // What the CLI is doing right now, so the UI can tell thinking apart from tool work and writing.

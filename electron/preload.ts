@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld("desk", {
   listProviders: () => ipcRenderer.invoke("providers:list"),
   setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
     ipcRenderer.invoke("providers:set", id, patch),
+  loadProviderModels: (id: string) => ipcRenderer.invoke("providers:load", id),
   changedFiles: (chatId: string) => ipcRenderer.invoke("claude:changes", chatId) as Promise<string[]>,
   changeBase: (chatId: string, filePath: string) =>
     ipcRenderer.invoke("claude:changeBase", chatId, filePath) as Promise<string | null>,
@@ -169,6 +170,12 @@ contextBridge.exposeInMainWorld("desk", {
     ipcRenderer.on("workspace:changed", listener);
     return () => ipcRenderer.removeListener("workspace:changed", listener);
   },
+  onFlushThreads: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on("desk:flush-threads", listener);
+    return () => ipcRenderer.removeListener("desk:flush-threads", listener);
+  },
+  threadsFlushed: () => ipcRenderer.send("thread:flushed"),
   forgetSession: (chatId: string) => ipcRenderer.invoke("claude:forget", chatId) as Promise<boolean>,
   patchChat: (id: string, patch: Partial<CursorChat>) => ipcRenderer.invoke("chats:patch", id, patch) as Promise<CursorChat | null>,
   deleteChat: (id: string) => ipcRenderer.invoke("chats:delete", id) as Promise<void>,

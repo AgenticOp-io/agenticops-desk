@@ -67,6 +67,10 @@ export default defineConfig({
         onstart: ({ startup }) => onMainRebuilt(startup),
         vite: {
           build: {
+            // The plugin leaves outDir alone (emptyOutDir: false), so stale hashed
+            // main-*.js chunks from older builds pile up and get shipped in the
+            // installer. Wipe dist-electron each build so only the current chunk runs.
+            emptyOutDir: true,
             rollupOptions: {
               external: ["@anthropic-ai/claude-agent-sdk", "node:sqlite"],
             },

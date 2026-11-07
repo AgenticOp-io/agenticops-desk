@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { globToRegExp, lineDiff, ownerFromRemote } from "./pureFeatures.ts";
+import { chatModelIds, globToRegExp, lineDiff, ownerFromRemote } from "./pureFeatures.ts";
+
+test("deepseek drops stored reasoning before the next command", async () => {
+  const { stripDeepSeekReasoning } = await import("./pureFeatures.ts");
+  const messages = [
+    { role: "assistant", content: "done", reasoning_content: "looked" },
+    { role: "user", content: "hi" },
+  ];
+  stripDeepSeekReasoning(messages);
+  assert.equal("reasoning_content" in messages[0], false);
+  assert.equal(messages[1].content, "hi");
+});
+
+test("chat model ids drop embeddings and cap the list", () => {
+  const ids = chatModelIds([" deepseek-flash ", "text-embedding-3-small", "whisper-1", "deepseek-flash", "dall-e-3", "gpt-image-1"]);
+  assert.deepEqual(ids, ["deepseek-flash"]);
+  assert.equal(chatModelIds(Array.from({ length: 30 }, (_, i) => `m${i}`)).length, 20);
+});
 
 test("protected-path globs", () => {
   assert.ok(globToRegExp("migrations/**").test("migrations/0001_init.sql"));
@@ -450,6 +467,27 @@ test("a run stays open while background tasks can still report", async () => {
   assert.equal(turnIsOver({ type: "system", subtype: "session_state_changed", state: "idle" }, 2), true);
   assert.equal(turnIsOver({ type: "system", subtype: "session_state_changed", state: "running" }, 0), false);
   assert.equal(turnIsOver({ type: "assistant" }, 0), false);
+});
+
+test("the installer choice is Git, Local, or Hybrid, and import is only an explicit yes", async () => {
+  const { installChoices } = await import("./pureFeatures.ts");
+  assert.deepEqual(installChoices({ storage: "github", importCursor: true }), { storage: "github", importCursor: true });
+  assert.deepEqual(installChoices({ storage: "hybrid", importCursor: false }), { storage: "hybrid", importCursor: false });
+  assert.deepEqual(installChoices({ storage: "local" }), { storage: "local", importCursor: false });
+  assert.equal(installChoices({ storage: "cloud", importCursor: true }), null);
+  assert.equal(installChoices(null), null);
+});
+
+test("the newest tag is the highest release, and a sealed secret round-trips", async () => {
+  const { newestTag, openSecret, sealSecret } = await import("./pureFeatures.ts");
+  const { randomBytes } = await import("node:crypto");
+  assert.equal(newestTag(["refs/tags/v0.1.16", "refs/tags/v0.1.18", "refs/tags/v0.1.18^{}", "refs/tags/v0.1.17"], "0.1.17"), "v0.1.18");
+  assert.equal(newestTag(["refs/tags/v0.1.16"], "0.1.17"), null);
+  assert.equal(newestTag(["refs/tags/v0.1.18-beta"], "0.1.17"), null);
+  const key = randomBytes(32);
+  const box = sealSecret("github_pat_example", key);
+  assert.equal(openSecret(box, key), "github_pat_example");
+  assert.equal(openSecret({ ...box, data: box.data.slice(0, -2) + (box.data.endsWith("A") ? "B" : "A") }, key), null);
 });
 
 test("SDK version is found by walking up from its entry file", async () => {

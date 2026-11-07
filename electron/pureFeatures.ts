@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import path from "node:path";
 
 // Electron-free helpers for standing orders, org memory and the second opinion, so plain Node can test them.
@@ -205,6 +206,14 @@ export type ChatStorage = "github" | "hybrid" | "local";
 
 export function chatStorage(value: unknown): ChatStorage | "" {
   return value === "github" || value === "hybrid" || value === "local" ? value : "";
+}
+
+// What the Windows installer wrote. Anything else is ignored, so a bad file cannot pick a mode.
+export function installChoices(raw: unknown): { storage: ChatStorage; importCursor: boolean } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const storage = chatStorage((raw as { storage?: unknown }).storage);
+  if (!storage) return null;
+  return { storage, importCursor: (raw as { importCursor?: unknown }).importCursor === true };
 }
 
 export function cursorMode(value: unknown): CursorMode {
@@ -638,6 +647,43 @@ export function isNewerVersion(a: string, b: string): boolean {
   return false;
 }
 
+// The newest vX.Y.Z tag after current. Annotated tags arrive twice; the peeled name is the same tag.
+export function newestTag(refs: string[], current: string): string | null {
+  const here = current.startsWith("v") ? current : `v${current}`;
+  let best = "";
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    const tag = ref.trim().replace(/^refs\/tags\//, "").replace(/\^\{\}$/, "");
+    if (!/^v\d+\.\d+\.\d+$/.test(tag) || seen.has(tag)) continue;
+    seen.add(tag);
+    if (!isNewerVersion(tag, here)) continue;
+    if (!best || isNewerVersion(tag, best)) best = tag;
+  }
+  return best || null;
+}
+
+// shortcut: this key ships in the app, so the seal only stops the credential sitting in plaintext. The credential must only be able to read this one repository. Remove the seal when the repository is public.
+export const UPDATE_SEAL_KEY = Buffer.from("hO63CeU96RV+RzcyjmSVTwWIXgB0T1JY7zIuRlQ6uFc=", "base64");
+
+export type SecretBox = { iv: string; tag: string; data: string };
+
+export function sealSecret(plain: string, key: Buffer): SecretBox {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const data = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return { iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64") };
+}
+
+export function openSecret(box: SecretBox, key: Buffer): string | null {
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(box.iv, "base64"));
+    decipher.setAuthTag(Buffer.from(box.tag, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(box.data, "base64")), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 export type PatchManifest = { version: string; shell: string; tar: string; files: Array<{ path: string; sha256: string }> };
 
 // A patch only replaces code, so Electron and the installed packages have to be what it was built against.
@@ -710,4 +756,25 @@ export function sdkVersionFrom(entry: string, read: (file: string) => string | n
     dir = up;
   }
   return null;
+}
+
+// Chat models from a provider's /models list. Drops embeddings, images, audio and the rest.
+// shortcut: first 20 only, raise the cap if the menu needs the long tail.
+export function chatModelIds(ids: string[]): string[] {
+  const skip = /embed|whisper|tts|dall-e|moderation|transcri|realtime|\baudio\b|\bimage\b|\bspeech\b|\bsora\b/i;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id || id.length > 80 || seen.has(id) || skip.test(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+// Old DeepSeek turns stored a chain of thought. Sending it back makes every later command slower.
+export function stripDeepSeekReasoning(messages: Array<{ reasoning_content?: string }>): void {
+  for (const message of messages) delete message.reasoning_content;
 }

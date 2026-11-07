@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChangesBar } from "./ChangesBar";
 import { appendStep, appendText, Conversation, type TranscriptMsg } from "./Conversation";
@@ -291,6 +291,7 @@ export function App() {
   );
   const [mode, setMode] = useState(() => localStorage.getItem("desk.mode") || "default");
   const [model, setModel] = useState(() => localStorage.getItem("desk.model") || "");
+  const [keyAsk, setKeyAsk] = useState<{ id: string; label: string; pick: string; hint: string; key: string; busy: boolean; error: string } | null>(null);
   // Slash commands and skills from installed plugins, offered in the composer's "/" menu.
   const [pluginCmds, setPluginCmds] = useState<PluginCommand[]>([]);
   // Which AI the Auto model handed each chat's latest run to.
@@ -655,6 +656,28 @@ export function App() {
       threadTimers.current.set(id, timer);
     }
   }, [threads]);
+
+  // Debounced saves above mean the last few seconds of a chat live only in memory. On quit the main
+  // process asks for this, and it writes every opened chat before the window is destroyed.
+  const flushThreads = useCallback(async () => {
+    for (const timer of threadTimers.current.values()) window.clearTimeout(timer);
+    threadTimers.current.clear();
+    const entries = Object.entries(threadsRef.current);
+    if (!entries.length) return;
+    await Promise.allSettled(
+      entries.map(([id, next]) => {
+        savedThreads.current.set(id, next);
+        return window.desk.saveThread(id, next, true);
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    const offFlush = window.desk.onFlushThreads(() => {
+      void flushThreads().finally(() => window.desk.threadsFlushed());
+    });
+    return offFlush;
+  }, [flushThreads]);
 
   useEffect(() => {
     if (!quickOpen) return;
@@ -1042,6 +1065,72 @@ export function App() {
     const copy = await branchFrom({ ...from.chat, title: `${from.chat.title} · ${label}` }, all.slice(0, from.index));
     setModel(value);
     await send({ images: [], mentions: [], text: request, chat: copy, model: value });
+  };
+
+  const applyModel = (value: string) => {
+    setModel(value);
+    const chat = activeChatRef.current;
+    if (chat) storeChat({ ...chat, model: value });
+  };
+
+  const refreshModels = async () => {
+    const list = await window.desk.listModels();
+    if (list.length) setModels(list);
+    return list;
+  };
+
+  const ipcText = (err: unknown) =>
+    err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(err);
+
+  // Picking an API model that isn't set up asks for the key here, then loads that provider's models.
+  const chooseModel = (value: string) => {
+    const opt = models.find((m) => m.value === value);
+    if (opt?.needsSetup === "models") {
+      const id = value.slice("setup:".length);
+      void window.desk
+        .loadProviderModels(id)
+        .then(async () => {
+          const list = await refreshModels();
+          const first = list.find((m) => m.value.startsWith(`direct:${id}:`) && !m.needsSetup);
+          if (first) applyModel(first.value);
+          else setStatus("No models came back.");
+        })
+        .catch((err) => setStatus(ipcText(err)));
+      return;
+    }
+    if (opt?.needsSetup === "key") {
+      const id = value.startsWith("setup:") ? value.slice("setup:".length) : (value.split(":")[1] ?? "");
+      setKeyAsk({ id, label: opt.group?.replace(/^Direct · /, "") ?? id, pick: value.startsWith("direct:") ? value : "", hint: opt.description ?? "", key: "", busy: false, error: "" });
+      return;
+    }
+    applyModel(value);
+  };
+
+  const saveKeyAsk = async () => {
+    if (!keyAsk?.key.trim() || keyAsk.busy) return;
+    const ask = keyAsk;
+    setKeyAsk({ ...ask, busy: true, error: "" });
+    try {
+      await window.desk.setProvider(ask.id, { key: ask.key.trim() });
+      let note = "";
+      try {
+        await window.desk.loadProviderModels(ask.id);
+      } catch (err) {
+        note = ipcText(err);
+      }
+      const list = await refreshModels();
+      const usable = (m: ModelOption) => m.value.startsWith(`direct:${ask.id}:`) && !m.needsSetup;
+      const pick = (ask.pick && list.some((m) => m.value === ask.pick && usable(m)) ? ask.pick : list.find(usable)?.value) ?? "";
+      if (!pick) {
+        setKeyAsk({ ...ask, busy: false, error: note || "The key was saved, but no models were listed." });
+        return;
+      }
+      applyModel(pick);
+      setKeyAsk(null);
+      if (note) setStatus(`${note} The key is saved.`);
+    } catch (err) {
+      setKeyAsk({ ...ask, busy: false, error: ipcText(err) });
+    }
   };
 
   // One handler for the floating card and the inbox.
@@ -1893,10 +1982,7 @@ export function App() {
                 if (activeChat) storeChat({ ...activeChat, mode: m });
               }}
               model={model}
-              onModel={(m) => {
-                setModel(m);
-                if (activeChat) storeChat({ ...activeChat, model: m });
-              }}
+              onModel={(m) => chooseModel(m)}
               models={models}
               pluginCommands={pluginCmds}
               routedTo={activeChat ? routeByChat[activeChat.id] : undefined}
@@ -2140,6 +2226,36 @@ export function App() {
         />
       )}
 
+      {keyAsk && (
+        <div className="modal" onClick={() => !keyAsk.busy && setKeyAsk(null)}>
+          <div className="palette" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-head">
+              <strong>{keyAsk.label} API key</strong>
+              <button className="ghost" disabled={keyAsk.busy} onClick={() => setKeyAsk(null)}>
+                Cancel
+              </button>
+            </div>
+            <p className="settings-hint">{keyAsk.hint || "The key stays on this computer. Models from this provider then show in the menu."}</p>
+            <input
+              type="password"
+              placeholder="API key"
+              value={keyAsk.key}
+              autoFocus
+              disabled={keyAsk.busy}
+              onChange={(e) => setKeyAsk({ ...keyAsk, key: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveKeyAsk();
+              }}
+            />
+            {keyAsk.error && <p className="settings-hint">{keyAsk.error}</p>}
+            <div className="row">
+              <button className="btn primary" disabled={keyAsk.busy || !keyAsk.key.trim()} onClick={() => void saveKeyAsk()}>
+                {keyAsk.busy ? "Saving…" : "Save and use"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {replayFrom && (
         <div className="modal" onClick={() => setReplayFrom(null)}>
           <div className="palette replay" onClick={(e) => e.stopPropagation()}>
@@ -2154,7 +2270,7 @@ export function App() {
               <button className="list-item" onClick={() => void replayOn("")}>
                 <span className="list-title">Claude Code · default model</span>
               </button>
-              {models.map((m) => (
+              {models.filter((m) => !m.needsSetup).map((m) => (
                 <button key={m.value} className="list-item" onClick={() => void replayOn(m.value)}>
                   <span className="list-title">{m.displayName}</span>
                   <span className="list-sub">{m.group ?? "Claude Code"}</span>
@@ -2370,7 +2486,7 @@ export function App() {
               <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
                 <option value="">Off</option>
                 {models
-                  .filter((m) => m.value.startsWith("direct:"))
+                  .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
                   .map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.group?.replace(/^Direct · /, "")} · {m.displayName}
@@ -2378,7 +2494,7 @@ export function App() {
                   ))}
               </select>
             </label>
-            {!models.some((m) => m.value.startsWith("direct:")) && (
+            {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
               <p className="settings-hint">Add a provider key above (OpenAI, Gemini, Claude API…) to pick a reviewer.</p>
             )}
             <div className="settings-label">Editor autocomplete</div>
@@ -2387,7 +2503,7 @@ export function App() {
               <select value={prefs.autocomplete} onChange={(e) => patchPrefs({ autocomplete: e.target.value })}>
                 <option value="">Off</option>
                 {models
-                  .filter((m) => m.value.startsWith("direct:"))
+                  .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
                   .map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.group?.replace(/^Direct · /, "")} · {m.displayName}
@@ -2395,7 +2511,7 @@ export function App() {
                   ))}
               </select>
             </label>
-            {!models.some((m) => m.value.startsWith("direct:")) && (
+            {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
               <p className="settings-hint">Needs a Direct provider: a Claude API key (Haiku is fast and cheap) or a local Ollama model.</p>
             )}
             <AutoSettings models={models} chosen={prefs.autoModels} onChange={(autoModels) => patchPrefs({ autoModels })} />

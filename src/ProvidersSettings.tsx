@@ -12,13 +12,33 @@ function ProviderRow({ p, onSaved }: { p: ProviderStatus; onSaved: (list: Provid
     setBaseUrl(p.baseUrl);
   }, [p.models, p.baseUrl]);
 
+  const fail = (err: unknown) =>
+    err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(err);
+
   const save = async (patch: { key?: string | null; models?: string[]; baseUrl?: string }) => {
     try {
-      onSaved(await window.desk.setProvider(p.id, patch));
+      let next = await window.desk.setProvider(p.id, patch);
       setKey("");
-      setMsg("Saved");
+      if (typeof patch.key === "string" && patch.key.trim() && p.editableModels) {
+        try {
+          next = await window.desk.loadProviderModels(p.id);
+          setMsg("Saved. Models loaded into the menu.");
+        } catch (err) {
+          setMsg(`${fail(err)} The key is saved.`);
+        }
+      } else setMsg("Saved");
+      onSaved(next);
     } catch (err) {
-      setMsg(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(err));
+      setMsg(fail(err));
+    }
+  };
+
+  const loadModels = async () => {
+    try {
+      onSaved(await window.desk.loadProviderModels(p.id));
+      setMsg("Models loaded into the menu.");
+    } catch (err) {
+      setMsg(fail(err));
     }
   };
 
@@ -61,6 +81,9 @@ function ProviderRow({ p, onSaved }: { p: ProviderStatus; onSaved: (list: Provid
             <button className="btn" onClick={() => void save({ models: models.split(",") })}>
               Save models
             </button>
+            <button className="btn" onClick={() => void loadModels()}>
+              Load from API
+            </button>
           </div>
           <div className="provider-line">
             <input placeholder="API address" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
@@ -84,8 +107,8 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }) {
     <div className="providers">
       <div className="settings-label">Direct AI providers</div>
       <p className="settings-hint">
-        Chats normally run through Claude Code with your Claude sign-in. Add a provider here to pick its models under
-        "Direct" in the model picker. Direct chats call the provider's API with your key and are billed per token.
+        Chats normally run through Claude Code with your Claude sign-in. API models are in the model menu. Pick one to
+        add its key, or save a key here and load the models the provider offers. Direct chats are billed per token.
       </p>
       {list.map((p) => (
         <ProviderRow

@@ -2,19 +2,21 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app, safeStorage } from "electron";
 import { writeJsonAtomicSync } from "./jsonStore";
+import { chatModelIds } from "./pureFeatures";
 
 // AI providers the Direct engine can call without Claude Code. Keys are encrypted with Windows'
 // credential protection (safeStorage) and never leave the main process.
 
-export type ProviderId = "anthropic" | "openai" | "openrouter" | "gemini" | "ollama";
+export type ProviderId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "ollama";
 
 type Preset = {
   label: string;
   kind: "anthropic" | "openai-compatible";
   baseUrl?: string;
   needsKey: boolean;
-  // Fixed list for Claude; the others list whatever models the user types in.
+  // Fixed list for Claude. `catalog` is the menu until the provider's own /models list replaces it.
   models?: Array<{ id: string; name: string }>;
+  catalog?: Array<{ id: string; name: string }>;
   keyHint: string;
 };
 
@@ -52,6 +54,17 @@ export const PRESETS: Record<ProviderId, Preset> = {
     needsKey: true,
     keyHint: "API key from aistudio.google.com.",
   },
+  deepseek: {
+    label: "DeepSeek",
+    kind: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+    needsKey: true,
+    catalog: [
+      { id: "deepseek-flash", name: "DeepSeek Flash" },
+      { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+    ],
+    keyHint: "API key from platform.deepseek.com.",
+  },
   ollama: {
     label: "Ollama (local)",
     kind: "openai-compatible",
@@ -73,6 +86,15 @@ export type ProviderStatus = {
   editableModels: boolean;
   models: string[];
   ready: boolean;
+};
+
+export type DirectModelOption = {
+  value: string;
+  displayName: string;
+  group: string;
+  description?: string;
+  // Shown in the agent menu before a key or a model list exists. Auto ignores these.
+  needsSetup?: "key" | "models";
 };
 
 let cache: Stored | null = null;
@@ -116,7 +138,15 @@ export function providerBaseUrl(id: ProviderId): string {
 
 function modelsOf(id: ProviderId): string[] {
   const preset = PRESETS[id];
-  return preset.models ? preset.models.map((m) => m.id) : load()[id]?.models ?? [];
+  const saved = load()[id]?.models ?? [];
+  if (preset.models) return preset.models.map((m) => m.id);
+  if (saved.length) return saved;
+  return (preset.catalog ?? []).map((m) => m.id);
+}
+
+function modelName(id: ProviderId, model: string): string {
+  const preset = PRESETS[id];
+  return preset.models?.find((m) => m.id === model)?.name ?? preset.catalog?.find((m) => m.id === model)?.name ?? model;
 }
 
 export function providerStatus(): ProviderStatus[] {
@@ -162,16 +192,60 @@ export function setProvider(id: string, patch: { key?: string | null; models?: s
 }
 
 // Model picker entries for the Direct engine: value "direct:<provider>:<model>".
-export function directModelOptions() {
-  return providerStatus()
-    .filter((p) => p.ready)
-    .flatMap((p) =>
-      p.models.map((m) => ({
+// A provider that still needs a key or a model list stays in the menu so it can be set up there.
+export function directModelOptions(): DirectModelOption[] {
+  return providerStatus().flatMap((p) => {
+    const group = `Direct · ${p.label}`;
+    if (p.ready) {
+      return p.models.map((m) => ({ value: `direct:${p.id}:${m}`, displayName: modelName(p.id, m), group }));
+    }
+    if (p.id === "anthropic") return [];
+    if (p.models.length && p.needsKey && !p.hasKey) {
+      return p.models.map((m) => ({
         value: `direct:${p.id}:${m}`,
-        displayName: PRESETS[p.id].models?.find((x) => x.id === m)?.name ?? m,
-        group: `Direct · ${p.label}`,
-      })),
-    );
+        displayName: modelName(p.id, m),
+        group,
+        needsSetup: "key" as const,
+        description: p.keyHint,
+      }));
+    }
+    if (p.models.length) return [];
+    return [
+      {
+        value: `setup:${p.id}`,
+        displayName: p.needsKey && !p.hasKey ? "Add API key…" : "Load models…",
+        group,
+        needsSetup: p.needsKey && !p.hasKey ? ("key" as const) : ("models" as const),
+        description: p.keyHint,
+      },
+    ];
+  });
+}
+
+// Asks the provider for its model list and stores the chat models. Claude's list is fixed.
+export async function pullProviderModels(id: string): Promise<void> {
+  if (!isProvider(id)) throw new Error(`Unknown provider ${id}`);
+  const preset = PRESETS[id];
+  if (preset.kind === "anthropic") return;
+  const key = providerKey(id);
+  if (preset.needsKey && !key) throw new Error(`Add an API key for ${preset.label} first.`);
+  const base = providerBaseUrl(id).replace(/\/+$/, "");
+  let res: Response;
+  try {
+    res = await fetch(`${base}/models`, {
+      headers: { Accept: "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      signal: AbortSignal.timeout(12_000),
+    });
+  } catch (err) {
+    throw new Error(`${preset.label} did not answer: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!res.ok) throw new Error(`${preset.label} returned ${res.status} when listing models.`);
+  const body = (await res.json()) as { data?: Array<{ id?: string }> };
+  const ids = chatModelIds((body.data ?? []).map((m) => m.id ?? ""));
+  if (!ids.length) throw new Error(`${preset.label} did not list any chat models.`);
+  const all = load();
+  all[id] = { ...(all[id] ?? {}), models: ids };
+  save();
 }
 
 export function parseDirectModel(value: string): { provider: ProviderId; model: string } | null {

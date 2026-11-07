@@ -1,13 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, renameSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
-import { chatStorage, deleteFolderRefusal, deleteWarnings, parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
+import { chatStorage, deleteFolderRefusal, deleteWarnings, installChoices, parseSymbolHits, SYMBOL_KINDS } from "./pureFeatures";
 import {
   addMarketplace,
   installPlugin,
@@ -21,7 +21,7 @@ import {
   updateMarketplace,
   updatePlugin,
 } from "./plugins";
-import { parseDirectModel, providerStatus, setProvider } from "./providers";
+import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
 import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
@@ -105,6 +105,7 @@ import {
   gitPullRequest,
   gitPush,
   gitStatus,
+  run,
   runGit,
   openShell,
   readProjectDoc,
@@ -120,22 +121,10 @@ import { addWatch, closeWatches, initWatches, listWatches, removeChatWatches, re
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.setPath("userData", dataFolder());
 
-// The app was called ClaudeDesk before; its folder moves to the new name the first time this version starts.
-// If the old folder is in use (an older copy still running), keep using it this time and move it next launch.
 function dataFolder() {
   // Tests run the app against a throwaway folder, never the user's real chats and settings.
   if (process.env.AGENTICOPS_DESK_DATA) return path.resolve(process.env.AGENTICOPS_DESK_DATA);
-  const appData = app.getPath("appData");
-  const current = path.join(appData, "AgenticOps Desk");
-  const old = path.join(appData, "ClaudeDesk");
-  if (existsSync(current) || !existsSync(old)) return current;
-  try {
-    renameSync(old, current);
-    return current;
-  } catch (err) {
-    console.error("AgenticOps Desk could not move the old ClaudeDesk folder yet", err);
-    return old;
-  }
+  return path.join(app.getPath("appData"), "AgenticOps Desk");
 }
 
 let win: BrowserWindow | null = null;
@@ -267,10 +256,20 @@ function createWindow() {
   });
   guardNavigation(win);
   win.on("close", (e) => {
-    if (allowQuit || liveRunCount() === 0) return;
+    if (allowQuit) return;
+    if (liveRunCount() > 0) {
+      e.preventDefault();
+      ensureTray();
+      win?.hide();
+      return;
+    }
+    // Idle close: the renderer still holds the last debounced chat saves, so flush them before
+    // the window (and its pending timers) is destroyed.
     e.preventDefault();
-    ensureTray();
-    win?.hide();
+    void flushRendererThreads().finally(() => {
+      allowQuit = true;
+      if (win && !win.isDestroyed()) win.close();
+    });
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -353,8 +352,88 @@ function convertNote(report: ConvertReport | null) {
   return `${stored} of ${report.chats} chats are stored here.${partial}${failed}`;
 }
 
+async function noteInstall(text: string) {
+  await fs.writeFile(path.join(app.getPath("userData"), "install-result.txt"), text.replace(/\s+/g, " ").trim(), "utf8").catch(() => undefined);
+}
+
+// Git and Hybrid need a signed-in GitHub CLI. The window is GitHub's own approval page.
+async function ensureGitHubLogin(): Promise<{ ok: boolean; note: string }> {
+  const home = app.getPath("home");
+  const status = await run("gh", ["auth", "status"], home, 20_000);
+  if (status.ok) return { ok: true, note: "GitHub is already signed in." };
+  if (/ENOENT|not recognized|not found/i.test(status.output)) {
+    return { ok: false, note: "Install the GitHub CLI (gh), then run the installer again." };
+  }
+  await new Promise<void>((resolve) => {
+    const cmd = process.env.ComSpec || "cmd.exe";
+    const child = spawn(
+      cmd,
+      ["/d", "/c", "start", "/wait", "Sign in to GitHub", "gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--skip-ssh-key"],
+      { windowsHide: false, stdio: "ignore" },
+    );
+    child.on("exit", () => resolve());
+    child.on("error", () => resolve());
+  });
+  const again = await run("gh", ["auth", "status"], home, 20_000);
+  return again.ok ? { ok: true, note: "GitHub sign-in finished." } : { ok: false, note: again.output || "GitHub sign-in was not finished." };
+}
+
+// The installer writes install-choices.json, then waits for this. Local skips the sign-in.
+async function applyInstallChoices(): Promise<number> {
+  const file = path.join(app.getPath("userData"), "install-choices.json");
+  let choices: ReturnType<typeof installChoices> = null;
+  try {
+    choices = installChoices(JSON.parse(await fs.readFile(file, "utf8")));
+  } catch {
+    choices = null;
+  }
+  await fs.rm(file, { force: true }).catch(() => undefined);
+  if (!choices) {
+    await noteInstall("The storage choice could not be read.");
+    return 1;
+  }
+  if (choices.importCursor) {
+    await importCursorOnInstall();
+    await flushLibrary();
+  } else {
+    await fs.writeFile(
+      path.join(app.getPath("userData"), "cursor-import.json"),
+      JSON.stringify({ skipped: true, projects: 0, chats: 0, workspace: null, at: new Date().toISOString() }, null, 2),
+      "utf8",
+    );
+  }
+  if (choices.storage !== "local") {
+    const login = await ensureGitHubLogin();
+    if (!login.ok) {
+      await noteInstall(login.note);
+      return 1;
+    }
+  }
+  const result = await chooseChatStorage(choices.storage, choices.importCursor);
+  await noteInstall(result.note);
+  return result.ok ? 0 : 1;
+}
+
 app.whenReady().then(async () => {
-  // The installer runs this and waits, so projects and chats are on disk before the first window.
+  // The installer runs this and waits, so the choice is on disk before the first window.
+  if (process.argv.includes("--apply-install")) {
+    // shortcut: a sign-in window left open holds the installer for 10 minutes, then the install continues and the app asks again.
+    const giveUp = setTimeout(() => app.exit(1), 10 * 60_000);
+    let code = 1;
+    if (app.requestSingleInstanceLock()) {
+      try {
+        code = await applyInstallChoices();
+      } catch (err) {
+        console.error("AgenticOps Desk could not apply the install choice", err);
+        await noteInstall(err instanceof Error ? err.message : "The install choice could not be applied.");
+        code = 1;
+      }
+    }
+    clearTimeout(giveUp);
+    app.exit(code);
+    return;
+  }
+  // Kept so an older installer can still list Cursor. New installs use --apply-install.
   if (process.argv.includes("--import-cursor")) {
     // The installer waits for this, so never let a slow Cursor scan hang the install.
     const giveUp = setTimeout(() => app.exit(0), 60_000);
@@ -444,6 +523,30 @@ app.whenReady().then(async () => {
   });
 });
 
+// The renderer saves chats on a short debounce. On quit we ask it to write every opened chat now
+// and wait briefly, so the messages still in memory reach disk before the process ends.
+function flushRendererThreads(timeoutMs = 3000): Promise<void> {
+  return new Promise((resolve) => {
+    const wc = win && !win.isDestroyed() ? win.webContents : null;
+    if (!wc || wc.isDestroyed()) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      ipcMain.removeListener("thread:flushed", onFlushed);
+      resolve();
+    };
+    const onFlushed = () => finish();
+    const timer = setTimeout(finish, timeoutMs);
+    ipcMain.once("thread:flushed", onFlushed);
+    wc.send("desk:flush-threads");
+  });
+}
+
 let flushingQuit = false;
 app.on("before-quit", (e) => {
   allowQuit = true;
@@ -456,6 +559,7 @@ app.on("before-quit", (e) => {
   void Promise.allSettled([
     saveVault(),
     Promise.race([syncNow(), new Promise((resolve) => setTimeout(resolve, 20_000))]),
+    flushRendererThreads(),
   ]).finally(() => app.quit());
 });
 
@@ -577,18 +681,19 @@ ipcMain.handle("storage:status", async () => {
   const found = mode ? 0 : (await listCursorChats().catch(() => [])).length;
   return { mode, cursorChats: found };
 });
-ipcMain.handle("storage:set", async (_e, raw: string) => {
+// copyCursor is false when the installer was told not to import. Settings always copies.
+async function chooseChatStorage(raw: string, copyCursor: boolean) {
   const mode = chatStorage(raw);
   if (!mode) return { ok: false, note: "Pick where chats should live." };
   if (mode === "local") {
     await setSyncUrl("");
     await patchSettings({ chatStorage: mode });
-    return { ok: true, note: "Chats stay in Cursor's local database, and nothing goes to GitHub." };
+    return { ok: true, note: "Chats stay on this computer, and nothing goes to GitHub." };
   }
   const before = (await syncStatus()).url;
   const previous = (await loadSettings()).chatStorage;
   await patchSettings({ chatStorage: mode });
-  const report = await convertIfChosen();
+  const report = copyCursor ? await convertIfChosen() : null;
   const view = await (before ? syncNow() : createSyncRepo());
   if (!view.ok) {
     // A choice that cannot reach its repository is not made: the user is asked again.
@@ -597,7 +702,8 @@ ipcMain.handle("storage:set", async (_e, raw: string) => {
     return { ok: false, note: view.note || "That repository could not be reached." };
   }
   return { ok: true, note: `Chats now sync to ${view.url}. ${convertNote(report)}`.trim() };
-});
+}
+ipcMain.handle("storage:set", (_e, raw: string) => chooseChatStorage(raw, true));
 // The one thing that deletes Cursor's folders. Only this dialog can start it, and Cancel is the default.
 ipcMain.handle("cursor:remove-folders", async () => {
   const { response } = await dialog.showMessageBox(win!, {
@@ -843,6 +949,10 @@ ipcMain.handle("providers:list", () => providerStatus());
 ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
   setProvider(id, patch),
 );
+ipcMain.handle("providers:load", async (_e, id: string) => {
+  await pullProviderModels(String(id ?? ""));
+  return providerStatus();
+});
 
 ipcMain.handle("claude:auth", async () => {
   const cli = (await ensureClaudeBinary().catch(() => null)) ?? findClaudeCli();
