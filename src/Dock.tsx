@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Rules } from "./Extras";
+import { localServerUrl } from "./preview";
 
 export type DockTab = "terminal" | "git" | "preview" | "notes" | "rules";
 
@@ -18,7 +19,7 @@ export function Dock({
 }) {
   if (tab === "terminal") return <Terminal workspace={workspace} />;
   if (tab === "git") return <GitPanel workspace={workspace} onStatus={onStatus} />;
-  if (tab === "preview") return <Preview url={previewUrl} onUrl={onPreviewUrl} />;
+  if (tab === "preview") return <Preview url={previewUrl} onUrl={onPreviewUrl} workspace={workspace} />;
   if (tab === "rules") return <Rules workspace={workspace} onStatus={onStatus} />;
   return <Notes workspace={workspace} onStatus={onStatus} />;
 }
@@ -193,9 +194,52 @@ function previewable(url: string) {
   }
 }
 
-function Preview({ url, onUrl }: { url: string; onUrl: (url: string) => void }) {
+function Preview({ url, onUrl, workspace }: { url: string; onUrl: (url: string) => void; workspace: string }) {
   const [draft, setDraft] = useState(url);
   const [error, setError] = useState("");
+  const [command, setCommand] = useState<string | null>(null);
+  const [shellId, setShellId] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    setCommand(null);
+    if (workspace) void window.desk.previewCommand(workspace).then((c) => alive && setCommand(c));
+    return () => {
+      alive = false;
+    };
+  }, [workspace]);
+
+  // The dev server runs in the project's terminal shell, so its output is in Terminal and Restart there stops it.
+  useEffect(() => {
+    if (!shellId) return;
+    let seen = "";
+    const off = window.desk.onShellData((payload) => {
+      if (payload.cwd !== shellId) return;
+      seen = (seen + payload.chunk).slice(-8_000);
+      const found = localServerUrl(seen);
+      if (!found) return;
+      setShellId("");
+      setDraft(found);
+      onUrl(found);
+    });
+    const giveUp = setTimeout(() => {
+      setShellId("");
+      setError("No local address appeared within two minutes. The Terminal tab shows what the server printed.");
+    }, 120_000);
+    return () => {
+      off();
+      clearTimeout(giveUp);
+    };
+  }, [shellId, onUrl]);
+
+  const startServer = async () => {
+    if (!command) return;
+    setError("");
+    const { id } = await window.desk.openShell(workspace);
+    setShellId(id);
+    await window.desk.writeShell(id, `${command}\n`);
+  };
+
   return (
     <div className="dock-body preview-pane">
       <form
@@ -217,6 +261,11 @@ function Preview({ url, onUrl }: { url: string; onUrl: (url: string) => void }) 
         <button className="btn" type="submit">
           Open
         </button>
+        {command && (
+          <button className="btn" type="button" disabled={Boolean(shellId)} title={`Runs ${command} in this project's terminal`} onClick={() => void startServer()}>
+            {shellId ? "Starting…" : `Run ${command}`}
+          </button>
+        )}
       </form>
       {error && <p className="settings-hint">{error}</p>}
       {url && previewable(url) ? (

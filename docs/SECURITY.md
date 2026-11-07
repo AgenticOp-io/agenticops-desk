@@ -45,7 +45,7 @@ Designed so an agent can use a secret without seeing it, and you decide when it 
 1. The agent writes a command that names the login, such as `desk-ssh core-router admin@host "uptime"`, or uses `$DESK_SECRET_CORE_ROUTER`.
 2. The app asks you, once per chat for each login. This applies in trusted folders too, and a changed value is asked about again.
 3. Only then, the value goes in a randomly named one-time file under the app's `run` folder. The command reads it into an environment variable for that command alone, and deletes it.
-4. For a password, a small helper in the app's `bin` folder answers `ssh` or `git` from that variable. An SSH key stays in its file for about 60 seconds, since `ssh` needs to read it there.
+4. For a password, a small helper in the app's `bin` folder answers `ssh` or `git` from that variable. An SSH key stays in its file for about 60 seconds, since `ssh` needs to read it there. A key's passphrase is answered by the same helper, so it counts as the command's one password.
 5. Command output is scrubbed before the agent sees it. Saved values are on the Always hide list.
 
 **What this gives you**
@@ -77,7 +77,9 @@ Removing a login leaves it on the Always hide list, because it may already appea
 - **Team rules:** a repository's `.agenticops/orders.json` can add rules and protected paths, but its `checks` are ignored, so cloning can't run commands. Checks you save yourself run on both engines.
 - **Dependencies:** The app runs on Electron 45. `npm audit` still reports advisories in the DOMPurify copy inside Monaco 0.57, KaTeX's math plugins, and electron-builder (build-time only). Monaco and KaTeX run in the window. There is no forward fix for them yet, so `npm audit fix --force` is not used: it would downgrade packages.
 - **Plugins:** a plugin runs with the agent's permissions. Install ones you trust.
-- **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret. The private repository is read with the GitHub CLI sign-in on this computer. The app does not carry a token.
+- **MCP servers on Direct:** a server runs as a program with your permissions. One listed in a project's `.mcp.json` arrived with the repository, so it starts only after you approve it, and an edited entry asks again. Folder trust can't give that approval. Servers from your own user settings start without asking, as they do on the default engine.
+- **Own worktree:** a chat's worktree sits in the app's data folder, and the editor and change bar may write there as they do in the project.
+- **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. **Download and install** checks the full setup's SHA-256 against the same signed manifest before running it. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret. The private repository is read with the GitHub CLI sign-in on this computer. The app does not carry a token.
 - **Binary download:** the Claude Code binary is checked against npm's SHA-512 fingerprint.
 - **Installers are not code-signed**, so Windows and macOS can't vouch for who built them.
 

@@ -284,9 +284,9 @@ declare global {
       trashProject: (dir: string) => Promise<{ ok: boolean; note: string } | null>;
       listCredentials: () => Promise<{
         encrypted: boolean;
-        logins: Array<{ name: string; kind: "password" | "token" | "ssh-key"; username: string; host: string; use: string }>;
+        logins: Array<{ name: string; kind: "password" | "token" | "ssh-key"; username: string; host: string; use: string; passphrase?: boolean }>;
       }>;
-      saveCredential: (input: { name: string; kind: string; username: string; host: string; secret: string }) => Promise<{ ok: boolean; note: string }>;
+      saveCredential: (input: { name: string; kind: string; username: string; host: string; secret: string; passphrase?: string }) => Promise<{ ok: boolean; note: string }>;
       removeCredential: (name: string) => Promise<{ ok: boolean; note: string }>;
       cloneMissingRepos: () => Promise<{ ok: boolean; output: string }>;
       findLocalRepos: () => Promise<{ ok: boolean; output: string }>;
@@ -310,7 +310,21 @@ declare global {
       writeShell: (id: string, text: string) => Promise<boolean>;
       closeShell: (id: string) => Promise<boolean>;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
-      checkForUpdate: () => Promise<{ current: string; latest: string | null; url: string | null; note: string; patch: { ready: boolean; note: string } }>;
+      checkForUpdate: () => Promise<{
+        current: string;
+        latest: string | null;
+        url: string | null;
+        note: string;
+        patch: { ready: boolean; note: string };
+        canInstall: boolean;
+      }>;
+      installUpdate: () => Promise<string | null>;
+      previewCommand: (cwd: string) => Promise<string | null>;
+      importOtherTools: () => Promise<{ claudeCode: number; vscode: number }>;
+      worktreeGet: (chatId: string, folder: string) => Promise<{ path: string; branch: string } | null>;
+      worktreeCreate: (chatId: string, folder: string) => Promise<{ path: string; branch: string } | string>;
+      worktreeMerge: (chatId: string) => Promise<{ ok: boolean; note: string }>;
+      worktreeRemove: (chatId: string) => Promise<{ ok: boolean; note: string }>;
       getOrders: (cwd: string) => Promise<Orders>;
       setOrders: (cwd: string, next: Partial<Orders>) => Promise<Orders>;
       originsOf: (file: string) => Promise<Array<{ chatId: string; prompt: string; at: number }>>;

@@ -24,6 +24,11 @@ for (const top of ["dist", "dist-electron"]) {
 }
 
 mkdirSync(out, { recursive: true });
+// The app runs a setup only if its hash is in this signed manifest.
+const installers = {};
+for (const name of readdirSync(out)) {
+  if (/^AgenticOps-Desk-.+-win-(x64|arm64)-setup\.exe$/.test(name)) installers[name] = sha256(readFileSync(path.join(out, name)));
+}
 const tar = path.join(out, "patch.tar.gz");
 execFileSync("tar", ["-czf", path.relative(root, tar).replaceAll("\\", "/"), "dist", "dist-electron"], { cwd: root });
 
@@ -34,8 +39,9 @@ const manifest = Buffer.from(
     shell: `${electron}|${JSON.stringify(pkg.dependencies ?? {})}`,
     tar: sha256(readFileSync(tar)),
     files,
+    installers,
   }),
 );
 writeFileSync(path.join(out, "patch-manifest.json"), manifest);
 writeFileSync(path.join(out, "patch-manifest.sig"), sign(null, manifest, key).toString("base64"));
-console.log(`patch ${pkg.version}: ${files.length} files`);
+console.log(`patch ${pkg.version}: ${files.length} files, ${Object.keys(installers).length} installers`);

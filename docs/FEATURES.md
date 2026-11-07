@@ -94,6 +94,12 @@ The list has three sections, top to bottom:
 - On a message you sent: **Rewind** drops everything after it, **Retry** sends it again, and **Branch** copies the chat up to that point.
 - Search looks inside messages as well as titles.
 
+**Own worktree.** In a git project, **Own worktree** in the chat header gives the chat its own copy of the repository on its own branch (`desk/…`), so two chats in one repository don't edit the same files. The copy lives in the app's data folder, never in the project, and is per computer. The chat's next message starts there with the chat's history.
+
+- **Merge** commits what the chat changed and merges its branch into the branch checked out in the project folder. A conflict stops the merge and leaves the project folder as it was.
+- **×** removes the worktree and its branch. If it holds work that isn't merged, you are asked first.
+- Deleting a chat removes its worktree only when nothing in it is unmerged.
+
 ## Sending a message
 
 - **Enter** sends, **Shift+Enter** starts a new line. Sending while a chat is working guides that run.
@@ -112,6 +118,7 @@ Picked in the model menu, per chat.
 - **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought. A new command stops the DeepSeek reply that is streaming and any command it is running, and the run continues with your command. A failed call, such as a rejected key or a rate limit, still shows as an error. The other providers load their model list when you add a key, from the menu or from **Settings → AI models → Direct AI providers**.
 - **Auto:** uses all of these, or the ones you pick in **Settings → AI models → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs.
 - **Second opinion:** a model from another provider reviews each change against your request, and sends concerns back to the agent, for up to two rounds.
+- **MCP servers on Direct:** Direct chats use the same MCP servers as the default engine: the project's `.mcp.json`, and the servers in your user settings (`~/.claude.json`). A server from the project's `.mcp.json` came with the repository, so the chat asks once before starting it, and again if that entry changes. Each tool call goes through the same permissions as the agent's other tools. Servers stop after 15 minutes unused. Plugins' own servers still need the default engine.
 
 ## Permissions
 
@@ -136,7 +143,7 @@ On by default, in **Settings → Privacy & logins**.
 
 **Settings → Privacy & logins → Saved logins** stores passwords, tokens and SSH keys that the agent can use by name without seeing them. Privacy Mode must be on.
 
-**To add one:** give it a name such as `core-router`, pick **Password**, **Token or PAT**, or **SSH private key**, optionally add a username and host, and save. To change a value, use **Replace** and save with the same name. A saved value can't be read back, so keep your own copy if you might need it elsewhere.
+**To add one:** give it a name such as `core-router`, pick **Password**, **Token or PAT**, or **SSH private key**, optionally add a username and host, and save. A key locked with a passphrase takes the passphrase in the field under it; ssh gets it the same way it gets a saved password. To change a value, use **Replace** and save with the same name. A saved value can't be read back, so keep your own copy if you might need it elsewhere.
 
 **Using one:** ask the agent in plain words, for example "check uptime on the core router using core-router". The agent runs one of these:
 
@@ -163,15 +170,13 @@ Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:DESK_SECRET_MY_PAT" }
 - You are asked once per chat before each login is first used. Read where the command sends it.
 - An unknown SSH server is refused. The agent has to ask you before trusting a new one.
 - SSH tries a password once, so a wrong one doesn't lock an account on network gear.
-- One command can use one saved password. Split the work to use two.
+- One command can use one saved password or key passphrase. Split the work to use two.
 - Telnet is unencrypted: the password crosses the network in the clear. Use SSH where the device supports it.
 
 **Limits**
 
 - Logins are per computer and do not sync. Add them again on another computer.
 - Reinstalling Windows or changing Windows accounts makes the saved file unreadable.
-- SSH keys with a passphrase aren't supported. Save a key without one.
-
 See [SECURITY.md](./SECURITY.md#saved-logins) for what this does and doesn't protect against.
 
 ## Sync
@@ -185,9 +190,9 @@ See [SECURITY.md](./SECURITY.md#saved-logins) for what this does and doesn't pro
 - **Hidden in the pushed copy:** passwords and tokens in chats become `[hidden]`. Your local copy keeps them, so the repository alone can't restore them.
 - Your project code is not part of this. It stays in each project's own repository.
 
-If two computers change the same chat at the same moment, that file can conflict. The error is shown and nothing is force-pushed.
+**Two computers, one chat.** If both add to the same chat between syncs, both sets of messages are kept, this computer's first. A rewind on the computer that changed the chat last stands. If another computer pushed first, sync takes its commit and merges again on top of it; nothing is force-pushed.
 
-Other git hosts work with a pasted address if it is `owner/repo` shaped. GitLab nested groups and Azure DevOps addresses are rejected for now. Creating the repository for you, and the pull request button, are GitHub only.
+Other git hosts work with a pasted https or ssh address, including GitLab subgroups and Azure DevOps (`dev.azure.com`, `ssh.dev.azure.com` and `visualstudio.com` forms). Creating the repository for you, and the pull request button, are GitHub only.
 
 ## Setting up another computer
 
@@ -215,6 +220,13 @@ The Windows setup asks where chats live, then which installed AI IDE to import. 
 
 **Catch up** hands one of those chats to the agent as a briefing. Nothing is written into the project folder.
 
+**Other tools.** The setup also offers, and **Settings → Chats & projects → Import chats** does any time:
+
+- **Claude Code sessions typed in a terminal**, from `~/.claude/projects`. Each becomes a chat in its folder, and its next message continues that same session. Sessions started by apps, this one included, are skipped.
+- **VS Code chats**, from VS Code's workspace storage. Text only; the next message hands the transcript to the agent.
+
+Importing again adds new ones and never overwrites a chat you continued here. Windsurf keeps its history encrypted, so it is not read.
+
 ## Deleting a project from the disk
 
 Right-click a project and choose **Delete folder from this computer…**.
@@ -240,7 +252,7 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 
 - **Terminal:** a shell in the project.
 - **Git:** branch, changes, commit, fetch, pull, push, checkout, history, and a pull request through GitHub's `gh` command.
-- **Preview:** loads a web address.
+- **Preview:** loads a web address. In a project with a `dev`, `start` or `serve` script, **Run npm run dev** (or the pnpm, yarn or bun form its lockfile names) starts it in the project's terminal and opens the local address it prints. The Terminal tab shows its output, and Restart there stops it.
 - **Instructions:** edits `CLAUDE.md`, `AGENTS.md` and the project's `.mcp.json`.
 - **Rules:** standing orders for the folder: rules added to every run, paths the agent may not edit, and checks that must pass. Checks run on both engines when a run changed files. A failure goes back to the agent with the output, up to the attempt limit you set. A team can commit `.agenticops/orders.json` with rules and protected paths. Any `checks` in that file are ignored, so a cloned repository can't run commands by itself.
 - **Inbox** lists everything waiting on you across chats. **Briefing** shows where recent chats stand. **Ctrl+Shift+P** opens the command palette.
@@ -266,7 +278,8 @@ Clicking **Install** opens a confirmation under that row. If a plugin runs a set
 On Windows setup installs, the app checks git tags every six hours and when you press **Settings → Updates**. A beta prerelease counts. A draft release does not.
 
 - If only the app's own code changed, it downloads a signed patch, which loads at the next start or from **Restart to update**. If a patch keeps the window from opening, the next start goes back to the code before it.
-- A change to Electron or an installed package needs the full installer, and so do portable copies, macOS and Linux.
+- A change to Electron or an installed package needs the full installer. On a Windows setup install, **Download and install** fetches the setup for this computer's chip, checks it against the release's signed list, and runs it once the app has saved and closed. The new version opens by itself. It waits while a chat is running. Copies on 0.1.20 or older don't have this button, so they need the setup downloaded by hand once.
+- Portable copies, macOS and Linux need the installer from the release page.
 - The private repository is read with the GitHub CLI sign-in on this computer (`gh auth login`). The app does not carry a token. Without that sign-in, Settings → Updates says so and nothing is downloaded.
 
 ## Keyboard

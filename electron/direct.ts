@@ -28,6 +28,7 @@ import {
   type UsageInfo,
   withHistory,
 } from "./claude";
+import { callMcpTool, mcpToolsFor, type McpTool } from "./directMcp";
 import { prepareMemory } from "./memory";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
@@ -135,7 +136,12 @@ type Ctx = {
   mode: string;
   signal: AbortSignal;
   session: ReturnType<typeof sessionFor>;
+  mcp: McpTool[];
 };
+
+function toolSpecs(ctx: Ctx): Neutral[] {
+  return [...TOOLS, ...ctx.mcp.map((t) => ({ name: t.name, description: t.description, properties: t.schema.properties, required: t.schema.required }))];
+}
 
 function clip(text: string, max = OUTPUT_LIMIT) {
   return text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} more characters cut)` : text;
@@ -295,6 +301,13 @@ async function runPrivateTool(ctx: Ctx, name: string, input: Record<string, unkn
 
 async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
   try {
+    const mcpTool = ctx.mcp.find((t) => t.name === name);
+    if (mcpTool) {
+      const denied = await allowed(ctx, name, input, id, mcpTool.readOnly);
+      if (denied) return { text: denied, error: true };
+      const r = await callMcpTool(mcpTool, input, stopSignal(ctx));
+      return { ...r, text: clip(r.text) };
+    }
     if (name === "read_file") {
       const file = resolveIn(ctx, input.path);
       const st = await fs.stat(file);
@@ -517,7 +530,8 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
       { type: "text" as const, text: prompt },
     ],
   });
-  const tools: Anthropic.Beta.BetaTool[] = TOOLS.map((t) => ({
+  const specs = toolSpecs(ctx);
+  const tools: Anthropic.Beta.BetaTool[] = specs.map((t) => ({
     name: t.name,
     description: t.description,
     eager_input_streaming: true,
@@ -597,7 +611,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
     for (const call of calls) {
       const input = (call.input && typeof call.input === "object" ? call.input : {}) as Record<string, unknown>;
-      const spec = TOOLS.find((t) => t.name === call.name);
+      const spec = specs.find((t) => t.name === call.name);
       const missing = spec?.required.filter((k) => input[k] === undefined) ?? [];
       lastWasText = false;
       const step = explainWork(call.name, input);
@@ -627,7 +641,7 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
         ]
       : prompt,
   });
-  const tools: OpenAI.Chat.ChatCompletionTool[] = TOOLS.map((t) => ({
+  const tools: OpenAI.Chat.ChatCompletionTool[] = toolSpecs(ctx).map((t) => ({
     type: "function",
     function: { name: t.name, description: t.description, parameters: { type: "object", properties: t.properties, required: t.required } },
   }));
@@ -800,11 +814,25 @@ export function runDirect(opts: {
     mode: opts.permissionMode ?? "default",
     signal: abort.signal,
     session,
+    mcp: [],
   };
 
   void (async () => {
     let failed = "";
     try {
+      const servers = await mcpToolsFor(cwd, (s, command) =>
+        askPermission(win, chatId, session, `mcp__${s.name}`, { command }, {
+          signal: abort.signal,
+          requestId: `mcp-${Date.now()}-${s.name}`,
+          login: {
+            summary: `Start the MCP server ${s.name} from this project's .mcp.json`,
+            note: `It runs: ${command}. Allow remembers this for the folder until that entry changes.`,
+          },
+        }).then((r) => r.behavior === "allow"),
+      );
+      ctx.mcp = servers.tools;
+      for (const text of servers.notes) send(win, { kind: "note", text, chatId, running: true });
+      if (abort.signal.aborted) return;
       if (preset.kind === "anthropic") await runAnthropic(ctx, opts.model, system, saved, prompt, opts.images ?? []);
       else await runOpenAI(ctx, opts.provider, opts.model, system, saved, prompt, opts.images ?? []);
     } catch (err) {

@@ -153,29 +153,31 @@ export function parseSymbolHits(out: string, query: string, limit = 12) {
   return hits.sort((a, b) => Number(b.name.toLowerCase() === q) - Number(a.name.toLowerCase() === q) || a.name.length - b.name.length).slice(0, limit);
 }
 
-// host/owner/repo, lowercased, so the same remote matches on every computer.
+// host/owner/repo, lowercased, so the same remote matches on every computer. The owner can be several levels (GitLab subgroups). Azure DevOps' https, ssh and
+// visualstudio.com forms of one repository give the same key: dev.azure.com/org/project/repo.
 export function remoteKey(url: string): string | null {
   const trimmed = url.trim().replace(/\.git$/i, "").replace(/\/+$/, "");
-  const https = /^(?:https?|ssh):\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/i.exec(trimmed);
-  const scp = /^git@([^:]+):([^/]+)\/([^/]+)$/i.exec(trimmed);
-  const hit = https
-    ? { host: https[1], owner: https[2], repo: https[3] }
-    : scp
-      ? { host: scp[1], owner: scp[2], repo: scp[3] }
-      : null;
+  const https = /^(?:https?|ssh):\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i.exec(trimmed);
+  const scp = /^[\w.-]+@([^:/]+):(.+)$/i.exec(trimmed);
+  const hit = https ?? scp;
   if (!hit) return null;
-  const host = hit.host.toLowerCase();
-  const owner = hit.owner.replace(/[^\w.-]/g, "").toLowerCase();
-  const repo = hit.repo.replace(/[^\w.-]/g, "").toLowerCase();
-  if (!host || !owner || !repo) return null;
-  return `${host}/${owner}/${repo}`;
+  let host = hit[1].toLowerCase().replace(/:\d+$/, "");
+  let parts = hit[2].split("/");
+  if (host === "ssh.dev.azure.com" && parts[0] === "v3") parts = parts.slice(1);
+  const vs = /^([\w-]+)\.visualstudio\.com$/.exec(host);
+  if (vs) parts = [vs[1], ...parts];
+  if (host === "ssh.dev.azure.com" || vs) host = "dev.azure.com";
+  if (host === "dev.azure.com") parts = parts.filter((p) => p !== "_git");
+  const clean = parts.map((p) => p.replace(/[^\w.-]/g, "").toLowerCase());
+  if (clean.length < 2 || clean.length > 10 || clean.some((p) => !p || p === "." || p === "..")) return null;
+  return `${host}/${clean.join("/")}`;
 }
 
 // Sync travels over https or ssh. A local path or cleartext http URL is rejected.
 export function allowedGitRemote(url: string): boolean {
   const s = url.trim();
   if (!remoteKey(s) || /[\s"'`]/.test(s) || s.startsWith("-")) return false;
-  return /^https:\/\//i.test(s) || /^git@/i.test(s) || /^ssh:\/\//i.test(s);
+  return /^https:\/\//i.test(s) || /^[\w.-]+@[^:/]+:/i.test(s) || /^ssh:\/\//i.test(s);
 }
 
 // A project's ID never changes. Folders are per computer, so they stay out of the sync repository.
@@ -209,11 +211,12 @@ export function chatStorage(value: unknown): ChatStorage | "" {
 }
 
 // What the Windows installer wrote. Anything else is ignored, so a bad file cannot pick a mode.
-export function installChoices(raw: unknown): { storage: ChatStorage; importCursor: boolean } | null {
+export function installChoices(raw: unknown): { storage: ChatStorage; importCursor: boolean; importTools: boolean } | null {
   if (!raw || typeof raw !== "object") return null;
   const storage = chatStorage((raw as { storage?: unknown }).storage);
   if (!storage) return null;
-  return { storage, importCursor: (raw as { importCursor?: unknown }).importCursor === true };
+  const flags = raw as { importCursor?: unknown; importTools?: unknown };
+  return { storage, importCursor: flags.importCursor === true, importTools: flags.importTools === true };
 }
 
 export function cursorMode(value: unknown): CursorMode {
@@ -315,7 +318,9 @@ export function matchSyncedProjects(local: Array<{ id: string; remotes?: string[
 }
 
 export type CredKind = "password" | "token" | "ssh-key";
-export type CredMeta = { name: string; kind: CredKind; username: string; host: string };
+// passphrase: an SSH key that is locked with one. Its value is read under the name plus PASSPHRASE_OF.
+export type CredMeta = { name: string; kind: CredKind; username: string; host: string; passphrase?: boolean };
+export const PASSPHRASE_OF = "#passphrase";
 
 export const credEnvName = (name: string) => `DESK_SECRET_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 
@@ -375,7 +380,7 @@ export function planCredentials(
     if (cred.kind === "ssh-key") {
       if (tool === "telnet") return { error: `${cred.name} is an SSH key, so it cannot log in over telnet.` };
       if (!plan.keys.includes(cred.name)) plan.keys.push(cred.name);
-      continue;
+      if (!cred.passphrase) continue;
     }
     if (answering && answering !== cred.name) return { error: `One command can use one saved password. Split the use of ${answering} and ${cred.name} into separate commands.` };
     answering = cred.name;
@@ -390,6 +395,12 @@ export function planCredentials(
     }
     // A function: asking for the path writes the key to its one-time file, which only a key may do.
     const keyFlags = () => `-i ${quoteFile(bin.keyFile(cred.name))} -o IdentitiesOnly=yes`;
+    // ssh asks the helper for a key's passphrase the same way it asks for a password.
+    if (cred.kind === "ssh-key" && cred.passphrase) {
+      read("DESK_ASKPASS_SECRET", `${cred.name}${PASSPHRASE_OF}`);
+      set("SSH_ASKPASS", bin.askpass);
+      set("SSH_ASKPASS_REQUIRE", "force");
+    }
     if (tool === "git") {
       if (cred.kind === "ssh-key") set("GIT_SSH_COMMAND", `ssh ${keyFlags()}`);
       else {
@@ -701,7 +712,167 @@ export function newestTag(refs: string[], current: string): string | null {
   return best || null;
 }
 
-export type PatchManifest = { version: string; shell: string; tar: string; files: Array<{ path: string; sha256: string }> };
+// The command that starts a project's dev server: its dev, start or serve script, run by the package manager
+// its lockfile names.
+export function devServerCommand(pkg: unknown, files: string[]): string | null {
+  const scripts = (pkg as { scripts?: Record<string, unknown> } | null)?.scripts;
+  if (!scripts || typeof scripts !== "object") return null;
+  const name = ["dev", "start", "serve"].find((s) => typeof scripts[s] === "string");
+  if (!name) return null;
+  const has = (f: string) => files.includes(f);
+  if (has("pnpm-lock.yaml")) return `pnpm run ${name}`;
+  if (has("yarn.lock")) return `yarn ${name}`;
+  if (has("bun.lockb") || has("bun.lock")) return `bun run ${name}`;
+  return `npm run ${name}`;
+}
+
+// One chat changed on two computers. local is this computer's thread, localHidden the same with secrets hidden as the
+// repository holds it, remote the repository's copy. One side extending the other takes the extension when it is
+// newer and keeps local otherwise (a rewind here). Two sides that both added keep both, local first.
+export function mergeThreads(local: unknown[], localHidden: unknown[], remote: unknown[], remoteNewer: boolean): unknown[] {
+  const key = (m: unknown) => {
+    const { role, text } = (m ?? {}) as { role?: unknown; text?: unknown };
+    return JSON.stringify([role, text]);
+  };
+  let p = 0;
+  while (p < localHidden.length && p < remote.length && key(localHidden[p]) === key(remote[p])) p++;
+  if (p === localHidden.length && p === remote.length) return local;
+  if (p === localHidden.length) return remoteNewer ? [...local.slice(0, p), ...remote.slice(p)] : local;
+  if (p === remote.length) return remoteNewer ? local.slice(0, p) : local;
+  return [...local, ...remote.slice(p)];
+}
+
+export type ImportedChat = { id: string; cwd: string; title: string; updatedAt: number; messages: Array<{ role: "user" | "assistant"; text: string }> };
+
+function pushTurn(messages: ImportedChat["messages"], role: "user" | "assistant", text: string) {
+  const clean = text.trim();
+  if (!clean) return;
+  const last = messages[messages.length - 1];
+  if (last?.role === role) last.text += `\n\n${clean}`;
+  else messages.push({ role, text: clean });
+}
+
+// A Claude Code session file (one JSON object per line). Only sessions typed in the terminal (entrypoint "cli") count:
+// SDK sessions belong to the app that ran them, this one included.
+export function parseClaudeSession(lines: string[]): ImportedChat | null {
+  let id = "";
+  let cwd = "";
+  let entrypoint = "";
+  let aiTitle = "";
+  let customTitle = "";
+  let updatedAt = 0;
+  const messages: ImportedChat["messages"] = [];
+  for (const line of lines) {
+    let row: Record<string, unknown>;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (row.type === "ai-title" && typeof row.aiTitle === "string") aiTitle = row.aiTitle;
+    if (row.type === "custom-title" && typeof row.customTitle === "string") customTitle = row.customTitle;
+    if ((row.type !== "user" && row.type !== "assistant") || row.isSidechain || row.isMeta) continue;
+    if (typeof row.sessionId === "string") id ||= row.sessionId;
+    if (typeof row.cwd === "string") cwd ||= row.cwd;
+    if (typeof row.entrypoint === "string") entrypoint ||= row.entrypoint;
+    const at = Date.parse(String(row.timestamp ?? ""));
+    if (at > updatedAt) updatedAt = at;
+    const content = (row.message as { content?: unknown } | undefined)?.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text as string).join("\n")
+          : "";
+    if (row.type === "user" && /^<(command-|local-command-)/.test(text.trim())) continue;
+    pushTurn(messages, row.type, text);
+  }
+  if (!id || !cwd || entrypoint !== "cli" || !messages.length) return null;
+  const first = messages.find((m) => m.role === "user")?.text ?? "Claude Code session";
+  return { id, cwd, title: (customTitle || aiTitle || first).slice(0, 80), updatedAt, messages };
+}
+
+// A VS Code chat session file (chatSessions/*.json). Responses are lists of parts; only text parts are kept.
+export function parseCopilotSession(json: unknown, cwd: string, fallbackId: string): ImportedChat | null {
+  if (!json || typeof json !== "object") return null;
+  const s = json as { sessionId?: unknown; customTitle?: unknown; lastMessageDate?: unknown; creationDate?: unknown; requests?: unknown };
+  if (!Array.isArray(s.requests)) return null;
+  const messages: ImportedChat["messages"] = [];
+  for (const req of s.requests as Array<Record<string, unknown>>) {
+    const asked = (req?.message as { text?: unknown } | undefined)?.text;
+    pushTurn(messages, "user", typeof asked === "string" ? asked : "");
+    const parts = Array.isArray(req?.response) ? (req.response as Array<Record<string, unknown>>) : [];
+    const answer = parts
+      .map((p) => (typeof p?.value === "string" ? p.value : typeof (p?.content as { value?: unknown })?.value === "string" ? String((p.content as { value: string }).value) : ""))
+      .join("");
+    pushTurn(messages, "assistant", answer);
+  }
+  if (!messages.length) return null;
+  const id = typeof s.sessionId === "string" && s.sessionId ? s.sessionId : fallbackId;
+  const first = messages.find((m) => m.role === "user")?.text ?? "Copilot chat";
+  const updatedAt = Number(s.lastMessageDate) || Number(s.creationDate) || 0;
+  return { id, cwd, title: (typeof s.customTitle === "string" && s.customTitle ? s.customTitle : first).slice(0, 80), updatedAt, messages };
+}
+
+export type McpServerConfig = {
+  type?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+};
+
+// The mcpServers object of a .mcp.json or ~/.claude.json, keeping only entries that can be started or reached.
+export function mcpServersIn(json: unknown): Record<string, McpServerConfig> {
+  const raw = json && typeof json === "object" ? (json as { mcpServers?: unknown }).mcpServers : null;
+  const out: Record<string, McpServerConfig> = {};
+  if (!raw || typeof raw !== "object") return out;
+  const strings = (v: unknown) => (v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([, s]) => typeof s === "string")) : undefined);
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^[\w.-]{1,40}$/.test(name) || !value || typeof value !== "object") continue;
+    const v = value as Record<string, unknown>;
+    if (typeof v.command === "string" && v.command.trim()) {
+      out[name] = {
+        command: v.command,
+        args: Array.isArray(v.args) ? v.args.filter((a): a is string => typeof a === "string") : [],
+        env: strings(v.env) as Record<string, string> | undefined,
+      };
+    } else if (typeof v.url === "string" && /^https?:\/\//i.test(v.url)) {
+      out[name] = { type: v.type === "sse" ? "sse" : "http", url: v.url, headers: strings(v.headers) as Record<string, string> | undefined };
+    }
+  }
+  return out;
+}
+
+// ${VAR} and ${VAR:-default}, as in Claude Code's MCP config.
+export function expandMcpEnv(value: string, env: Record<string, string | undefined>): string {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_m, name: string, fallback?: string) => env[name] ?? fallback ?? "");
+}
+
+// mcp__server__tool, within the 64 characters and character set every provider accepts.
+export function mcpToolName(server: string, tool: string): string {
+  const clean = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, "_");
+  return `mcp__${clean(server)}__${clean(tool)}`.slice(0, 64);
+}
+
+export type PatchManifest = {
+  version: string;
+  shell: string;
+  tar: string;
+  files: Array<{ path: string; sha256: string }>;
+  // Setup file name -> SHA-256. The setups aren't code-signed, so this signed list is what vouches for them.
+  installers?: Record<string, string>;
+};
+
+// The setup for this chip in a signed manifest for tag, or a reason it can't be used.
+export function installerFor(manifest: PatchManifest, tag: string, arch: string): { name: string; sha256: string } | string {
+  if (`v${manifest.version}` !== tag || !isReleaseTag(tag)) return "The update's manifest is for another version.";
+  const name = `AgenticOps-Desk-${manifest.version}-win-${arch}-setup.exe`;
+  const sha256 = manifest.installers?.[name];
+  if (!sha256 || !/^[a-f0-9]{64}$/.test(sha256)) return `${tag} has no installer for this computer. Download it from the release page.`;
+  return { name, sha256 };
+}
 
 // A patch only replaces code, so Electron and the installed packages have to be what it was built against.
 export function patchShell(electron: string, dependencies: Record<string, string>): string {

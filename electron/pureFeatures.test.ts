@@ -163,6 +163,16 @@ test("a git remote has one key on every computer", async () => {
   assert.equal(allowedGitRemote("https://github.com/AgenticOp-io/desk-sync.git"), true);
   assert.equal(allowedGitRemote("http://github.com/AgenticOp-io/desk-sync.git"), false);
   assert.equal(allowedGitRemote("git@github.com:AgenticOp-io/desk-sync.git"), true);
+  assert.equal(remoteKey("https://gitlab.com/team/sub/deep/desk-sync.git"), "gitlab.com/team/sub/deep/desk-sync");
+  assert.equal(remoteKey("git@gitlab.com:team/sub/desk-sync.git"), "gitlab.com/team/sub/desk-sync");
+  const azure = "dev.azure.com/org/proj/desk-sync";
+  assert.equal(remoteKey("https://org@dev.azure.com/org/proj/_git/desk-sync"), azure);
+  assert.equal(remoteKey("git@ssh.dev.azure.com:v3/org/proj/desk-sync"), azure);
+  assert.equal(remoteKey("https://org.visualstudio.com/proj/_git/desk-sync"), azure);
+  assert.equal(allowedGitRemote("git@ssh.dev.azure.com:v3/org/proj/desk-sync"), true);
+  assert.equal(remoteKey("https://github.com/only-owner"), null);
+  assert.equal(remoteKey("https://github.com/a/../b"), null);
+  assert.equal(allowedGitRemote("-https://github.com/a/b"), false);
   const prefs = portablePrefs({ theme: "light", lastWorkspace: "C:\\secret", openFiles: ["a"], windowFont: 18, cursorIntegration: "partial" });
   assert.equal(prefs.theme, "light");
   assert.equal(prefs.windowFont, 18);
@@ -345,6 +355,13 @@ test("a command names a saved login, and the secret stays out of its text", asyn
   assert.equal(key.command, `scp -i "C:/run/deploy" -o IdentitiesOnly=yes a.txt ops@h:/tmp`);
   assert.deepEqual(key.reads, []);
 
+  const locked = [...creds, { name: "vault", kind: "ssh-key" as const, username: "", host: "", passphrase: true }];
+  const unlock = planCredentials("desk-ssh vault ops@h uptime", "Bash", locked, bin) as typeof key;
+  assert.equal(unlock.command, `ssh -i "C:/run/vault" -o IdentitiesOnly=yes ops@h uptime`);
+  assert.deepEqual(unlock.reads, [{ env: "DESK_ASKPASS_SECRET", name: "vault#passphrase" }]);
+  assert.ok(unlock.set.some(([k]) => k === "SSH_ASKPASS"));
+  assert.ok("error" in planCredentials("desk-ssh vault h; desk-ssh core-router h", "Bash", locked, bin)!);
+
   const telnet = plan(`desk-telnet core-router 10.0.0.1 --run "show ver"`);
   assert.equal(telnet.command, `& "C:\\d\\desk-telnet.cmd" 10.0.0.1 --run "show ver"`);
   assert.ok(telnet.set.some(([k, v]) => k === "DESK_TELNET_USER" && v === "admin"));
@@ -434,6 +451,111 @@ test("rows keep their place, and new ones go on top", async () => {
   assert.deepEqual(stableOrder(["b"], same, places), ["b"]);
 });
 
+test("Preview finds the dev script and the address it prints", async () => {
+  const { devServerCommand } = await import("./pureFeatures.ts");
+  const { localServerUrl } = await import("../src/preview.ts");
+  assert.equal(devServerCommand({ scripts: { dev: "vite", start: "x" } }, ["package-lock.json"]), "npm run dev");
+  assert.equal(devServerCommand({ scripts: { start: "next start" } }, ["pnpm-lock.yaml"]), "pnpm run start");
+  assert.equal(devServerCommand({ scripts: { serve: "x" } }, ["yarn.lock"]), "yarn serve");
+  assert.equal(devServerCommand({ scripts: { build: "x" } }, []), null);
+  assert.equal(devServerCommand(null, []), null);
+  assert.equal(localServerUrl("  \x1b[32m➜\x1b[39m  Local:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m"), "http://localhost:5173/");
+  assert.equal(localServerUrl("  ➜  Local:   http://localhost:5173/\n"), "http://localhost:5173/");
+  assert.equal(localServerUrl("ready on http://0.0.0.0:3000."), "http://localhost:3000");
+  assert.equal(localServerUrl("see https://example.com:443/"), null);
+});
+
+test("a chat changed on two computers merges by message", async () => {
+  const { mergeThreads } = await import("./pureFeatures.ts");
+  const m = (role: string, text: string) => ({ role, text });
+  const base = [m("user", "token abc123"), m("assistant", "ok")];
+  const hidden = [m("user", "token [hidden]"), m("assistant", "ok")];
+  // The other computer added a turn: take it, and keep this computer's unhidden prefix.
+  assert.deepEqual(mergeThreads(base, hidden, [...hidden, m("user", "next")], true), [...base, m("user", "next")]);
+  // This computer is ahead: keep it.
+  assert.deepEqual(mergeThreads([...base, m("user", "mine")], [...hidden, m("user", "mine")], hidden, false), [...base, m("user", "mine")]);
+  // Rewound here and newer here: the rewind stands.
+  assert.deepEqual(mergeThreads(base.slice(0, 1), hidden.slice(0, 1), hidden, false), base.slice(0, 1));
+  // Rewound on the other computer, which is newer: follow it.
+  assert.deepEqual(mergeThreads(base, hidden, hidden.slice(0, 1), true), base.slice(0, 1));
+  // Both added: both kept, this computer's first.
+  assert.deepEqual(mergeThreads([...base, m("user", "a")], [...hidden, m("user", "a")], [...hidden, m("user", "b")], true), [
+    ...base,
+    m("user", "a"),
+    m("user", "b"),
+  ]);
+  const same = [...base];
+  assert.equal(mergeThreads(same, hidden, hidden, true), same);
+});
+
+test("terminal Claude Code sessions and VS Code chats import as plain turns", async () => {
+  const { parseClaudeSession, parseCopilotSession } = await import("./pureFeatures.ts");
+  const row = (o: Record<string, unknown>) => JSON.stringify({ sessionId: "s1", cwd: "C:\\p", entrypoint: "cli", timestamp: "2026-11-01T00:00:00Z", ...o });
+  const lines = [
+    row({ type: "user", message: { content: "fix the bug" } }),
+    row({ type: "assistant", message: { content: [{ type: "thinking", thinking: "" }, { type: "text", text: "Looking." }] } }),
+    row({ type: "user", message: { content: [{ type: "tool_result", content: "x" }] } }),
+    row({ type: "assistant", message: { content: [{ type: "text", text: "Fixed." }] }, timestamp: "2026-11-02T00:00:00Z" }),
+    row({ type: "user", isMeta: true, message: { content: "meta" } }),
+    row({ type: "user", message: { content: "<command-name>/clear</command-name>" } }),
+    JSON.stringify({ type: "ai-title", aiTitle: "Bug fix" }),
+    "not json",
+  ];
+  const chat = parseClaudeSession(lines)!;
+  assert.equal(chat.title, "Bug fix");
+  assert.equal(chat.cwd, "C:\\p");
+  assert.equal(chat.updatedAt, Date.parse("2026-11-02T00:00:00Z"));
+  assert.deepEqual(chat.messages, [
+    { role: "user", text: "fix the bug" },
+    { role: "assistant", text: "Looking.\n\nFixed." },
+  ]);
+  assert.equal(parseClaudeSession(lines.map((l) => l.replace('"cli"', '"sdk-ts"'))), null);
+
+  const copilot = parseCopilotSession(
+    { sessionId: "v1", lastMessageDate: 5, requests: [{ message: { text: "hi" }, response: [{ value: "Hello" }, { kind: "x" }, { content: { value: " there" } }] }] },
+    "C:\\q",
+    "file",
+  )!;
+  assert.deepEqual(copilot.messages, [
+    { role: "user", text: "hi" },
+    { role: "assistant", text: "Hello there" },
+  ]);
+  assert.equal(copilot.id, "v1");
+  assert.equal(parseCopilotSession({ requests: [] }, "C:\\q", "f"), null);
+});
+
+test("MCP config keeps startable servers and makes provider-safe tool names", async () => {
+  const { expandMcpEnv, mcpServersIn, mcpToolName } = await import("./pureFeatures.ts");
+  const servers = mcpServersIn({
+    mcpServers: {
+      db: { command: "npx", args: ["-y", "pg-mcp", 3], env: { URL: "${PG:-local}", N: 1 } },
+      web: { type: "sse", url: "https://example.com/sse", headers: { A: "b" } },
+      bad: { url: "file:///etc/passwd" },
+      "no spaces allowed": { command: "x" },
+      empty: { command: " " },
+    },
+  });
+  assert.deepEqual(Object.keys(servers), ["db", "web"]);
+  assert.deepEqual(servers.db, { command: "npx", args: ["-y", "pg-mcp"], env: { URL: "${PG:-local}" } });
+  assert.equal(servers.web.type, "sse");
+  assert.deepEqual(mcpServersIn(null), {});
+  assert.equal(expandMcpEnv("${PG:-local}/${HOME}", { HOME: "/h" }), "local//h");
+  assert.equal(expandMcpEnv("${PG:-local}", { PG: "x" }), "x");
+  assert.equal(mcpToolName("my.server", "run query"), "mcp__my_server__run_query");
+  assert.ok(mcpToolName("s", "t".repeat(100)).length <= 64);
+});
+
+test("the full installer is the signed one for this version and chip", async () => {
+  const { installerFor } = await import("./pureFeatures.ts");
+  const name = "AgenticOps-Desk-0.1.21-win-arm64-setup.exe";
+  const manifest = { version: "0.1.21", shell: "", tar: "", files: [], installers: { [name]: "b".repeat(64) } };
+  assert.deepEqual(installerFor(manifest, "v0.1.21", "arm64"), { name, sha256: "b".repeat(64) });
+  assert.match(installerFor(manifest, "v0.1.21", "x64") as string, /no installer/);
+  assert.match(installerFor(manifest, "v0.1.22", "arm64") as string, /another version/);
+  assert.match(installerFor({ ...manifest, installers: { [name]: "nope" } }, "v0.1.21", "arm64") as string, /no installer/);
+  assert.match(installerFor({ ...manifest, installers: undefined }, "v0.1.21", "arm64") as string, /no installer/);
+});
+
 test("a patch must be newer, match this install and stay in its folder", async () => {
   const { isNewerVersion, patchRefusal, patchShell } = await import("./pureFeatures.ts");
   assert.equal(isNewerVersion("v0.1.10", "0.1.9"), true);
@@ -495,9 +617,9 @@ test("a shortcut inside the folder cannot point a file outside it", async () => 
 
 test("the installer choice is Git, Local, or Hybrid, and import is only an explicit yes", async () => {
   const { installChoices } = await import("./pureFeatures.ts");
-  assert.deepEqual(installChoices({ storage: "github", importCursor: true }), { storage: "github", importCursor: true });
-  assert.deepEqual(installChoices({ storage: "hybrid", importCursor: false }), { storage: "hybrid", importCursor: false });
-  assert.deepEqual(installChoices({ storage: "local" }), { storage: "local", importCursor: false });
+  assert.deepEqual(installChoices({ storage: "github", importCursor: true }), { storage: "github", importCursor: true, importTools: false });
+  assert.deepEqual(installChoices({ storage: "hybrid", importCursor: false, importTools: true }), { storage: "hybrid", importCursor: false, importTools: true });
+  assert.deepEqual(installChoices({ storage: "local" }), { storage: "local", importCursor: false, importTools: false });
   assert.equal(installChoices({ storage: "cloud", importCursor: true }), null);
   assert.equal(installChoices(null), null);
 });

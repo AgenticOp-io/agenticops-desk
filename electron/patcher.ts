@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash, verify } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -6,7 +7,7 @@ import path from "node:path";
 import { app } from "electron";
 import { downloadReleaseAssets, run } from "./features";
 import { writeJsonAtomic } from "./jsonStore";
-import { isNewerVersion, isReleaseTag, oneAtATime, patchRefusal, patchShell, type PatchManifest } from "./pureFeatures";
+import { installerFor, isNewerVersion, isReleaseTag, oneAtATime, patchRefusal, patchShell, type PatchManifest } from "./pureFeatures";
 import { extractTarGzMember } from "./tarMember";
 
 // Code updates without a full install. A patch is built in its own folder under resources/app/patches and checked
@@ -124,6 +125,36 @@ export async function updateCode(latest: string | null): Promise<PatchResult> {
     return await runUpdate();
   } catch (err) {
     return { ready: false, note: `The update could not be installed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+export const canInstallUpdate = () => canPatch();
+
+// Downloads the full setup for tag, checks it against the signed manifest, and runs it silently once the app has
+// saved and quit. --force-run starts the new version after the install. The caller refuses while chats run.
+export async function installFullUpdate(tag: string): Promise<string | null> {
+  if (!canPatch()) return "This copy can't install updates by itself. Download the installer from the release page.";
+  if (!isReleaseTag(tag) || !isNewerVersion(tag, app.getVersion())) return "This copy is already up to date.";
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-setup-"));
+  let started = false;
+  try {
+    if (!(await downloadReleaseAssets(tag, dir, PATCH_FILES.slice(0, 2)))) return "The update could not be downloaded. Check the GitHub CLI sign-in.";
+    const bytes = await fs.readFile(path.join(dir, "patch-manifest.json"));
+    const signature = Buffer.from(await fs.readFile(path.join(dir, "patch-manifest.sig"), "utf8"), "base64");
+    if (!verify(null, bytes, PUBLIC_KEY, signature)) return "The update's signature is not valid.";
+    const setup = installerFor(JSON.parse(bytes.toString("utf8")) as PatchManifest, tag, process.arch);
+    if (typeof setup === "string") return setup;
+    if (!(await downloadReleaseAssets(tag, dir, [setup.name]))) return "The installer could not be downloaded.";
+    const exe = path.join(dir, setup.name);
+    if (sha256(await fs.readFile(exe)) !== setup.sha256) return "The installer download is damaged.";
+    app.once("will-quit", () => spawn(exe, ["/S", "--force-run"], { detached: true, stdio: "ignore" }).unref());
+    started = true;
+    app.quit();
+    return null;
+  } catch (err) {
+    return `The update could not be installed: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    if (!started) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

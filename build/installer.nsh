@@ -8,6 +8,9 @@
   Var DeskImport
   Var DeskCursorFound
   Var DeskFound
+  Var DeskToolsFound
+  Var DeskImportTools
+  Var ToolsBox
   Var RadioGit
   Var RadioLocal
   Var RadioHybrid
@@ -54,8 +57,9 @@ Function DeskStorageLeave
 FunctionEnd
 
 Function DeskImportCreate
-  !insertmacro MUI_HEADER_TEXT "Import from an AI IDE?" "Cursor chats can be copied in. Other editors are left as they are."
+  !insertmacro MUI_HEADER_TEXT "Import from an AI IDE?" "Cursor, Claude Code and VS Code chats can be copied in. Windsurf is left as it is."
   StrCpy $DeskCursorFound "0"
+  StrCpy $DeskToolsFound "0"
   StrCpy $DeskFound ""
   ${If} ${FileExists} "$APPDATA\Cursor"
     StrCpy $DeskCursorFound "1"
@@ -63,6 +67,7 @@ Function DeskImportCreate
   ${EndIf}
   ${If} ${FileExists} "$APPDATA\Code"
     StrCpy $DeskFound "$DeskFound Visual Studio Code."
+    StrCpy $DeskToolsFound "1"
   ${EndIf}
   ${If} ${FileExists} "$APPDATA\Windsurf"
     StrCpy $DeskFound "$DeskFound Windsurf."
@@ -70,6 +75,9 @@ Function DeskImportCreate
   ${If} ${FileExists} "$APPDATA\Claude"
   ${OrIf} ${FileExists} "$PROFILE\.claude"
     StrCpy $DeskFound "$DeskFound Claude."
+  ${EndIf}
+  ${If} ${FileExists} "$PROFILE\.claude\projects"
+    StrCpy $DeskToolsFound "1"
   ${EndIf}
   ${If} $DeskFound == ""
     StrCpy $DeskFound "No AI IDE was found on this computer."
@@ -87,7 +95,13 @@ Function DeskImportCreate
   ${If} $DeskCursorFound == "1"
     ${NSD_CreateCheckbox} 0 28u 100% 18u "Import projects and chats from Cursor"
     Pop $ImportBox
-  ${Else}
+  ${EndIf}
+  ${If} $DeskToolsFound == "1"
+    ${NSD_CreateCheckbox} 0 50u 100% 18u "Import Claude Code terminal sessions and VS Code chats"
+    Pop $ToolsBox
+  ${EndIf}
+  ${If} $DeskCursorFound != "1"
+  ${AndIf} $DeskToolsFound != "1"
     ${NSD_CreateLabel} 0 28u 100% 24u "Nothing will be imported. You can add folders after AgenticOps Desk opens."
     Pop $0
   ${EndIf}
@@ -96,10 +110,17 @@ FunctionEnd
 
 Function DeskImportLeave
   StrCpy $DeskImport "0"
+  StrCpy $DeskImportTools "false"
   ${If} $DeskCursorFound == "1"
     ${NSD_GetState} $ImportBox $0
     ${If} $0 = ${BST_CHECKED}
       StrCpy $DeskImport "1"
+    ${EndIf}
+  ${EndIf}
+  ${If} $DeskToolsFound == "1"
+    ${NSD_GetState} $ToolsBox $0
+    ${If} $0 = ${BST_CHECKED}
+      StrCpy $DeskImportTools "true"
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -115,8 +136,11 @@ FunctionEnd
     ${If} $DeskImport == "1"
       StrCpy $0 "true"
     ${EndIf}
+    ${If} $DeskImportTools != "true"
+      StrCpy $DeskImportTools "false"
+    ${EndIf}
     FileOpen $1 "$APPDATA\AgenticOps Desk\install-choices.json" w
-    FileWrite $1 "{$\"storage$\":$\"$DeskStorage$\",$\"importCursor$\":$0}"
+    FileWrite $1 "{$\"storage$\":$\"$DeskStorage$\",$\"importCursor$\":$0,$\"importTools$\":$DeskImportTools}"
     FileClose $1
     ${If} $DeskStorage != "local"
       DetailPrint "Signing in to GitHub, then creating the chat repository..."

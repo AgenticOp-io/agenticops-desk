@@ -8,7 +8,7 @@ const KINDS = [
   ["ssh-key", "SSH private key"],
 ] as const;
 
-const blank = { name: "", kind: "password", username: "", host: "", secret: "" };
+const blank = { name: "", kind: "password", username: "", host: "", secret: "", passphrase: "" };
 
 // A saved value only goes one way: into the main process. Nothing here can read one back.
 export function SavedLogins({ privacyOn }: { privacyOn: boolean }) {
@@ -59,6 +59,7 @@ export function SavedLogins({ privacyOn }: { privacyOn: boolean }) {
               {KINDS.find(([id]) => id === login.kind)?.[1]}
               {login.username ? ` · ${login.username}` : ""}
               {login.host ? ` · ${login.host}` : ""}
+              {login.passphrase ? " · with passphrase" : ""}
             </span>
           </div>
           {removing === login.name ? (
@@ -114,6 +115,16 @@ export function SavedLogins({ privacyOn }: { privacyOn: boolean }) {
             onChange={(e) => put({ secret: e.target.value })}
             spellCheck={false}
             autoComplete="off"
+          />
+        ) : null}
+        {form.kind === "ssh-key" ? (
+          <input
+            type="password"
+            aria-label="Key passphrase"
+            placeholder="Passphrase, if the key has one"
+            value={form.passphrase}
+            onChange={(e) => put({ passphrase: e.target.value })}
+            autoComplete="new-password"
           />
         ) : (
           <input

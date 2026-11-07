@@ -29,6 +29,8 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `claude.ts` | Claude Code runs: streaming, approvals, tool hooks, resume after restart |
 | `claudeBinary.ts` | Finds or downloads the binary for this computer |
 | `direct.ts` | Own agent loop and tools for API providers |
+| `directMcp.ts` | MCP servers for Direct runs: config from `.mcp.json` and `~/.claude.json`, start, list tools, call, idle stop |
+| `worktrees.ts` | A chat's own git worktree and branch: create, merge back, remove |
 | `providers.ts` | Provider presets and encrypted keys |
 | `autoRoute.ts` | The Auto model. Watches events through `setSendFilter` in `claude.ts` |
 | `quickEdit.ts`, `review.ts`, `briefing.ts` | Quick edit and autocomplete, Second opinion, catch-up and morning briefings |
@@ -44,18 +46,19 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `memory.ts`, `memoryPath.ts` | Memory folders and the system-prompt addendum |
 | `deskSync.ts` | Sync, repository creation, linking and cloning repos |
 | `cursor.ts`, `cursorConvert.ts`, `cursorLink.ts`, `cursor-plugin/` | Cursor import, conversion, and archive integration |
+| `ideImport.ts` | Claude Code terminal sessions and VS Code chats into the library |
 | **Other** | |
 | `features.ts` | `run` and `runGit`, git panel, terminal, project docs, update check |
 | `plugins.ts` | `claude plugin` commands |
 | `watch.ts`, `provenance.ts` | Log watches, and which chat changed which file |
-| `patcher.ts`, `tarMember.ts` | Signed code patches |
+| `patcher.ts`, `tarMember.ts` | Signed code patches, and the full setup checked against the signed manifest |
 | `pureFeatures.ts` | Logic with no Electron dependency, so plain Node can unit test it. `staysInside` reads the disk to follow links |
 
 The renderer's main files: `App.tsx` (sidebar, chat pane, settings), `Composer.tsx`, `Conversation.tsx`, `Dock.tsx`, `CodePane.tsx`, `Windowed.tsx` (virtualized sidebar), `SyncSettings.tsx`, `SavedLogins.tsx`, `PrivacySettings.tsx`, `Plugins.tsx`, `Help.tsx`.
 
 `boot/boot.mjs` is the packaged entry point. It chooses between the installed code and a patch, and falls back if a patch fails to open a window.
 
-`build/installer.nsh` adds the Windows setup's two pages (where chats live, and importing Cursor) and runs the app with `--apply-install`.
+`build/installer.nsh` adds the Windows setup's two pages (where chats live, and importing Cursor and other tools) and runs the app with `--apply-install`.
 
 ## App data
 
@@ -77,6 +80,9 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `cursor-archive\`, `cursor-converted.json`, `cursor-import.json` | Cursor import state | Partly, by Cursor mode |
 | `backups\` | `library.json` and settings copies taken before cleanups | No |
 | `install-choices.json`, `install-result.txt` | The setup's answers until the app applies them, and the line the setup prints | No |
+| `worktrees\`, `worktrees.json` | Chats' own worktrees, and which chat has which | No |
+| `mcp-approvals.json` | Project MCP servers the user allowed, by folder and exact entry | No |
+| `tools-import.json` | When Claude Code and VS Code chats were last imported | No |
 
 Project memory lives in Claude Code's folder: `~/.claude/projects/<encoded-path>/memory`. Project folders on disk are per computer.
 
@@ -108,10 +114,18 @@ In `claude.ts`, under `hooks`:
 
 A message sent while a Direct run is going sets `session.guide`. For DeepSeek it also aborts `session.steer`, which cancels the HTTP call and any `run_command`, `web_fetch` or check in flight (`stopSignal`). The loop then adds the guide as the next user message. Only that abort is treated as a steer. Any other error from the call ends the run with the error. `session.abort` still stops the whole run.
 
+### Own worktree
+
+`worktrees.ts` runs `git worktree add` into `worktrees\<chat id>` on branch `desk/<id>`. `runFolder` in `main.ts` sends a chat's runs there when its worktree belongs to the folder the chat runs in. `runClaude` already starts a fresh session when the folder changes, with the chat's history. Merge commits in the worktree and runs `merge --no-ff` in the project folder, aborting on a conflict. `canTouch` and `fs:write` also accept files under `worktrees\`, so the change bar and editor work there.
+
+### MCP on Direct
+
+`mcpToolsFor` in `directMcp.ts` merges user, project and local entries as Claude Code does. An entry from `.mcp.json` needs an approval, asked with the `login` gate so folder trust can't answer it, and remembered by a hash of folder, name and entry. Connections are cached per entry and closed after 15 minutes unused or at quit. Tools are named `mcp__server__tool` (`mcpToolName`), offered next to the built-in ones, and go through `allowed` like any tool; `readOnlyHint` tools pass in Plan mode.
+
 ### Install
 
-1. The setup writes `install-choices.json` (`{"storage":"github"|"hybrid"|"local","importCursor":bool}`) and waits on `--apply-install`.
-2. `applyInstallChoices` in `main.ts` reads and deletes the file, imports Cursor or writes the skip marker, runs `ensureGitHubLogin` for Git and Hybrid, then `chooseChatStorage`.
+1. The setup writes `install-choices.json` (`{"storage":"github"|"hybrid"|"local","importCursor":bool,"importTools":bool}`) and waits on `--apply-install`.
+2. `applyInstallChoices` in `main.ts` reads and deletes the file, imports Cursor or writes the skip marker, imports other tools' chats if asked (`importOtherTools`), runs `ensureGitHubLogin` for Git and Hybrid, then `chooseChatStorage`.
 3. The result line goes to `install-result.txt` for the setup to print. A non-zero exit stops the setup.
 4. When the app is already open, `--apply-install` can't take the single-instance lock. It leaves the file in place, and the next normal start applies it.
 
@@ -125,11 +139,13 @@ A message sent while a Direct run is going sets `session.guide`. For DeepSeek it
 
 `doSync` in `deskSync.ts`, one at a time through `oneAtATime`:
 
-1. `ensureRepo`: create or fix the clone, `fetch --prune`, pull. A non-chat clone facing an empty repository is renamed aside, not published.
+1. `ensureRepo`: create or fix the clone, `fetch --prune`, pull. A non-chat clone facing an empty repository is renamed aside, not published. A pull that fails, or a rebase an older version left stopped, ends in `takeRemote`: reset to `origin/main`.
 2. Merge settings, projects and merges. Link local repos, once per app run.
-3. Merge chats (`mergeChats`), threads and memory. A thread goes up through `hideThreadForSync`.
+3. Merge chats (`mergeChats`), threads and memory. Threads in both places merge by message (`mergeThreads`); a thread goes up through `hideThreadForSync`.
 4. Write sorted snapshots, so the files are the same whichever computer wrote them.
-5. Commit, then push. Commits that are already there but not yet pushed go up too. On a rejected push, pull and retry. Never force.
+5. Commit, then push. Commits that are already there but not yet pushed go up too. On a rejected push, `takeRemote` and run steps 2–5 again, up to three times. Never force.
+
+The clone is a snapshot built from this computer's library, threads and memory, which stay where they are. That is why dropping its commit for the other computer's loses nothing.
 
 The project ID is the identity. Remotes are only a clue used to recognize a clone (`matchSyncedProjects`, `matchLocalRepos`), and a match needs to be free of doubt.
 
@@ -166,6 +182,6 @@ To fake a git remote that looks like GitHub, use an `ssh://git@github.com/...` a
 
 Runtime packages that Vite bundles (`openai`, React, Monaco, KaTeX) stay in `devDependencies`. Only `dependencies` are copied into the installer, and the main build keeps only `@anthropic-ai/claude-agent-sdk` and `node:sqlite` external.
 
-An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. The signing key exists only as the `PATCH_SIGNING_KEY` secret. If it is lost, make a new pair and ship one full install.
+An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. `make-patch.mjs` also puts each `-win-<arch>-setup.exe` and its SHA-256 in `installers`, so **Download and install** (`installFullUpdate`) can check the unsigned setup against the signed manifest before running it with `/S --force-run`. The signing key exists only as the `PATCH_SIGNING_KEY` secret. If it is lost, make a new pair and ship one full install.
 
 CI (`.github/workflows/ci.yml`) runs types, tests, build and smoke on Windows for every push to `main`.

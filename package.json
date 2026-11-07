@@ -1,6 +1,6 @@
 {
   "name": "agenticops-desk",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "private": true,
   "author": "AgenticOp-io",
   "description": "Desktop workspace for AI coding agents.",
@@ -99,6 +99,7 @@
     "@anthropic-ai/sdk": "^1.6.0",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/source-serif-4": "^5.3.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@monaco-editor/react": "^4.7.0",
     "@types/node": "^22.15.3",
     "@types/react": "^19.1.2",

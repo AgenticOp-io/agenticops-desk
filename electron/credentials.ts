@@ -10,6 +10,7 @@ import {
   credLoadLine,
   credNameRefusal,
   credSetLine,
+  PASSPHRASE_OF,
   planCredentials,
   type CredKind,
   type CredMeta,
@@ -20,7 +21,7 @@ import {
 // Values stay in the main process. The renderer can add or remove one but cannot read one back.
 // A value is also pinned in the Privacy vault, so it is hidden if a command prints it.
 
-type Credential = CredMeta & { secret: string };
+type Credential = CredMeta & { secret: string; keyPassphrase?: string };
 
 let cache: Credential[] | null = null;
 const grants = new Map<string, Set<string>>();
@@ -50,24 +51,25 @@ async function save(list: Credential[]) {
   cache = list;
 }
 
-const meta = ({ name, kind, username, host }: Credential): CredMeta & { use: string } => ({
+const meta = ({ name, kind, username, host, keyPassphrase }: Credential): CredMeta & { use: string } => ({
   name,
   kind,
   username,
   host,
+  passphrase: Boolean(keyPassphrase),
   use: credEnvName(name),
 });
 
 export function isSavedLogin(value: string) {
   const text = value.trim();
-  return load().some((c) => c.secret.trim() === text);
+  return load().some((c) => c.secret.trim() === text || (Boolean(c.keyPassphrase) && c.keyPassphrase === text));
 }
 
 export function listCredentials() {
   return { encrypted: safeStorage.isEncryptionAvailable(), logins: load().map(meta) };
 }
 
-export async function saveCredential(input: { name: string; kind: string; username: string; host: string; secret: string }) {
+export async function saveCredential(input: { name: string; kind: string; username: string; host: string; secret: string; passphrase?: string }) {
   const name = String(input.name ?? "").trim();
   const kind: CredKind = input.kind === "token" || input.kind === "ssh-key" ? input.kind : "password";
   const clean = (v: unknown) => String(v ?? "").replace(/[\r\n]/g, "").trim().slice(0, 200);
@@ -78,14 +80,18 @@ export async function saveCredential(input: { name: string; kind: string; userna
   if (refusal) return { ok: false, note: refusal };
   if (secret.trim().length < 3) return { ok: false, note: "Enter the password, token or key first." };
   if (kind === "ssh-key" && !/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(secret)) return { ok: false, note: "That does not look like a private key. It should start with -----BEGIN." };
+  const keyPassphrase = kind === "ssh-key" ? String(input.passphrase ?? "").replace(/[\r\n]+$/, "") : "";
   const old = list.find((c) => c.name === name);
   try {
-    await save([...list.filter((c) => c.name !== name), { name, kind, username: clean(input.username), host: clean(input.host), secret }]);
+    const row: Credential = { name, kind, username: clean(input.username), host: clean(input.host), secret, ...(keyPassphrase ? { keyPassphrase } : {}) };
+    await save([...list.filter((c) => c.name !== name), row]);
   } catch (err) {
     return { ok: false, note: err instanceof Error ? err.message : String(err) };
   }
   if (old && old.secret !== secret) privacyVault().unpin(old.secret.trim());
+  if (old?.keyPassphrase && old.keyPassphrase !== keyPassphrase) privacyVault().unpin(old.keyPassphrase);
   pinSecret(secret);
+  if (keyPassphrase) pinSecret(keyPassphrase);
   // A changed secret is asked about again in every chat.
   grants.clear();
   return { ok: true, note: `Saved ${name}, encrypted on this computer.` };
@@ -182,7 +188,10 @@ export function fillCredentials(command: string, shell: "Bash" | "PowerShell"): 
     return target;
   };
   const keyFiles = new Map<string, string>();
-  const secretOf = (name: string) => load().find((c) => c.name === name)?.secret ?? "";
+  const secretOf = (name: string) =>
+    name.endsWith(PASSPHRASE_OF)
+      ? (load().find((c) => c.name === name.slice(0, -PASSPHRASE_OF.length))?.keyPassphrase ?? "")
+      : (load().find((c) => c.name === name)?.secret ?? "");
   const plan = planFor(command, shell, (name) => {
     const real = load().find((c) => c.name.toLowerCase() === name.toLowerCase())?.name ?? name;
     if (!keyFiles.has(real)) keyFiles.set(real, oneTime(secretOf(real)));

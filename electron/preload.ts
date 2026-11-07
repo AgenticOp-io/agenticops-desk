@@ -148,7 +148,7 @@ contextBridge.exposeInMainWorld("desk", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (prefs: unknown) => ipcRenderer.invoke("settings:set", prefs),
   listCredentials: () => ipcRenderer.invoke("creds:list") as Promise<ReturnType<typeof import("./credentials").listCredentials>>,
-  saveCredential: (input: { name: string; kind: string; username: string; host: string; secret: string }) =>
+  saveCredential: (input: { name: string; kind: string; username: string; host: string; secret: string; passphrase?: string }) =>
     ipcRenderer.invoke("creds:save", input) as Promise<{ ok: boolean; note: string }>,
   removeCredential: (name: string) => ipcRenderer.invoke("creds:remove", name) as Promise<{ ok: boolean; note: string }>,
   privacyStatus: () => ipcRenderer.invoke("privacy:status") as Promise<PrivacyStatus>,
@@ -259,8 +259,22 @@ contextBridge.exposeInMainWorld("desk", {
     return () => ipcRenderer.removeListener("shell:data", listener);
   },
   checkForUpdate: () =>
-    ipcRenderer.invoke("updates:check") as Promise<{ current: string; latest: string | null; url: string | null; note: string; patch: { ready: boolean; note: string } }>,
+    ipcRenderer.invoke("updates:check") as Promise<{
+      current: string;
+      latest: string | null;
+      url: string | null;
+      note: string;
+      patch: { ready: boolean; note: string };
+      canInstall: boolean;
+    }>,
   restartForUpdate: () => ipcRenderer.invoke("updates:restart") as Promise<void>,
+  installUpdate: () => ipcRenderer.invoke("updates:install") as Promise<string | null>,
+  previewCommand: (cwd: string) => ipcRenderer.invoke("preview:command", cwd) as Promise<string | null>,
+  importOtherTools: () => ipcRenderer.invoke("tools:import") as Promise<{ claudeCode: number; vscode: number }>,
+  worktreeGet: (chatId: string, folder: string) => ipcRenderer.invoke("worktree:get", chatId, folder),
+  worktreeCreate: (chatId: string, folder: string) => ipcRenderer.invoke("worktree:create", chatId, folder),
+  worktreeMerge: (chatId: string) => ipcRenderer.invoke("worktree:merge", chatId),
+  worktreeRemove: (chatId: string) => ipcRenderer.invoke("worktree:remove", chatId),
   getOrders: (cwd: string) => ipcRenderer.invoke("orders:get", cwd),
   setOrders: (cwd: string, next: unknown) => ipcRenderer.invoke("orders:set", cwd, next),
   originsOf: (file: string) => ipcRenderer.invoke("provenance:get", file),

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
-import { chatStorage, deleteFolderRefusal, deleteWarnings, installChoices, parseSymbolHits, staysInside, SYMBOL_KINDS } from "./pureFeatures";
+import { chatStorage, deleteFolderRefusal, deleteWarnings, devServerCommand, installChoices, parseSymbolHits, staysInside, SYMBOL_KINDS } from "./pureFeatures";
 import {
   addMarketplace,
   installPlugin,
@@ -77,7 +77,10 @@ import {
 import { ensureClaudeBinary } from "./claudeBinary";
 import { carryProjectMemory } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
-import { confirmPatch, updateCode } from "./patcher";
+import { canInstallUpdate, confirmPatch, installFullUpdate, updateCode } from "./patcher";
+import { createWorktree, mergeWorktree, removeWorktree, worktreeCwd, worktreeFor } from "./worktrees";
+import { closeMcp } from "./directMcp";
+import { importOtherTools } from "./ideImport";
 import {
   cloneMissingRepos,
   cloneSyncedProject,
@@ -404,6 +407,10 @@ async function applyInstallChoices(): Promise<number> {
       "utf8",
     );
   }
+  if (choices.importTools) {
+    await importOtherTools().catch((err) => console.error("AgenticOps Desk could not import other tools' chats", err));
+    await flushLibrary();
+  }
   if (choices.storage !== "local") {
     const login = await ensureGitHubLogin();
     if (!login.ok) {
@@ -519,14 +526,16 @@ app.whenReady().then(async () => {
           : `Watched log reported an error: ${path.basename(w.file)}. This chat's folder is not on this computer, so the agent did not start.`,
       });
       if (!cwd) return;
-      runClaude({
-        win,
-        chatId: w.chatId,
-        workspace: cwd,
+      void runFolder(w.chatId, cwd).then((folder) =>
+        runClaude({
+          win,
+          chatId: w.chatId,
+          workspace: folder,
         prompt:
           `AgenticOps Desk is watching ${w.file} for this chat, and it just logged this:\n\n\`\`\`\n${lines}\n\`\`\`\n\n` +
           "Find the cause. Fix it if the fix is clear and safe; otherwise explain what you found and what you need from me.",
-      });
+        }),
+      );
     });
     return true;
   });
@@ -565,6 +574,7 @@ app.on("before-quit", (e) => {
   closeAllShells();
   closeWatches();
   shutdownClaude();
+  void closeMcp();
   if (flushingQuit) return;
   flushingQuit = true;
   e.preventDefault();
@@ -910,7 +920,7 @@ ipcMain.handle("fs:read", async (_e, filePath: string) => {
 });
 
 ipcMain.handle("fs:write", async (_e, filePath: string, contents: string) => {
-  if (!inWorkspace(filePath)) throw new Error("Only files inside the open folder can be written.");
+  if (!inWorkspace(filePath) && !inWorktrees(filePath)) throw new Error("Only files inside the open folder can be written.");
   await fs.writeFile(filePath, contents, "utf8");
   return true;
 });
@@ -1009,7 +1019,8 @@ ipcMain.handle(
       images?: Array<{ mediaType: string; data: string; name?: string }>;
     },
   ) => {
-    const cwd = payload.workspace && existsSync(payload.workspace) ? payload.workspace : "";
+    const folder = payload.workspace && existsSync(payload.workspace) ? payload.workspace : "";
+    const cwd = folder && (await runFolder(payload.chatId, folder));
     if (!cwd) {
       win?.webContents.send("claude:event", { kind: "error", chatId: payload.chatId, running: false, text: "This chat's folder is not on this computer, so nothing ran." });
       win?.webContents.send("claude:event", { kind: "done", chatId: payload.chatId, running: false, text: "Stopped." });
@@ -1087,8 +1098,13 @@ function insideWorkspace(target: string) {
   return inWorkspace(target);
 }
 
+// Chats' own worktrees live under the app's data folder; their files show in the change bar and the editor.
+function inWorktrees(target: string) {
+  return staysInside(path.join(app.getPath("userData"), "worktrees"), target, false);
+}
+
 function canTouch(target: string, allowRoot = false) {
-  return inWorkspace(target, allowRoot) || openedOutside.has(canon(target));
+  return inWorkspace(target, allowRoot) || inWorktrees(target) || openedOutside.has(canon(target));
 }
 
 ipcMain.handle("fs:create", async (_e, target: string, isDir: boolean) => {
@@ -1141,6 +1157,51 @@ ipcMain.handle("claude:forget", (_e, chatId: string) => {
   forgetSession(chatId);
   return true;
 });
+
+// Where a chat's run happens: its own worktree when it has one for this folder, otherwise the folder.
+async function runFolder(chatId: string, folder: string) {
+  const tree = await worktreeFor(chatId, folder);
+  return tree ? worktreeCwd(tree) : folder;
+}
+ipcMain.handle("tools:import", () => importOtherTools());
+ipcMain.handle("preview:command", async (_e, cwd: string) => {
+  if (!cwd || !existsSync(cwd)) return null;
+  const pkg = await fs.readFile(path.join(cwd, "package.json"), "utf8").then(JSON.parse).catch(() => null);
+  return devServerCommand(pkg, await fs.readdir(cwd).catch(() => []));
+});
+ipcMain.handle("worktree:get", (_e, chatId: string, folder: string) => worktreeFor(String(chatId ?? ""), String(folder ?? "")));
+ipcMain.handle("worktree:create", async (_e, chatId: string, folder: string) => {
+  if (chatState(chatId).running) return "Stop the chat first.";
+  if (!folder || !existsSync(folder)) return "This chat's folder is not on this computer.";
+  const made = await createWorktree(String(chatId), folder);
+  if (typeof made === "string") return made;
+  // The agent's saved session belongs to the old folder; the next message starts fresh in the worktree with the chat's history.
+  forgetSession(chatId);
+  return made;
+});
+ipcMain.handle("worktree:merge", (_e, chatId: string) =>
+  chatState(chatId).running ? { ok: false, note: "Stop the chat first." } : mergeWorktree(String(chatId)),
+);
+ipcMain.handle("worktree:remove", async (_e, chatId: string) => {
+  if (chatState(chatId).running) return { ok: false, note: "Stop the chat first." };
+  const first = await removeWorktree(String(chatId));
+  if (first.ok) {
+    forgetSession(chatId);
+    return first;
+  }
+  const { response } = await dialog.showMessageBox(win!, {
+    type: "warning",
+    message: "Remove this chat's worktree anyway?",
+    detail: `${first.note} Removing it deletes that work and its branch.`,
+    buttons: ["Remove", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  if (response !== 0) return { ok: false, note: "" };
+  const forced = await removeWorktree(String(chatId), true);
+  if (forced.ok) forgetSession(chatId);
+  return forced;
+});
 ipcMain.handle("chats:patch", (_e, id: string, patch: { title?: unknown; pinned?: unknown; mode?: unknown; model?: unknown; parentId?: unknown }) =>
   patchChat(id, patch),
 );
@@ -1150,6 +1211,8 @@ ipcMain.handle("chats:delete", async (_e, id: string) => {
   forgetSession(id);
   forgetAuto(id);
   removeChatWatches(id);
+  // Kept when it holds work that isn't merged; that stays under the app's worktrees folder.
+  await removeWorktree(id).catch(() => {});
   try {
     deleteDirectHistory(id);
   } catch (err) {
@@ -1268,13 +1331,20 @@ ipcMain.handle("shell:close", (_e, id: string) => {
   closeShell(id);
   return true;
 });
+let latestRelease: string | null = null;
 async function checkAndPatch() {
   const info = await checkForUpdate();
+  latestRelease = info.latest;
   const patch = await updateCode(info.latest);
   if (patch.ready && win && !win.isDestroyed()) win.setTitle("AgenticOps Desk (update ready, restart to load it)");
-  return { ...info, patch };
+  return { ...info, patch, canInstall: !patch.ready && Boolean(info.latest) && canInstallUpdate() };
 }
 ipcMain.handle("updates:check", () => checkAndPatch());
+ipcMain.handle("updates:install", async () => {
+  if (!latestRelease) return "Check for updates first.";
+  if (liveRunCount() > 0) return "A chat is still running. Install the update when it finishes.";
+  return installFullUpdate(latestRelease);
+});
 ipcMain.handle("updates:restart", () => {
   app.relaunch();
   app.quit();

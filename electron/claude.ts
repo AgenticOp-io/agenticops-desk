@@ -189,6 +189,20 @@ function patchStored(chatId: string, fn: (s: StoredSession) => void) {
   persistStore();
 }
 
+// A Claude Code session imported from the terminal: the chat's next message resumes it in its own folder.
+export function adoptClaudeSession(chatId: string, sessionId: string, workspace: string) {
+  if (loadStore()[chatId]?.claudeSession || sessions.get(chatId)?.abort) return;
+  patchStored(chatId, (s) => {
+    s.claudeSession = sessionId;
+    s.workspace = workspace;
+  });
+  const live = sessions.get(chatId);
+  if (live) {
+    live.claudeSession = sessionId;
+    live.workspace = workspace;
+  }
+}
+
 export function sessionFor(chatId: string): Session {
   let session = sessions.get(chatId);
   if (!session) {

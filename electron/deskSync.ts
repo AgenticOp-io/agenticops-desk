@@ -26,6 +26,7 @@ import {
   matchSyncedProjects,
   mergeDeleted,
   mergeProjects,
+  mergeThreads,
   oneAtATime,
   portablePrefs,
   remoteKey,
@@ -38,7 +39,7 @@ import { hideForSync, hideThreadForSync } from "./redact";
 import { loadSettings, patchSettings, type UiPrefs } from "./settings";
 
 // The desk's own copy of chats, memory and settings. Project source stays in each project's repo.
-// shortcut: two computers editing the same chat at the same moment can conflict on that one file; the error is shown and nothing is force-pushed.
+// Two computers changing the same chat merge by message. A push that loses the race takes the other commit and merges again.
 // A project travels by its permanent ID. Its folder is per computer, and its remotes are only a clue to which folder it is.
 
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
@@ -289,8 +290,25 @@ async function ensureRepo(dir: string, remote: string): Promise<{ ok: boolean; o
   }
   const head = await runGit(dir, ["rev-parse", "--verify", "HEAD"]);
   if (!head.ok) return runGit(dir, ["reset", "--hard", "origin/main"]);
+  await abortStaleRebase(dir);
   const pulled = await runGit(dir, ["pull", "--rebase", "--autostash", "origin", "main"], 120_000);
-  return pulled.ok || /already up to date/i.test(pulled.output) ? { ok: true, output: pulled.output } : pulled;
+  if (pulled.ok || /already up to date/i.test(pulled.output)) return { ok: true, output: pulled.output };
+  if (!fetched.ok) return pulled;
+  return takeRemote(dir);
+}
+
+// An older version could leave a rebase stopped on a conflict, and every sync after it failed.
+async function abortStaleRebase(dir: string) {
+  if (existsSync(path.join(dir, ".git", "rebase-merge")) || existsSync(path.join(dir, ".git", "rebase-apply"))) {
+    await runGit(dir, ["rebase", "--abort"]);
+  }
+}
+
+// This folder is a snapshot built from this computer's own library, threads and memory, which stay where they are.
+// So a commit that conflicts with another computer's is dropped for theirs, and the next merge rebuilds it.
+async function takeRemote(dir: string): Promise<{ ok: boolean; output: string }> {
+  await abortStaleRebase(dir);
+  return runGit(dir, ["reset", "--hard", "origin/main"]);
 }
 
 async function isDeskRepo(dir: string): Promise<{ ok: boolean; output: string }> {
@@ -331,63 +349,73 @@ async function doSync(): Promise<SyncView> {
     const desk = await isDeskRepo(dir);
     if (!desk.ok) return await viewOf(url, false, desk.output);
 
-    await mergeSettings(dir);
-    settings = await loadSettings();
-    mode = cursorMode(settings.cursorIntegration);
+    // Reads what is in the folder, merges it with this computer's copy, writes it back and commits.
+    // Returns whether there is anything to push, or the git error.
+    const mergeAndCommit = async (): Promise<{ changed: boolean } | { error: string }> => {
+      await mergeSettings(dir);
+      settings = await loadSettings();
+      mode = cursorMode(settings.cursorIntegration);
 
-    await refreshProjectRemotes();
-    const incomingProjects = asProjects(await readJson(path.join(dir, "projects.json"), []));
-    const incomingMerges = await readJson<Record<string, string>>(path.join(dir, "project-merges.json"), {});
-    const matches = matchSyncedProjects((await exportLibrarySlice()).projects, incomingProjects);
-    const carried = await importSyncedProjects(incomingProjects, { ...incomingMerges, ...matches });
-    for (const pair of carried) await carryProjectMemory(pair.from, pair.to);
-    // Once each run: this looks through folders, and a sync happens every few minutes.
-    if (!scannedForRepos) {
-      scannedForRepos = true;
-      linkNote = await linkLocalRepos();
-    }
-
-    const archived = mode === "off" ? [] : await cursorArchiveChats(dir);
-    await fileNewChats(archived);
-    const slice = await exportLibrarySlice();
-    const localProjects: SyncProject[] = slice.projects.map(({ id, name, remotes }) => ({ id, name, remotes }));
-    const incomingChats = asChats(await readJson(path.join(dir, "chats.json"), []));
-    const incomingDeleted = await readJson<string[]>(path.join(dir, "deleted.json"), []);
-    const projects = mergeProjects(incomingProjects.filter((project) => !slice.merged[project.id]), localProjects);
-    const deleted = mergeDeleted(slice.deleted, Array.isArray(incomingDeleted) ? incomingDeleted : []);
-    const previous = new Map(slice.chats.map((chat) => [chat.id, chat.updatedAt ?? 0]));
-    const merged = mergeChats(
-      slice.chats.map(chatToSync),
-      [...incomingChats, ...archived.map(chatToSync)],
-      deleted,
-    );
-
-    await importSyncedLibrary(merged.map(chatFromSync), deleted);
-    if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(deleted));
-    await mergeThreadFiles(dir, merged, previous, new Set(deleted));
-    await mergeMemory(slice);
-    await writeSnapshot(dir, projects, merged, deleted, slice.merged);
-
-    const status = await runGit(dir, ["status", "--porcelain"]);
-    if (!status.ok) return await viewOf(url, false, status.output);
-    // Commits with nothing new still go up: an earlier push failed, or the repository was emptied.
-    const ahead = await runGit(dir, ["rev-list", "--count", "origin/main..HEAD"]);
-    const changed = !!status.output || !ahead.ok || ahead.output !== "0";
-    if (status.output) {
-      const added = await runGit(dir, ["add", "-A"]);
-      if (!added.ok) return await viewOf(url, false, added.output);
-      const committed = await runGit(dir, ["commit", "-m", "Sync desk"]);
-      if (!committed.ok && !/nothing to commit/i.test(committed.output)) return await viewOf(url, false, committed.output);
-    }
-    if (changed) {
-      let pushed = await runGit(dir, ["push", "-u", "origin", "HEAD"], 120_000);
-      if (!pushed.ok) {
-        const pulled = await runGit(dir, ["pull", "--rebase", "--autostash", "origin", "main"], 120_000);
-        // With no main to pull, the push's own error is the one that explains the failure.
-        if (!pulled.ok) return await viewOf(url, false, /couldn't find remote ref/i.test(pulled.output) ? pushed.output : pulled.output);
-        pushed = await runGit(dir, ["push", "-u", "origin", "HEAD"], 120_000);
-        if (!pushed.ok) return await viewOf(url, false, pushed.output);
+      await refreshProjectRemotes();
+      const incomingProjects = asProjects(await readJson(path.join(dir, "projects.json"), []));
+      const incomingMerges = await readJson<Record<string, string>>(path.join(dir, "project-merges.json"), {});
+      const matches = matchSyncedProjects((await exportLibrarySlice()).projects, incomingProjects);
+      const carried = await importSyncedProjects(incomingProjects, { ...incomingMerges, ...matches });
+      for (const pair of carried) await carryProjectMemory(pair.from, pair.to);
+      // Once each run: this looks through folders, and a sync happens every few minutes.
+      if (!scannedForRepos) {
+        scannedForRepos = true;
+        linkNote = await linkLocalRepos();
       }
+
+      const archived = mode === "off" ? [] : await cursorArchiveChats(dir);
+      await fileNewChats(archived);
+      const slice = await exportLibrarySlice();
+      const localProjects: SyncProject[] = slice.projects.map(({ id, name, remotes }) => ({ id, name, remotes }));
+      const incomingChats = asChats(await readJson(path.join(dir, "chats.json"), []));
+      const incomingDeleted = await readJson<string[]>(path.join(dir, "deleted.json"), []);
+      const projects = mergeProjects(incomingProjects.filter((project) => !slice.merged[project.id]), localProjects);
+      const deleted = mergeDeleted(slice.deleted, Array.isArray(incomingDeleted) ? incomingDeleted : []);
+      const previous = new Map(slice.chats.map((chat) => [chat.id, chat.updatedAt ?? 0]));
+      const merged = mergeChats(
+        slice.chats.map(chatToSync),
+        [...incomingChats, ...archived.map(chatToSync)],
+        deleted,
+      );
+
+      await importSyncedLibrary(merged.map(chatFromSync), deleted);
+      if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(deleted));
+      await mergeThreadFiles(dir, merged, previous, new Set(deleted));
+      await mergeMemory(slice);
+      await writeSnapshot(dir, projects, merged, deleted, slice.merged);
+
+      const status = await runGit(dir, ["status", "--porcelain"]);
+      if (!status.ok) return { error: status.output };
+      // Commits with nothing new still go up: an earlier push failed, or the repository was emptied.
+      const ahead = await runGit(dir, ["rev-list", "--count", "origin/main..HEAD"]);
+      if (status.output) {
+        const added = await runGit(dir, ["add", "-A"]);
+        if (!added.ok) return { error: added.output };
+        const committed = await runGit(dir, ["commit", "-m", "Sync desk"]);
+        if (!committed.ok && !/nothing to commit/i.test(committed.output)) return { error: committed.output };
+      }
+      return { changed: !!status.output || !ahead.ok || ahead.output !== "0" };
+    };
+
+    let step = await mergeAndCommit();
+    if ("error" in step) return await viewOf(url, false, step.error);
+    const changed = step.changed;
+    for (let attempt = 0; step.changed; attempt++) {
+      const pushed = await runGit(dir, ["push", "-u", "origin", "HEAD"], 120_000);
+      if (pushed.ok) break;
+      // Another computer pushed first. Take its commit and merge again on top of it; nothing is force-pushed.
+      const fetched = await runGit(dir, ["fetch", "origin"], 120_000);
+      const theirs = fetched.ok && (await runGit(dir, ["rev-parse", "--verify", "origin/main"])).ok;
+      if (!theirs || attempt >= 2) return await viewOf(url, false, pushed.output);
+      const reset = await takeRemote(dir);
+      if (!reset.ok) return await viewOf(url, false, reset.output);
+      step = await mergeAndCommit();
+      if ("error" in step) return await viewOf(url, false, step.error);
     }
     const link = await applyCursorLink({
       mode,
@@ -439,14 +467,30 @@ async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<st
     if (!THREAD_ID.test(chat.id)) continue;
     const local = path.join(localDir, `${chat.id}.json`);
     const remote = path.join(remoteDir, `${chat.id}.json`);
-    const remoteWon = (chat.updatedAt ?? 0) > (previous.get(chat.id) ?? 0) && existsSync(remote);
-    if (remoteWon) await copyIfDifferent(remote, local);
-    else if (existsSync(local)) {
+    const remoteNewer = (chat.updatedAt ?? 0) > (previous.get(chat.id) ?? 0);
+    if (existsSync(local) && existsSync(remote)) {
+      await mergeOneThread(local, remote, remoteNewer).catch((err) => console.error(`AgenticOps Desk did not sync thread ${chat.id}`, err));
+    } else if (existsSync(local)) {
       // A thread that cannot be read as JSON stays out of the repository, where it could not be cleaned.
       await pushThread(local, remote).catch((err) => console.error(`AgenticOps Desk did not sync thread ${chat.id}`, err));
     }
     else if (existsSync(remote)) await copyIfDifferent(remote, local);
   }
+}
+
+// Both copies exist: merge by message, so two computers adding to one chat both keep their turns.
+async function mergeOneThread(local: string, remote: string, remoteNewer: boolean) {
+  const { mtimeMs } = await fs.stat(local);
+  if (pushedAt.get(local) === mtimeMs && !remoteNewer) return;
+  const [localBytes, remoteBytes] = await Promise.all([fs.readFile(local), fs.readFile(remote)]);
+  const mine = JSON.parse(localBytes.toString("utf8")) as unknown;
+  const theirs = JSON.parse(remoteBytes.toString("utf8")) as unknown;
+  if (!Array.isArray(mine) || !Array.isArray(theirs)) return pushThread(local, remote);
+  const pinned = privacyVault().pinnedValues();
+  const merged = mergeThreads(mine, hideThreadForSync(mine, pinned), theirs, remoteNewer);
+  if (merged !== mine) await writeIfDifferent(Buffer.from(JSON.stringify(merged, null, 0)), local);
+  await writeIfDifferent(Buffer.from(JSON.stringify(hideThreadForSync(merged, pinned))), remote);
+  pushedAt.set(local, (await fs.stat(local)).mtimeMs);
 }
 
 async function mergeMemory(slice: LibrarySlice) {

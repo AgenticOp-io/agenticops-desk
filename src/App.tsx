@@ -11,7 +11,7 @@ import { Explorer } from "./Explorer";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dock, type DockTab } from "./Dock";
 import { Help } from "./Help";
-import { Briefing, Inbox, WatchChips } from "./Extras";
+import { Briefing, Inbox, WatchChips, WorktreeChip } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
 import { ChatStorage } from "./ChatStorage";
@@ -281,6 +281,7 @@ export function App() {
   const [bodyHits, setBodyHits] = useState<string[]>([]);
   const [updateNote, setUpdateNote] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
+  const [updateInstallable, setUpdateInstallable] = useState(false);
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -1898,6 +1899,9 @@ export function App() {
                 </span>
               )}
               {activeChat && <WatchChips chatId={activeChat.id} watches={watches} onChange={setWatches} />}
+              {activeChat && (
+                <WorktreeChip chatId={activeChat.id} folder={activeChat.projectPath ?? ""} running={running} onNote={setStatus} />
+              )}
               {(["terminal", "git", "preview", "notes", "rules"] as DockTab[]).map((tab) => (
                 <button
                   key={tab}
@@ -2444,6 +2448,26 @@ export function App() {
                     <div className="settings-label">Where chats live</div>
                     <ChatStorage current={prefs.chatStorage} onChosen={(mode) => setPrefs((p) => ({ ...p, chatStorage: mode }))} />
                     {prefs.chatStorage === "github" && <CursorFolders />}
+                    <div className="settings-label">Import from other tools</div>
+                    <p className="settings-hint">
+                      Claude Code sessions typed in a terminal, and VS Code chats. An imported Claude Code session continues where it left off.
+                      Importing again adds new ones and leaves chats you continued here alone.
+                    </p>
+                    <div className="signin-row">
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setStatus("Importing chats…");
+                          void window.desk.importOtherTools().then(async (r) => {
+                            const list = await reloadCursor();
+                            setChats(list);
+                            setStatus(`Imported ${r.claudeCode} Claude Code session${r.claudeCode === 1 ? "" : "s"} and ${r.vscode} VS Code chat${r.vscode === 1 ? "" : "s"}`);
+                          });
+                        }}
+                      >
+                        Import chats
+                      </button>
+                    </div>
                   </>
                 )}
 
@@ -2543,6 +2567,7 @@ export function App() {
                         onClick={() =>
                           void window.desk.checkForUpdate().then((info) => {
                             setUpdateReady(info.patch.ready);
+                            setUpdateInstallable(info.canInstall);
                             setUpdateNote(
                               info.patch.note
                                 ? `This copy is ${info.current}. ${info.patch.note}`
@@ -2558,6 +2583,19 @@ export function App() {
                       {updateReady && (
                         <button className="btn" onClick={() => void window.desk.restartForUpdate()}>
                           Restart to update
+                        </button>
+                      )}
+                      {updateInstallable && (
+                        <button
+                          className="btn"
+                          onClick={() => {
+                            setUpdateNote("Downloading the installer…");
+                            void window.desk.installUpdate().then((problem) => {
+                              if (problem) setUpdateNote(problem);
+                            });
+                          }}
+                        >
+                          Download and install
                         </button>
                       )}
                     </div>
