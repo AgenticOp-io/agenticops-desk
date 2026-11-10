@@ -49,6 +49,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: AgenticOps-Desk-${{ matrix.label }}
+          # Only a hand-off to the publish job; the release keeps the installers. Longer filled the storage quota.
+          retention-days: 1
           if-no-files-found: error
           path: |
             release/*.exe
