@@ -22,6 +22,15 @@ test("handoff only past the budget and only with a transcript to carry", async (
   assert.equal(shouldHandOff(900_000, 0), false);
 });
 
+test("every Claude API model has a price, or the spending cap never counts its cost", async () => {
+  const { readFileSync } = await import("node:fs");
+  const presets = readFileSync(new URL("./providers.ts", import.meta.url), "utf8");
+  const direct = readFileSync(new URL("./direct.ts", import.meta.url), "utf8");
+  const ids = [...presets.matchAll(/id: "(claude-[\w-]+)"/g)].map((m) => m[1]);
+  assert.ok(ids.includes("claude-mythos-5-1"));
+  for (const id of ids) assert.ok(direct.includes(`"${id}": {`), `${id} has no price in direct.ts`);
+});
+
 test("chat model ids drop embeddings and cap the list", () => {
   const ids = chatModelIds([" deepseek-flash ", "text-embedding-3-small", "whisper-1", "deepseek-flash", "dall-e-3", "gpt-image-1"]);
   assert.deepEqual(ids, ["deepseek-flash"]);

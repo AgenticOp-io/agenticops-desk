@@ -511,6 +511,7 @@ const PRICES: Record<string, { input: number; output: number; read: number }> = 
   "claude-sonnet-5-5": { input: 2, output: 10, read: 0.2 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, read: 0.01 },
   "claude-fable-5-1": { input: 10, output: 50, read: 0.25 },
+  "claude-mythos-5-1": { input: 10, output: 50, read: 0.25 },
 };
 
 // Refusal fallbacks are opt-in; Claude API supports the "default" routing on these models.

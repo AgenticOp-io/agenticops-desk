@@ -30,6 +30,8 @@ export const PRESETS: Record<ProviderId, Preset> = {
       { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
       { id: "claude-haiku-5-5", name: "Haiku 5.5" },
       { id: "claude-fable-5-1", name: "Fable 5.1" },
+      // Limited availability: Anthropic grants it per account, so a key without access gets "model not found".
+      { id: "claude-mythos-5-1", name: "Mythos 5.1" },
     ],
     keyHint: "API key from platform.claude.com (sk-ant-…). Billed per token, separate from a Claude subscription.",
   },
