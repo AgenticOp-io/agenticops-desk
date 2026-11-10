@@ -81,7 +81,7 @@ The list has three sections, top to bottom:
 
 - **Add** puts a folder on the list. **New chat** starts one in the open project.
 - Drag projects or chats to reorder them.
-- Right-click a project to change or locate its folder, hide it, archive it, or delete its folder. Right-click a chat to rename, pin, branch, move, hide or delete it.
+- Right-click a project to change or locate its folder, hide it, archive it, or delete its folder. Right-click a chat, or use the **⋯** that appears when you hover it, to rename, pin, branch, move, hide or delete it. Double-click or **F2** renames a chat in place; **Delete** deletes the selected one.
 - Hidden items are listed in **Settings → Chats & projects**, with **Unhide all**.
 
 **Projects keep their identity.** A project has a permanent ID. If its folder moves or disappears, it shows **no folder** and its chats stay with it. Use **Locate folder…** to point it at the new place. A chat stays in its project until you use **Move to project…**. **Settings → Chats & projects → Project cleanup** offers to merge one project found in two places.
@@ -92,6 +92,8 @@ The list has three sections, top to bottom:
 - When a default-engine chat's context passes 150,000 tokens, your next message starts a fresh session that receives the chat so far: what you and the agent said, without old file contents and command output. A note in the chat says so. Every turn re-reads the whole context, so this cuts the cost of long chats (about 30% across 65 real sessions) and makes their turns faster. The agent reads again any file it needs.
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
+- **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
+- **Notifications:** when a chat finishes or needs you and the window isn't in front, a desktop notice appears. Clicking it brings the window back, even from the tray.
 - Closing the window while a chat is working hides the app to the tray and keeps going. **Quit** from the tray icon stops it. A run cut off by quitting resumes the next time you send.
 - Closing the window when nothing is running saves open chats first. On macOS the app stays open after its window closes, and a reopened window saves its chats the same way.
 - On a message you sent: **Rewind** drops everything after it, **Retry** sends it again, **Branch** copies the chat up to that point, and **Replay on…** sends the same message to another model in a new branch, so you can compare the two answers.
@@ -114,6 +116,8 @@ The list has three sections, top to bottom:
 - **Drafts stay with their chat.** Switch away and come back, and your text is there with the cursor at the end.
 - `@` attaches a file, or a function, class or type by name (`@handleLogin` points the agent at its file and line; this needs a git repository).
 - Paste or drop images: up to 10, each under 5 MB.
+- **Send preview:** while you type a longer message, a line under the box lists files whose names match its words and an earlier chat about the same thing, which you can click to open. It searches only this computer.
+- Enter works with Windows text suggestions: the message sends once the suggested word lands.
 - `/` opens the commands below, plus the commands of installed plugins.
 
 | Command | Does |
@@ -135,7 +139,7 @@ Picked in the model menu, per chat.
 
 - **Claude Code** (default): the official agent, using your Claude sign-in and subscription. No separate CLI install is needed. The installer doesn't contain the agent itself: the first chat downloads Anthropic's agent SDK and the engine for this computer from npm (about 270 MB), checks npm's SHA-512 fingerprint, and keeps them in the app's data folder. Progress shows as a message. A new app version that needs a newer engine downloads it once and removes the old one.
 - **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought. A new command stops the DeepSeek reply that is streaming and any command it is running, and the run continues with your command. A failed call, such as a rejected key or a rate limit, still shows as an error. The other providers load their model list when you add a key, from the menu or from **Settings → AI models → Direct AI providers**.
-- **Auto:** uses all of these, or the ones you pick in **Settings → AI models → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs.
+- **Auto:** uses all of these, or the ones you pick in **Settings → AI models → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs. A chat keeps the AI that last worked for it, and a label next to the model menu says which one answered. If an AI fails after changing files, the next one is told which files. Settings shows which AIs are resting, and **Try it again now** wakes one early.
 - **Second opinion:** a model from another provider reviews each change against your request, and sends concerns back to the agent, for up to two rounds.
 - **MCP servers on Direct:** Direct chats use the same MCP servers as the default engine: the project's `.mcp.json`, and the servers in your user settings (`~/.claude.json`). A server from the project's `.mcp.json` came with the repository, so the chat asks once before starting it, and again if that entry changes. Each tool call goes through the same permissions as the agent's other tools. Servers stop after 15 minutes unused. Plugins' own servers still need the default engine.
 
@@ -204,6 +208,7 @@ See [SECURITY.md](./SECURITY.md#saved-logins) for what this does and doesn't pro
 
 - **Turning it on:** leave the address empty and click **Create repository and sync**. The app looks on your GitHub account and its organizations for a private repository named `desk-sync` or `desksync`, and creates a private `desk-sync` if there is none. This needs the GitHub CLI signed in. Or paste the address of any repository.
 - **When it commits:** within about a second of sending a message or a reply ending. While a reply is streaming, at most every 30 seconds. Also every 3 minutes, and when the app starts and quits.
+- If the repository is emptied or recreated, the next sync fills it again from this computer. At startup, duplicate copies of a chat and empty leftover projects with no folder are removed; branches and blank chats are kept.
 - **What goes up:** chats, project names and remotes, memory, and these settings: fonts, theme, code panel, hidden chats, Auto model list, reviewer and autocomplete model, privacy mode, and Cursor mode.
 - **What stays on the computer:** API keys, saved logins, project folder paths, and the rest of the settings.
 - **Hidden in the pushed copy:** passwords and tokens in chats become `[hidden]`. Your local copy keeps them, so the repository alone can't restore them.
@@ -260,21 +265,23 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 ## Files and the editor
 
 - **Files** in the sidebar is the folder tree. **Ctrl+P** opens a file by name.
-- **Code** shows the editor, which loads the first time you open it. **Ctrl+S** saves.
+- **Code** shows the editor, which loads the first time you open it. **Ctrl+S** saves. A dot on a tab means unsaved changes; middle-click closes a tab. Code blocks in a reply open as read-only tabs.
+- A file you pick yourself outside the project can be opened and revealed; other paths outside it are refused.
 - Right-click a file to create, rename, delete, copy its path, reveal it, or add it to the chat.
 - **Quick edit (Ctrl+I):** select code, say what to change, and a small fast model rewrites that part. Ctrl+Z undoes it.
 - **Autocomplete** (opt-in, **Settings → AI models → Editor autocomplete**): grey text suggests the next lines, and Tab accepts. Each pause in typing is one call to that model.
 - Saving writes the file in place. The editor opens files up to 2 MB.
-- **The change bar** lists files the agent edited, with a diff and undo for each.
+- **The change bar** lists files the agent edited, with a diff, **Keep** and **Undo** for each. Undoing a file the agent created sends it to the Recycle Bin. Your next message clears the bar; the edits stay.
 
 ## Around the chat
 
-- **Terminal:** a shell in the project.
+- **Terminal:** a shell in the project, up to three at once. Output keeps collecting while the panel is hidden, and Restart ends the shell and everything it started.
 - **Git:** branch, changes, commit, fetch, pull, push, checkout, history, and a pull request through GitHub's `gh` command.
 - **Preview:** loads a web address. In a project with a `dev`, `start` or `serve` script, **Run npm run dev** (or the pnpm, yarn or bun form its lockfile names) starts it in the project's terminal and opens the local address it prints. The Terminal tab shows its output, and Restart there stops it.
 - **Instructions:** edits `CLAUDE.md`, `AGENTS.md` and the project's `.mcp.json`.
 - **Rules:** standing orders for the folder: rules added to every run, paths the agent may not edit, and checks that must pass. Checks run on both engines when a run changed files. A failure goes back to the agent with the output, up to the attempt limit you set. A team can commit `.agenticops/orders.json` with rules and protected paths. Any `checks` in that file are ignored, so a cloned repository can't run commands by itself.
-- **Inbox** lists everything waiting on you across chats. **Briefing** shows where recent chats stand. **Ctrl+Shift+P** opens the command palette.
+- **Inbox** lists everything waiting on you across chats: a permission request from another chat waits there instead of covering the chat you are in. **Briefing** shows where the last three days of chats stand, and opens by itself when you come back after 8 hours away. **Ctrl+Shift+P** opens the command palette.
+- Links in replies, and pages that try to open a new window, open in your browser. The Preview frame is sandboxed and can't take over the app's window.
 
 ## Memory
 
