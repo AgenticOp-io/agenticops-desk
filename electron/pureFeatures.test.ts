@@ -27,7 +27,8 @@ test("every Claude API model has a price, or the spending cap never counts its c
   const presets = readFileSync(new URL("./providers.ts", import.meta.url), "utf8");
   const direct = readFileSync(new URL("./direct.ts", import.meta.url), "utf8");
   const ids = [...presets.matchAll(/id: "(claude-[\w-]+)"/g)].map((m) => m[1]);
-  assert.ok(ids.includes("claude-mythos-5-1"));
+  assert.ok(ids.length >= 15, "the model list was not found");
+  assert.ok(!ids.some((id) => id.includes("mythos")), "Mythos was removed on purpose");
   for (const id of ids) assert.ok(direct.includes(`"${id}": {`), `${id} has no price in direct.ts`);
 });
 

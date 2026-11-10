@@ -506,13 +506,29 @@ function writeSaved(chatId: string, saved: Saved) {
 
 // ---------- pricing for the usage meter (USD per million tokens) ----------
 
-const PRICES: Record<string, { input: number; output: number; read: number }> = {
+// From Anthropic's pricing page. `read` is the cache-hit price; cache writes are 1.25x input everywhere.
+// `long` is the rate for prompts over 100,000 tokens, where a model has one.
+type Price = { input: number; output: number; read: number; long?: { input: number; output: number; read: number } };
+const PRICES: Record<string, Price> = {
   "claude-opus-5-5": { input: 4, output: 20, read: 0.2 },
-  "claude-sonnet-5-5": { input: 2, output: 10, read: 0.2 },
-  "claude-haiku-5-5": { input: 0.1, output: 0.5, read: 0.01 },
+  "claude-sonnet-5-5": { input: 2, output: 10, read: 0.1 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, read: 0.01, long: { input: 0.5, output: 2.5, read: 0.05 } },
+  "claude-fable-5-2": { input: 8, output: 40, read: 0.2 },
   "claude-fable-5-1": { input: 10, output: 50, read: 0.25 },
-  "claude-mythos-5-1": { input: 10, output: 50, read: 0.25 },
+  "claude-fable-5": { input: 10, output: 50, read: 1 },
+  "claude-opus-5": { input: 5, output: 25, read: 0.5 },
+  "claude-opus-4-8": { input: 5, output: 25, read: 0.5 },
+  "claude-opus-4-7": { input: 5, output: 25, read: 0.5 },
+  "claude-opus-4-6": { input: 5, output: 25, read: 0.5 },
+  "claude-opus-4-5": { input: 5, output: 25, read: 0.5 },
+  "claude-sonnet-5": { input: 2, output: 10, read: 0.2 },
+  "claude-sonnet-4-6": { input: 3, output: 15, read: 0.3 },
+  "claude-sonnet-4-5": { input: 3, output: 15, read: 0.3 },
+  "claude-haiku-4-5": { input: 1, output: 5, read: 0.1 },
 };
+
+// The effort setting is rejected by these two; every other model in the list supports it.
+const NO_EFFORT = new Set(["claude-sonnet-4-5", "claude-haiku-4-5"]);
 
 // Refusal fallbacks are opt-in; Claude API supports the "default" routing on these models.
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]);
@@ -565,7 +581,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
         tools,
         messages,
         cache_control: { type: "ephemeral" },
-        output_config: { effort: "high" },
+        ...(NO_EFFORT.has(model) ? {} : { output_config: { effort: "high" as const } }),
         ...(FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
       },
       { signal: ctx.signal },
@@ -590,7 +606,8 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     const fresh = u.input_tokens ?? 0;
     const read = u.cache_read_input_tokens ?? 0;
     const wrote = u.cache_creation_input_tokens ?? 0;
-    if (price) cost += (fresh * price.input + wrote * price.input * 1.25 + read * price.read + (u.output_tokens ?? 0) * price.output) / 1e6;
+    const rate = price?.long && fresh + read + wrote > 100_000 ? price.long : price;
+    if (rate) cost += (fresh * rate.input + wrote * rate.input * 1.25 + read * rate.read + (u.output_tokens ?? 0) * rate.output) / 1e6;
     sendUsage(ctx, { costUsd: cost, contextTokens: fresh + read + wrote, contextWindow: 1_000_000, model: message.model });
 
     if (message.stop_reason === "refusal") {

@@ -30,8 +30,19 @@ export const PRESETS: Record<ProviderId, Preset> = {
       { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
       { id: "claude-haiku-5-5", name: "Haiku 5.5" },
       { id: "claude-fable-5-1", name: "Fable 5.1" },
-      // Limited availability: Anthropic grants it per account, so a key without access gets "model not found".
-      { id: "claude-mythos-5-1", name: "Mythos 5.1" },
+      // Every other model the Claude API still serves, newest first. Each needs a price in direct.ts, or the
+      // spending cap never counts its cost. Retired models (Opus 4.1 and 4, Sonnet 4) are left out.
+      { id: "claude-fable-5-2", name: "Fable 5.2" },
+      { id: "claude-fable-5", name: "Fable 5" },
+      { id: "claude-opus-5", name: "Opus 5" },
+      { id: "claude-opus-4-8", name: "Opus 4.8" },
+      { id: "claude-opus-4-7", name: "Opus 4.7" },
+      { id: "claude-opus-4-6", name: "Opus 4.6" },
+      { id: "claude-opus-4-5", name: "Opus 4.5" },
+      { id: "claude-sonnet-5", name: "Sonnet 5" },
+      { id: "claude-sonnet-4-6", name: "Sonnet 4.6" },
+      { id: "claude-sonnet-4-5", name: "Sonnet 4.5" },
+      { id: "claude-haiku-4-5", name: "Haiku 4.5" },
     ],
     keyHint: "API key from platform.claude.com (sk-ant-…). Billed per token, separate from a Claude subscription.",
   },
