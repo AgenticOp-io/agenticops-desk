@@ -76,3 +76,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --prerelease --title "AgenticOps Desk ${GITHUB_REF_NAME} beta" --notes "Beta. Every Windows, macOS and Linux build is attached. Installed copies check the git tags of this private repository."
+      - name: Keep only this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # One installation updates from the newest release; older ones only take up space. Git tags stay.
+        run: |
+          gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName --jq '.[].tagName' |
+            grep -vx "${GITHUB_REF_NAME}" |
+            xargs -r -n1 gh release delete --repo "${GITHUB_REPOSITORY}" --yes

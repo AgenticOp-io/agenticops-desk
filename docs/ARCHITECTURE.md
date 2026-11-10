@@ -177,7 +177,7 @@ To fake a git remote that looks like GitHub, use an `ssh://git@github.com/...` a
 
 1. Bump `version` in `package.json` and the lockfile. Use a plain `X.Y.Z`: the patch manifest takes its version from there, and `patchRefusal` only accepts that form. Beta is the GitHub prerelease flag, not part of the tag.
 2. Commit, tag `vX.Y.Z` on that commit, and push both.
-3. The **Release** workflow builds Windows, macOS and Linux, both chip types, signs the patch, and publishes a **beta** prerelease with every installer. Installed copies read the private repository with the GitHub CLI sign-in on that computer.
+3. The **Release** workflow builds Windows, macOS and Linux, both chip types, signs the patch, and publishes a **beta** prerelease with every installer, then deletes every older release (their git tags stay). Installed copies read the private repository with the GitHub CLI sign-in on that computer.
 4. A beta is visible to installed copies. They read git tags with `gh auth token` (`checkForUpdate` in `features.ts`), then download the patch. A draft is not.
 
 Runtime packages that Vite bundles (`openai`, React, Monaco, KaTeX) stay in `devDependencies`. Only `dependencies` are copied into the installer, and there are none: the agent SDK is a dev dependency that a packaged app downloads (`loadAgentSdk`). The main build keeps it and `node:sqlite` external.
