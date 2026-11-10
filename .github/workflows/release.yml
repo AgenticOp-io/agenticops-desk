@@ -3,15 +3,31 @@ name: Release
 # Packages AgenticOps Desk for Windows, macOS and Linux. The installers do not contain the
 # Claude Code binary; the app downloads the build for that computer on first launch.
 # One runner per operating system packages both chip types. A v* tag publishes every
-# built file as a beta prerelease. Drafts are not used: an installed copy cannot see them.
+# built file as a beta prerelease. Each build attaches its files straight to a draft release, which is
+# published once all three finish: Actions artifacts counted against a storage quota that 400 MB
+# installers filled, and a full quota fails every build. The draft exists only while the builds run.
 on:
-  workflow_dispatch:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
 jobs:
+  draft:
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1 ||
+            gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft --prerelease --title "AgenticOps Desk ${GITHUB_REF_NAME} beta" --notes "Beta. Every Windows, macOS and Linux build is attached. Installed copies check the git tags of this private repository."
+
   build:
     name: ${{ matrix.label }}
+    needs: draft
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -46,36 +62,25 @@ jobs:
         env:
           PATCH_SIGNING_KEY: ${{ secrets.PATCH_SIGNING_KEY }}
         run: node scripts/make-patch.mjs
-      - uses: actions/upload-artifact@v7
-        with:
-          name: AgenticOps-Desk-${{ matrix.label }}
-          # Only a hand-off to the publish job; the release keeps the installers. Longer filled the storage quota.
-          retention-days: 1
-          if-no-files-found: error
-          path: |
-            release/*.exe
-            release/*.dmg
-            release/*.zip
-            release/*.AppImage
-            release/*.deb
-            release/patch*
+      - name: Attach to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.exe release/*.dmg release/*.zip release/*.AppImage release/*.deb release/patch*)
+          [ ${#files[@]} -gt 0 ] || { echo "Nothing was built"; exit 1; }
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
 
   release:
     name: Beta release
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
       - name: Publish the beta
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --prerelease --title "AgenticOps Desk ${GITHUB_REF_NAME} beta" --notes "Beta. Every Windows, macOS and Linux build is attached. Installed copies check the git tags of this private repository."
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease
       - name: Keep only this release
         env:
           GH_TOKEN: ${{ github.token }}
