@@ -23,6 +23,7 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 - [Plugins](#plugins)
 - [Updates](#updates)
 - [Keyboard](#keyboard)
+- [License](#license)
 
 ## The window
 
@@ -43,9 +44,9 @@ There is no status bar. Sign-in state and the agent engine's state are in **Sett
 | **Appearance** | Theme, window font size, agent list font size |
 | **Privacy & logins** | Privacy Mode, Always hide these values, Saved logins |
 | **Sync** | The sync repository, and what Cursor chats do |
-| **Chats & projects** | Hidden items, Project cleanup, Where chats live, and Cursor folders in Git mode |
+| **Chats & projects** | Hidden items, Project cleanup, Where chats live, Import from other tools, and Cursor folders in Git mode |
 | **Engine & sign-in** | Claude Code status, Sign in, Check |
-| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Auto model |
+| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Spending cap, Auto model |
 | **Plugins** | Browse, install and manage plugins |
 | **Updates** | Check for a newer release, and Restart to update |
 
@@ -93,8 +94,12 @@ The list has three sections, top to bottom:
 - Several chats can run at once. **Stop** ends only the chat on screen.
 - Closing the window while a chat is working hides the app to the tray and keeps going. **Quit** from the tray icon stops it. A run cut off by quitting resumes the next time you send.
 - Closing the window when nothing is running saves open chats first. On macOS the app stays open after its window closes, and a reopened window saves its chats the same way.
-- On a message you sent: **Rewind** drops everything after it, **Retry** sends it again, and **Branch** copies the chat up to that point.
+- On a message you sent: **Rewind** drops everything after it, **Retry** sends it again, **Branch** copies the chat up to that point, and **Replay on…** sends the same message to another model in a new branch, so you can compare the two answers.
 - Search looks inside messages as well as titles.
+
+**Watch a log file.** Right-click a chat and choose **Watch a log file…** (or use the palette or `/watch`) and pick a log. When new lines contain error, exception, failed, traceback, panic or fatal, the last 60 lines go to that chat, which starts investigating without being asked. It waits 4 seconds for the burst to finish and at most once every 2 minutes, so a noisy log can't loop. The chat shows a chip for each watched file; **×** stops it. Watches survive restarts.
+
+**Why a file changed.** When the editor shows a file a chat edited, a line above it quotes the request that made the change and how long ago. Clicking it opens that chat.
 
 **Own worktree.** In a git project, **Own worktree** in the chat header gives the chat its own copy of the repository on its own branch (`desk/…`), so two chats in one repository don't edit the same files. The copy lives in the app's data folder, never in the project, and is per computer. The chat's next message starts there with the chat's history.
 
@@ -109,6 +114,17 @@ The list has three sections, top to bottom:
 - **Drafts stay with their chat.** Switch away and come back, and your text is there with the cursor at the end.
 - `@` attaches a file, or a function, class or type by name (`@handleLogin` points the agent at its file and line; this needs a git repository).
 - Paste or drop images: up to 10, each under 5 MB.
+- `/` opens the commands below, plus the commands of installed plugins.
+
+| Command | Does |
+|---|---|
+| `/agent`, `/plan`, `/auto` | Switch to Agent, Plan or Auto-edit mode |
+| `/catchup` | Hand this chat's history to the agent as a briefing |
+| `/terminal`, `/git`, `/preview`, `/notes` | Open the Terminal, Git, Preview or Instructions panel |
+| `/rename`, `/pin`, `/branch` | Rename, pin or branch this chat |
+| `/watch` | Watch a log file for errors |
+| `/plugins`, `/autopick` | Open Settings at Plugins, or at the Auto model list |
+| `/theme`, `/palette`, `/help` | Switch light and dark, open the command palette, open Help |
 - **Agent** edits and runs commands. **Plan** writes a plan and waits. **Auto-edit** applies edits without an extra prompt.
 - The meter shows how full the chat's context is and a rough cost since the window opened.
 - **Settings → AI models → Spending cap** stops a run once it has spent $1–$50 (off by default). It covers the default engine and Claude API keys, which report cost; with a Claude sign-in that cost is an estimate. Other providers don't report a price and stop after 80 steps. A capped run leaves a note, and your next message continues the chat.
@@ -117,7 +133,7 @@ The list has three sections, top to bottom:
 
 Picked in the model menu, per chat.
 
-- **Claude Code** (default): the official agent, using your Claude sign-in and subscription. No separate CLI install is needed.
+- **Claude Code** (default): the official agent, using your Claude sign-in and subscription. No separate CLI install is needed. The installer doesn't contain the agent itself: the first chat downloads Anthropic's agent SDK and the engine for this computer from npm (about 270 MB), checks npm's SHA-512 fingerprint, and keeps them in the app's data folder. Progress shows as a message. A new app version that needs a newer engine downloads it once and removes the old one.
 - **Direct:** the app's own agent loop, calling the Claude API, OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought. A new command stops the DeepSeek reply that is streaming and any command it is running, and the run continues with your command. A failed call, such as a rejected key or a rate limit, still shows as an error. The other providers load their model list when you add a key, from the menu or from **Settings → AI models → Direct AI providers**.
 - **Auto:** uses all of these, or the ones you pick in **Settings → AI models → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs.
 - **Second opinion:** a model from another provider reviews each change against your request, and sends concerns back to the agent, for up to two rounds.
@@ -297,3 +313,9 @@ On Windows setup installs, the app checks git tags every six hours and when you 
 | Ctrl+S | Save the file |
 | Ctrl+Shift+E | Switch between chats and files |
 | F1 | Help |
+
+The command palette (**Ctrl+Shift+P**) lists the same actions as the `/` commands, plus New chat, Open a file, Rules, Inbox, Briefing and Use the Auto model in this chat.
+
+## License
+
+AgenticOps Desk is free software under the GNU AGPL-3.0 ([LICENSE](../LICENSE)). You may use, change and share it; if you distribute a changed version or offer it as a network service, you must publish your changes under the same license. Anthropic's agent SDK and engine keep Anthropic's own terms and are not in the installer ([NOTICE](../NOTICE)). A commercial license for use without the AGPL's terms is available from opensource@agenticop.io. Contributions need a signed contributor license agreement ([CONTRIBUTING.md](../CONTRIBUTING.md)).

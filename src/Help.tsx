@@ -37,6 +37,8 @@ const SECTIONS: Section[] = [
       "The model menu's first entry is the default engine, which uses the account you signed in with under Settings › Engine & sign-in. Direct lists API models: pick one and paste its key there, or add the key under Settings › AI models. Those calls are billed per token. Auto moves between the ones already set up (see The Auto model).",
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
       "The meter under the box is how full this chat’s context is, and a rough cost since this window opened.",
+      "Once a chat’s context passes 150,000 tokens, your next message starts a fresh session that gets the conversation so far without old file contents and command output. A note says so. Long chats cost less and answer faster; the agent reads again any file it needs.",
+      "Settings › AI models › Spending cap stops a run once it has spent the amount you pick. It covers the default engine and Claude API keys; other providers don’t report a price. Your next message continues the chat.",
     ],
   },
   {
@@ -121,7 +123,7 @@ const SECTIONS: Section[] = [
       "The agent keeps notes for you in a memory folder for that project, plus a global index AgenticOps Desk keeps under its app data. Both are included in later chats in that project.",
       "AgenticOps Desk does not write chat transcripts into the project. They stay in the app’s own data.",
       "Right-click a chat to rename it, pin it, branch it, or delete it. Search also looks inside messages, not only titles.",
-      "On a message you sent: Rewind drops everything after it and the next send continues from there. Retry sends that message again. Branch copies the chat up to that point into a new chat. File edits stay on the change bar, where you can keep or undo them.",
+      "On a message you sent: Rewind drops everything after it and the next send continues from there. Retry sends that message again. Branch copies the chat up to that point into a new chat. Replay on… sends that message to another model in a new branch, to compare the answers. File edits stay on the change bar, where you can keep or undo them.",
       "Agent, Plan, and Auto-edit, and the model, are remembered on the chat you are in.",
     ],
   },
@@ -131,6 +133,7 @@ const SECTIONS: Section[] = [
     body: [
       "Terminal, Git, Preview, and Instructions sit under the message box. Git shows the branch and changes, commits tracked files, and can open a pull request with GitHub’s gh command. Preview loads a web address, or runs the project’s dev script and opens the address it prints. Instructions edits CLAUDE.md, AGENTS.md, and the project’s .mcp.json for connected tools, which both engines use; Direct asks before starting a server from that file.",
       "When the agent writes a plan or a task list, they show above the messages.",
+      "Watch a log file (right-click a chat, or /watch): when new lines in that file contain an error, they go to the chat, which starts investigating on its own, at most once every 2 minutes. × on the chip stops it. In the editor, a line above a file a chat changed quotes the request behind it; click it to open that chat.",
       "Rules holds standing orders for the folder: rules added to every run, protected paths the agent may not edit, and checks that must pass. Checks run with every model once a run has changed files, and a failure goes back to the agent. A team can commit .agenticops/orders.json in the repo with the same rules and protected paths, so everyone gets them; checks in that file are ignored, so a cloned repo can never run commands on its own.",
       "Second opinion (Settings › AI models): after a run changes files, a model from another provider checks the change against what you asked. If it raises concerns, they go back to the agent to fix, up to two rounds, and both sides show in the chat.",
       "If you close the window while a chat is still working, AgenticOps Desk hides to the tray and keeps going. Quit from the tray icon stops it. A notice appears when a chat finishes in the background or needs you and the window is not in front.",
