@@ -118,6 +118,10 @@ const GLYPH: Record<string, string> = {
   files: "M3.2 2.4h5.6L12.4 6v7.2a.8.8 0 0 1-.8.8H3.2a.8.8 0 0 1-.8-.8V3.2a.8.8 0 0 1 .8-.8ZM8.6 2.6V6h3.6",
   caret: "M6 3.5 10.5 8 6 12.5",
   chat: "M3.2 3.6h9.6v6.4H6.4L4.2 12.4V10H3.2Z",
+  inbox: "M2.4 7.6a1 1 0 0 1 1-1h9.2a1 1 0 0 1 1 1v4.6a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V7.6ZM2 5.8 8 2.8l6 3-1 1.8H3L2 5.8Z",
+  briefing: "M8 2.6a1.2 1.2 0 0 1 1.2 1.2v1.4H11a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6.2a1 1 0 0 1 1-1h1.8V3.8A1.2 1.2 0 0 1 6 2.6ZM4.8 5.2h4.4V3.8H4.8v1.4Z",
+  help: "M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6ZM6.4 6.4a1.6 1.6 0 1 1 3.2 0c0 .9-.5 1.4-1.2 1.9l-.4.3V9.6h-1V7.9l.6-.4c.5-.4.8-.7.8-1.1a.6.6 0 1 0-1.2 0h-1ZM8 11a.8.8 0 1 0 0-.1Z",
+  settings: "M8 6.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8ZM8 2.4l1 .9 1.3-.4.4 1.2 1.2.4-.9 1 .9 1-1.2.4-.4 1.2-1.3-.4-1 .9-1-.9-1.3.4-.4-1.2-1.2-.4.9-1-.9-1 1.2-.4.4-1.2 1.3.4Z",
 };
 
 function Glyph({ name }: { name: keyof typeof GLYPH }) {
@@ -1504,34 +1508,39 @@ export function App() {
         } as CSSProperties
       }
     >
-      <header className="titlebar">
-        <span className="brand">Agents</span>
-        <span className="path" title={workspace}>
-          {workspace ? baseName(workspace) : "No folder"}
-        </span>
-        {(setupNote || status) && <span className="title-note" role="status">{setupNote || status}</span>}
-        <span className="grow" />
-        <button
-          className={`ghost inbox-button ${pendingApprovals.length ? "has" : ""}`}
-          onClick={() => setInboxOpen((v) => !v)}
-          title="Everything waiting on you, across all chats"
-        >
-          Inbox{pendingApprovals.length ? ` · ${pendingApprovals.length}` : ""}
-        </button>
-        <button className="ghost" onClick={showBriefing} title="Where every recent chat stands">
-          Briefing
-        </button>
-        <button className="ghost" onClick={() => setShowHelp(true)} title="Help (F1)">
-          Help
-        </button>
-        <button className="ghost" onClick={() => { setSettingsSection(""); setShowSettings(true); }} title="Settings">
-          Settings
-        </button>
-      </header>
-
+      {(setupNote || status) && (
+        <div className="toast" role="status">
+          {setupNote || status}
+        </div>
+      )}
       <div className="workspace">
         <aside className="sidebar">
           <nav className="rail" aria-label="Sidebar">
+            <button
+              type="button"
+              className={inboxOpen ? "on" : ""}
+              title={pendingApprovals.length ? `Everything waiting on you (${pendingApprovals.length})` : "Everything waiting on you, across all chats"}
+              aria-label="Inbox"
+              onClick={() => setInboxOpen((v) => !v)}
+            >
+              <Glyph name="inbox" />
+              {pendingApprovals.length > 0 && <span className="rail-badge">{pendingApprovals.length}</span>}
+            </button>
+            <button type="button" title="Where every recent chat stands" aria-label="Briefing" onClick={showBriefing}>
+              <Glyph name="briefing" />
+            </button>
+            <button type="button" title="Help (F1)" aria-label="Help" onClick={() => setShowHelp(true)}>
+              <Glyph name="help" />
+            </button>
+            <button
+              type="button"
+              title="Settings"
+              aria-label="Settings"
+              onClick={() => { setSettingsSection(""); setShowSettings(true); }}
+            >
+              <Glyph name="settings" />
+            </button>
+            <span className="rail-sep" />
             <button
               type="button"
               className={sideView === "chats" ? "on" : ""}
@@ -2550,6 +2559,18 @@ export function App() {
                     {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
                       <p className="settings-hint">Needs a Direct provider: a Claude API key (Haiku is fast and cheap) or a local Ollama model.</p>
                     )}
+                    <div className="settings-label">Spending cap</div>
+                    <label className="settings-row">
+                      <span>Stop a run once it has spent this much. Covers the default engine and Claude API keys; other providers don't report a price and stop after 80 steps. With a Claude sign-in the cost is an estimate.</span>
+                      <select value={String(prefs.runBudgetUsd)} onChange={(e) => patchPrefs({ runBudgetUsd: Number(e.target.value) })}>
+                        <option value="0">Off</option>
+                        {[1, 2, 5, 10, 25, 50].map((n) => (
+                          <option key={n} value={String(n)}>
+                            ${n} per run
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <AutoSettings models={models} chosen={prefs.autoModels} onChange={(autoModels) => patchPrefs({ autoModels })} />
                   </>
                 )}

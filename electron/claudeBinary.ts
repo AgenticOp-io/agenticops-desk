@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
-import { createWriteStream, existsSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeWebStream } from "node:stream/web";
+import { pathToFileURL } from "node:url";
 import { app, net } from "electron";
-import { sdkVersionFrom } from "./pureFeatures";
 import { extractTarGzMember } from "./tarMember";
 
-// Packaged installs do not carry the 270 MB Claude Code binary. The first launch
-// downloads the one build that matches this computer, checks npm's SHA-512, and
-// keeps it under the app data folder. A source checkout already has it in node_modules.
+// Packaged installs carry neither the agent SDK nor the 270 MB Claude Code binary. The first chat
+// downloads the matching builds from npm, checks npm's SHA-512, and keeps them under the app data
+// folder. A source checkout already has both in node_modules.
 
 type Target = { id: string; pkg: string; file: string };
 
@@ -33,14 +33,13 @@ function targetFor(musl: boolean): Target {
   return { id, pkg: `@anthropic-ai/claude-agent-sdk-${id}`, file };
 }
 
+// The SDK version this build was compiled against (vite.config.ts reads it from node_modules). The binary
+// and the downloaded SDK must both match it.
+declare const __AGENT_SDK_VERSION__: string;
+const SDK_PKG = "@anthropic-ai/claude-agent-sdk";
+
 function sdkVersion(): string {
-  // The SDK's "exports" does not list ./package.json, so resolving it directly throws
-  // ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the main entry and walk up to the package folder instead.
-  const req = createRequire(import.meta.url);
-  const entry = req.resolve("@anthropic-ai/claude-agent-sdk");
-  const version = sdkVersionFrom(entry, (p) => (existsSync(p) ? readFileSync(p, "utf8") : null));
-  if (!version) throw new Error("Could not read the Claude Agent SDK version.");
-  return version;
+  return __AGENT_SDK_VERSION__;
 }
 
 // The binary shipped next to the SDK when this checkout was installed. Source runs use it and skip the download.
@@ -157,21 +156,25 @@ async function removeOldVersions(keep: string) {
   }
 }
 
-async function fetchBinary(version: string, target: Target, onStatus?: (text: string) => void): Promise<string> {
-  const dir = binaryDir(version, target.id);
+function fetchBinary(version: string, target: Target, onStatus?: (text: string) => void): Promise<string> {
+  return fetchMember(target.pkg, version, binaryDir(version, target.id), target.file, onStatus);
+}
+
+// Downloads one npm package at an exact version, checks npm's SHA-512, and keeps one file from it in dir.
+async function fetchMember(pkg: string, version: string, dir: string, file: string, onStatus?: (text: string) => void): Promise<string> {
   await fs.mkdir(dir, { recursive: true });
-  const exe = path.join(dir, target.file);
+  const exe = path.join(dir, file);
   const partial = `${exe}.partial`;
   const tgz = path.join(dir, `.download-${process.pid}.tgz`);
   onStatus?.("Downloading the agent engine…");
   try {
-    const dist = await registryDist(target.pkg, version);
+    const dist = await registryDist(pkg, version);
     const got = await downloadTarball(dist.tarball, tgz, onStatus);
     if (got !== dist.integrity) {
       throw new Error("The agent engine download did not match npm's fingerprint. Nothing was installed.");
     }
     onStatus?.("Installing the agent engine…");
-    await extractTarGzMember(tgz, partial, [`package/${target.file}`, target.file]);
+    await extractTarGzMember(tgz, partial, [`package/${file}`, file]);
     const st = await fs.stat(partial);
     if (st.size < 1024) throw new Error("The agent engine download was empty.");
     await fs.rename(partial, exe);
@@ -183,6 +186,31 @@ async function fetchBinary(version: string, target: Target, onStatus?: (text: st
     await fs.rm(tgz, { force: true }).catch(() => {});
     await fs.rm(partial, { force: true }).catch(() => {});
   }
+}
+
+type AgentSdk = typeof import("@anthropic-ai/claude-agent-sdk");
+let sdkLoad: Promise<AgentSdk> | null = null;
+
+// The agent SDK is Anthropic's and is not ours to redistribute, so installers do not carry it. A source checkout
+// loads it from node_modules; a packaged app downloads sdk.mjs at the exact version it was built against.
+// sdk.mjs imports only Node built-ins, so it runs on its own from the app data folder.
+export function loadAgentSdk(onStatus?: (text: string) => void): Promise<AgentSdk> {
+  sdkLoad ??= (async () => {
+    try {
+      return (await import("@anthropic-ai/claude-agent-sdk")) as AgentSdk;
+    } catch {
+      /* not in node_modules: a packaged app */
+    }
+    const version = sdkVersion();
+    const dir = path.join(app.getPath("userData"), "claude-code", version, "sdk");
+    const file = path.join(dir, "sdk.mjs");
+    if (!existsSync(file) || !existsSync(`${file}.sha512`)) await fetchMember(SDK_PKG, version, dir, "sdk.mjs", onStatus);
+    return (await import(/* @vite-ignore */ pathToFileURL(file).href)) as AgentSdk;
+  })().catch((err) => {
+    sdkLoad = null;
+    throw err;
+  });
+  return sdkLoad;
 }
 
 let inflight: Promise<string> | null = null;

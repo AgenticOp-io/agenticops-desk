@@ -17,6 +17,8 @@ export type UiPrefs = {
   autoModels: string[];
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
+  // Dollars a run may spend before it is stopped; 0 is off.
+  runBudgetUsd: number;
   privacy: "standard" | "protect" | "local";
   /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
   cursorIntegration: "off" | "partial" | "full";
@@ -42,6 +44,7 @@ export const defaultPrefs = (): UiPrefs => ({
   reviewer: "",
   autoModels: [],
   autocomplete: "",
+  runBudgetUsd: 0,
   privacy: "protect",
   cursorIntegration: "off",
   chatStorage: "",

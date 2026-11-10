@@ -27,7 +27,7 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `preload.ts` | The renderer's whole API |
 | **Engines** | |
 | `claude.ts` | Claude Code runs: streaming, approvals, tool hooks, resume after restart |
-| `claudeBinary.ts` | Finds or downloads the binary for this computer |
+| `claudeBinary.ts` | Finds or downloads the agent SDK and the binary for this computer; installers carry neither |
 | `direct.ts` | Own agent loop and tools for API providers |
 | `directMcp.ts` | MCP servers for Direct runs: config from `.mcp.json` and `~/.claude.json`, start, list tools, call, idle stop |
 | `worktrees.ts` | A chat's own git worktree and branch: create, merge back, remove |
@@ -75,7 +75,7 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `sync-config.json`, `desk-sync\` | Sync address and its working clone | n/a |
 | `allows.json` | Folder trust | No |
 | `claude-sessions.json`, `direct\` | Engine session state and Direct history | No |
-| `claude-code\` | Downloaded binary | No |
+| `claude-code\` | Downloaded agent SDK (`sdk.mjs`) and binary, per SDK version | No |
 | `orders\`, `watches.json`, `provenance.json` | Standing orders, log watches, file origins | No |
 | `cursor-archive\`, `cursor-converted.json`, `cursor-import.json` | Cursor import state | Partly, by Cursor mode |
 | `backups\` | `library.json` and settings copies taken before cleanups | No |
@@ -180,7 +180,7 @@ To fake a git remote that looks like GitHub, use an `ssh://git@github.com/...` a
 3. The **Release** workflow builds Windows, macOS and Linux, both chip types, signs the patch, and publishes a **beta** prerelease with every installer. Installed copies read the private repository with the GitHub CLI sign-in on that computer.
 4. A beta is visible to installed copies. They read git tags with `gh auth token` (`checkForUpdate` in `features.ts`), then download the patch. A draft is not.
 
-Runtime packages that Vite bundles (`openai`, React, Monaco, KaTeX) stay in `devDependencies`. Only `dependencies` are copied into the installer, and the main build keeps only `@anthropic-ai/claude-agent-sdk` and `node:sqlite` external.
+Runtime packages that Vite bundles (`openai`, React, Monaco, KaTeX) stay in `devDependencies`. Only `dependencies` are copied into the installer, and there are none: the agent SDK is a dev dependency that a packaged app downloads (`loadAgentSdk`). The main build keeps it and `node:sqlite` external.
 
 An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. `make-patch.mjs` also puts each `-win-<arch>-setup.exe` and its SHA-256 in `installers`, so **Download and install** (`installFullUpdate`) can check the unsigned setup against the signed manifest before running it with `/S --force-run`. The signing key exists only as the `PATCH_SIGNING_KEY` secret. If it is lost, make a new pair and ship one full install.
 

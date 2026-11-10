@@ -1,4 +1,4 @@
-import { query, type ModelInfo, type PermissionResult, type PermissionUpdate, type Query, type SDKUserMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, PermissionResult, PermissionUpdate, Query, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -7,9 +7,9 @@ import { app, BrowserWindow, Notification, shell } from "electron";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials } from "./credentials";
 import type { PermissionGate } from "./gate";
-import { ensureClaudeBinary } from "./claudeBinary";
+import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { prepareMemory } from "./memory";
-import { turnIsOver } from "./pureFeatures";
+import { shouldHandOff, turnIsOver } from "./pureFeatures";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
@@ -776,6 +776,10 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       // The result repeats the final assistant text; only show it if nothing streamed.
       if (result && !err && !session.sawText) send(win, { kind: "line", text: result, sessionId, chatId, running: true });
       if (err && result) send(win, { kind: "error", text: result, sessionId, chatId, running: true });
+      if (msg.subtype === "error_max_budget_usd") {
+        const spent = typeof msg.total_cost_usd === "number" ? ` after $${msg.total_cost_usd.toFixed(2)}` : "";
+        send(win, { kind: "note", text: `Stopped at the spending cap${spent}. Send a message to continue, or change the cap in Settings.`, sessionId, chatId, running: true });
+      }
       const usage = runUsage(msg, session);
       if (usage) send(win, { kind: "usage", usage, chatId, running: true });
       return;
@@ -1234,6 +1238,17 @@ export function runClaude(opts: RunOptions) {
   if (session.claudeSession && session.workspace && path.resolve(session.workspace).toLowerCase() !== path.resolve(opts.workspace).toLowerCase()) {
     session.claudeSession = undefined;
   }
+  // A full context makes every turn re-read old tool output. Hand the chat to a fresh session with its transcript.
+  if (session.claudeSession && shouldHandOff(session.lastContext, opts.history?.length ?? 0)) {
+    send(opts.win, {
+      kind: "note",
+      chatId,
+      running: false,
+      text: `The context reached ${Math.round((session.lastContext ?? 0) / 1000)}k tokens, so this message starts a fresh session with the chat so far. Earlier file contents and command output are left out; the agent reads again what it needs.`,
+    });
+    session.claudeSession = undefined;
+    session.lastContext = undefined;
+  }
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
   const scrubbed = scrubOutgoing(resuming ? opts.prompt : withHistory(opts.prompt, opts.history));
@@ -1313,12 +1328,15 @@ export function runClaude(opts: RunOptions) {
         if (!js && !existsSync(external)) throw err;
         exe = js ?? external;
       }
+      const { query } = await loadAgentSdk();
+      const { runBudgetUsd } = await loadSettings();
       if (session.abort !== abort) return;
       q = query({
     prompt: stream,
     options: {
       cwd,
       ...(opts.model ? { model: opts.model } : {}),
+      ...(runBudgetUsd > 0 ? { maxBudgetUsd: runBudgetUsd } : {}),
       pathToClaudeCodeExecutable: exe,
       abortController: abort,
       resume: resuming ? session.claudeSession : undefined,

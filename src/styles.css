@@ -29,26 +29,12 @@ button { cursor: pointer; }
 
 .app {
   display: grid;
-  grid-template-rows: 40px 1fr;
+  grid-template-rows: 1fr;
   height: 100%;
   overflow: hidden;
   font-size: var(--window-font);
+  position: relative;
 }
-
-.titlebar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
-  font-size: 0.92rem;
-  font-weight: 500;
-  user-select: none;
-}
-.titlebar .brand { font-weight: 650; }
-.titlebar .path { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.title-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 400; color: #93c5fd; }
 
 .workspace {
   display: grid;
@@ -56,6 +42,22 @@ button { cursor: pointer; }
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+}
+.toast {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(560px, 80vw);
+  background: #243044;
+  border: 1px solid var(--accent);
+  color: #e8e8e8;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  pointer-events: none;
 }
 
 .sidebar {
@@ -94,6 +96,23 @@ button { cursor: pointer; }
 .rail button:hover { color: #fff; background: #222; }
 .rail button.on { color: #f4f4f4; background: #2c2c2c; box-shadow: inset 0 -2px 0 var(--accent); }
 .rail .glyph { width: 18px; height: 18px; }
+.rail-sep { width: 22px; height: 1px; background: var(--border); margin: 2px 0; flex-shrink: 0; }
+.rail button { position: relative; }
+.rail-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #f87171;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
 .side-panel {
   flex: 1;
   min-width: 0;
@@ -1362,7 +1381,6 @@ select.pill { appearance: auto; }
 .app[data-theme="light"] .rail { background: #ececee; }
 .app[data-theme="light"] .rail button.on { color: #18181b; background: #fff; }
 .app[data-theme="light"] .sidebar,
-.app[data-theme="light"] .titlebar,
 .app[data-theme="light"] .settings,
 .app[data-theme="light"] .settings-entry,
 .app[data-theme="light"] .settings-back,
@@ -1474,7 +1492,6 @@ select.pill { appearance: auto; }
 .inbox-reason { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .inbox-detail { max-height: 110px; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 5%, transparent); }
 .inbox-actions { display: flex; gap: 6px; align-items: center; }
-.inbox-button.has { color: #fbbf24; border-color: #fbbf24; }
 
 /* Standing orders (Rules dock tab) */
 .rules-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 12px; color: var(--muted); }

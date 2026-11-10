@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import electron from "vite-plugin-electron/simple";
@@ -66,6 +67,12 @@ export default defineConfig({
         entry: "electron/main.ts",
         onstart: ({ startup }) => onMainRebuilt(startup),
         vite: {
+          // Installers do not carry the agent SDK; the app downloads exactly this version (claudeBinary.ts).
+          define: {
+            __AGENT_SDK_VERSION__: JSON.stringify(
+              JSON.parse(readFileSync("node_modules/@anthropic-ai/claude-agent-sdk/package.json", "utf8")).version,
+            ),
+          },
           build: {
             // The plugin leaves outDir alone (emptyOutDir: false), so stale hashed
             // main-*.js chunks from older builds pile up and get shipped in the

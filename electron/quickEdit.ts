@@ -1,5 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { ensureClaudeBinary } from "./claudeBinary";
+import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { isLocalProvider, privacyMode, restoreIncoming, scrubOutgoing } from "./privacy";
 import { directModelOptions, parseDirectModel } from "./providers";
 import { stripFence } from "./pureFeatures";
@@ -31,6 +30,7 @@ function pickModel(): string | null {
 }
 
 async function askClaudeCode(system: string, user: string): Promise<string> {
+  const { query } = await loadAgentSdk();
   const q = query({
     prompt: user,
     options: {

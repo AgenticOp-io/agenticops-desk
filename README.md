@@ -108,6 +108,10 @@ Keys: **Enter** sends (Shift+Enter for a new line), **Ctrl+I** quick edit, **Ctr
 
 Agents working in this repo: read [`AGENTS.md`](./AGENTS.md).
 
+## License
+
+AgenticOps Desk is free software under the [GNU AGPL-3.0](./LICENSE), with an added permission for the Claude Agent SDK and Claude Code, which keep Anthropic's own terms (see [`NOTICE`](./NOTICE)). A commercial license is available for use without the AGPL's terms: opensource@agenticop.io. Contributions need a signed contributor license agreement; see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
 ---
 
 AgenticOp-io · [agenticop.io](https://agenticop.io)

@@ -1,6 +1,6 @@
 # Agent guidance — agenticops-desk
 
-AgenticOps Desk is a **desktop workspace for AI coding agents**. Chats run on one of two engines: **Claude Code** (the default, through `@anthropic-ai/claude-agent-sdk`, using the user's Claude sign-in) or **Direct** (AgenticOps Desk's own agent loop in `electron/direct.ts`, calling the Claude API or an OpenAI-compatible provider with the user's API key). A source checkout uses the Claude Code binary in `node_modules`. A packaged app downloads the binary for that computer on first launch (`electron/claudeBinary.ts`).
+AgenticOps Desk is a **desktop workspace for AI coding agents**. Chats run on one of two engines: **Claude Code** (the default, through `@anthropic-ai/claude-agent-sdk`, using the user's Claude sign-in) or **Direct** (AgenticOps Desk's own agent loop in `electron/direct.ts`, calling the Claude API or an OpenAI-compatible provider with the user's API key). A source checkout uses the agent SDK and Claude Code binary in `node_modules`. A packaged app carries neither: it downloads the SDK's `sdk.mjs` and the binary for that computer from npm on first use, at the SDK version it was built with (`electron/claudeBinary.ts`).
 
 ## Mission
 
@@ -33,6 +33,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 - Sync `credentials.json`, `providers.json` or `privacy-vault.json`
 - Build a GitHub token or key into the app. Update checks use the GitHub CLI sign-in on that computer
 - Call the Claude API with anything but `@anthropic-ai/sdk`, or send provider API keys to the renderer (they stay encrypted in the main process)
+- Import values from `@anthropic-ai/claude-agent-sdk` (types are fine); get them from `loadAgentSdk()`, so installers never contain Anthropic's SDK
 - Require a separately installed Claude CLI. Use `ensureClaudeBinary()` (`electron/claudeBinary.ts`): source runs use `node_modules`, packaged runs download the matching binary
 - Let folder trust answer `AskUserQuestion` or `ExitPlanMode`; the user must read those
 - Point the shell at the 0-byte WindowsApps `pwsh.exe` alias

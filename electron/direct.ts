@@ -36,6 +36,7 @@ import { staysInside, stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
+import { loadSettings } from "./settings";
 
 // The Direct engine: AgenticOps Desk's own agent loop, talking straight to a model API instead of Claude Code.
 // It reuses the chat session for approvals, folder trust, change snapshots and stop handling.
@@ -538,11 +539,17 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     input_schema: { type: "object", properties: t.properties, required: t.required },
   }));
   const price = PRICES[model];
+  const { runBudgetUsd } = await loadSettings();
   let cost = 0;
   let lastWasText = false;
   let jsonRetries = 0;
 
   for (let turn = 0; turn < 80 && !ctx.signal.aborted; turn++) {
+    // Checked between steps, where every tool call has its result, so the chat can continue later.
+    if (runBudgetUsd > 0 && cost >= runBudgetUsd) {
+      send(ctx.win, { kind: "note", text: `Stopped at the spending cap after $${cost.toFixed(2)}. Send a message to continue, or change the cap in Settings.`, chatId: ctx.chatId, running: true });
+      return;
+    }
     const guide = ctx.session.guide;
     if (guide) {
       ctx.session.guide = undefined;

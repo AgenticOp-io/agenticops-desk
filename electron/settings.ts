@@ -25,6 +25,8 @@ export type UiPrefs = {
   autoModels: string[];
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
+  // Stop a run once its cost passes this many dollars; 0 is off. Only engines that report cost can be capped.
+  runBudgetUsd: number;
   privacy: "standard" | "protect" | "local";
   /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
   cursorIntegration: "off" | "partial" | "full";
@@ -52,6 +54,7 @@ const defaults = (): UiPrefs => ({
   reviewer: "",
   autoModels: [],
   autocomplete: "",
+  runBudgetUsd: 0,
   privacy: "protect",
   cursorIntegration: "off",
   chatStorage: "",
@@ -96,6 +99,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     theme: r.theme === "light" ? "light" : "dark",
     reviewer: typeof r.reviewer === "string" && r.reviewer.startsWith("direct:") ? r.reviewer : "",
     autocomplete: typeof r.autocomplete === "string" && r.autocomplete.startsWith("direct:") ? r.autocomplete : "",
+    runBudgetUsd: typeof r.runBudgetUsd === "number" && r.runBudgetUsd > 0 && r.runBudgetUsd <= 1000 ? r.runBudgetUsd : 0,
     autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
     cursorIntegration: cursorMode(r.cursorIntegration),

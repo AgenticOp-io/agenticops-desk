@@ -26,8 +26,9 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 
 ## The window
 
-- **Title bar:** the open project, and a short message after something you did, such as "Saved CLAUDE.md". The message clears after 8 seconds. First-launch download progress shows here too and stays until the download ends.
-- **Left side:** projects and chats, or the folder tree (the icons on the far left switch between them).
+- **Messages:** a short note pops up after something you did, such as "Saved CLAUDE.md", and clears after 8 seconds. First-launch download progress shows the same way and stays until the download ends.
+- **Far-left icons:** Inbox (with a count when something waits on you), Briefing, Help and Settings, then the switch between projects and chats or the folder tree.
+- **Left side:** projects and chats, or the folder tree.
 - **Right side:** the conversation and message box. **Code** opens the editor beside it.
 - **Under the message box:** Terminal, Git, Preview, Instructions and Rules.
 
@@ -87,6 +88,7 @@ The list has three sections, top to bottom:
 ## Chats
 
 - Each chat resumes its own session, so a short reply like "yes" keeps its context.
+- When a default-engine chat's context passes 150,000 tokens, your next message starts a fresh session that receives the chat so far: what you and the agent said, without old file contents and command output. A note in the chat says so. Every turn re-reads the whole context, so this cuts the cost of long chats (about 30% across 65 real sessions) and makes their turns faster. The agent reads again any file it needs.
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
 - Closing the window while a chat is working hides the app to the tray and keeps going. **Quit** from the tray icon stops it. A run cut off by quitting resumes the next time you send.
@@ -109,6 +111,7 @@ The list has three sections, top to bottom:
 - Paste or drop images: up to 10, each under 5 MB.
 - **Agent** edits and runs commands. **Plan** writes a plan and waits. **Auto-edit** applies edits without an extra prompt.
 - The meter shows how full the chat's context is and a rough cost since the window opened.
+- **Settings → AI models → Spending cap** stops a run once it has spent $1–$50 (off by default). It covers the default engine and Claude API keys, which report cost; with a Claude sign-in that cost is an estimate. Other providers don't report a price and stop after 80 steps. A capped run leaves a note, and your next message continues the chat.
 
 ## Engines and models
 

@@ -77,6 +77,16 @@ export function autoStep(
   return run.failed ? "handover" : "finish";
 }
 
+// Past this, every turn re-reads all earlier tool output. Replaying 65 real sessions, 150k saved the most (~29%):
+// lower budgets hand off so often that rewriting the transcript eats the saving.
+export const HANDOFF_TOKENS = 150_000;
+
+// Start a fresh agent session with the visible transcript instead of resuming a bloated one. Only when the user
+// sent the message (so there is a transcript to carry) and the last turn was over budget.
+export function shouldHandOff(lastContext: number | undefined, historyMessages: number, budget = HANDOFF_TOKENS): boolean {
+  return historyMessages > 0 && (lastContext ?? 0) > budget;
+}
+
 // Rate limits and quota errors last a while; anything else gets a short rest.
 export function coolDownMs(error: string): number {
   return /429|rate.?limit|usage limit|quota|credit balance|too many requests/i.test(error) ? 5 * 60_000 : 60_000;
@@ -924,26 +934,6 @@ export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: str
     });
   }
   return [...map.values()];
-}
-
-// Walks up from a file inside the SDK to its package.json. Separate so it can be tested without Electron.
-export function sdkVersionFrom(entry: string, read: (file: string) => string | null): string | null {
-  let dir = path.dirname(entry);
-  for (let i = 0; i < 6; i++) {
-    const text = read(path.join(dir, "package.json"));
-    if (text) {
-      try {
-        const pkg = JSON.parse(text) as { name?: string; version?: string };
-        if (pkg.name === "@anthropic-ai/claude-agent-sdk" && pkg.version) return pkg.version;
-      } catch {
-        /* not this one */
-      }
-    }
-    const up = path.dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  return null;
 }
 
 // Chat models from a provider's /models list. Drops embeddings, images, audio and the rest.

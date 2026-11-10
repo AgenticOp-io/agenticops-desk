@@ -13,6 +13,15 @@ test("deepseek drops stored reasoning before the next command", async () => {
   assert.equal(messages[1].content, "hi");
 });
 
+test("handoff only past the budget and only with a transcript to carry", async () => {
+  const { shouldHandOff, HANDOFF_TOKENS } = await import("./pureFeatures.ts");
+  assert.equal(shouldHandOff(HANDOFF_TOKENS + 1, 4), true);
+  assert.equal(shouldHandOff(HANDOFF_TOKENS, 4), false);
+  assert.equal(shouldHandOff(undefined, 4), false);
+  // Review rounds and resumed runs pass no history: never drop their session.
+  assert.equal(shouldHandOff(900_000, 0), false);
+});
+
 test("chat model ids drop embeddings and cap the list", () => {
   const ids = chatModelIds([" deepseek-flash ", "text-embedding-3-small", "whisper-1", "deepseek-flash", "dall-e-3", "gpt-image-1"]);
   assert.deepEqual(ids, ["deepseek-flash"]);
@@ -632,14 +641,3 @@ test("the newest tag is the highest release", async () => {
   assert.equal(newestTag(["refs/tags/v0.1.18", "refs/tags/v0.1.19-beta"], "0.1.17"), "v0.1.18");
 });
 
-test("SDK version is found by walking up from its entry file", async () => {
-  const { sdkVersionFrom } = await import("./pureFeatures.ts");
-  const path = await import("node:path");
-  const root = path.join("x", "node_modules", "@anthropic-ai", "claude-agent-sdk");
-  const files: Record<string, string> = {
-    [path.join(root, "package.json")]: JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.314" }),
-    [path.join(root, "dist", "package.json")]: JSON.stringify({ type: "module" }),
-  };
-  assert.equal(sdkVersionFrom(path.join(root, "dist", "index.js"), (f) => files[f] ?? null), "0.3.314");
-  assert.equal(sdkVersionFrom(path.join("y", "index.js"), () => null), null);
-});
