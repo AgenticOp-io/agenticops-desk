@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { ModelPicker } from "./ModelPicker";
 import type { ImageAttachment, ModelOption, PluginCommand, UsageInfo } from "./vite-env";
 
 export const MODES = [
@@ -399,25 +400,7 @@ export const Composer = forwardRef<
             </option>
           ))}
         </select>
-        <select
-          className="pill"
-          value={props.model}
-          onChange={(e) => props.onModel(e.target.value)}
-          title="Model for this chat's next message"
-        >
-          <option value="">Claude Code · default model</option>
-          {[...new Set(props.models.map((m) => m.group ?? "Claude Code"))].map((group) => (
-            <optgroup key={group} label={group}>
-              {props.models
-                .filter((m) => (m.group ?? "Claude Code") === group)
-                .map((m) => (
-                  <option key={m.value} value={m.value} title={m.description}>
-                    {m.displayName}
-                  </option>
-                ))}
-            </optgroup>
-          ))}
-        </select>
+        <ModelPicker models={props.models} value={props.model} onChange={props.onModel} />
         {props.model === "auto" && props.routedTo && (
           <span className="route-chip" title="The AI Auto used for this chat's latest message">
             → {props.routedTo}

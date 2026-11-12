@@ -1159,6 +1159,41 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
 }
 .pill:hover { border-color: #444; color: #fff; }
 select.pill { appearance: auto; }
+.model-pill { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-caret { font-size: 10px; color: var(--muted); }
+.model-picker { position: fixed; z-index: 45; }
+.model-menu {
+  min-width: 220px;
+  padding: 4px;
+  background: #252526;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.5);
+}
+.model-menu.leaf { max-height: 60vh; overflow-y: auto; }
+.model-row-wrap { position: relative; }
+.model-row-wrap > .model-menu { position: absolute; left: calc(100% + 2px); bottom: -5px; }
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px 7px 6px;
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+.model-row:hover, .model-row.open { background: #2f2f2f; }
+.model-row.current .model-name { color: #fff; font-weight: 600; }
+.model-check { width: 14px; color: var(--accent); flex-shrink: 0; }
+.model-name { flex: 1; }
+.model-arrow { color: var(--muted); font-size: 15px; line-height: 1; }
+.app[data-theme="light"] .model-menu { background: #fff; }
+.app[data-theme="light"] .model-row:hover, .app[data-theme="light"] .model-row.open { background: #ececee; }
+.app[data-theme="light"] .model-row.current .model-name { color: #18181b; }
 .usage { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .usage-meter { width: 46px; height: 4px; border-radius: 2px; background: #333; overflow: hidden; }
 .usage-meter span { display: block; height: 100%; background: #6b9eff; }

@@ -31,7 +31,9 @@ export type ModelOption = {
   displayName: string;
   description?: string;
   group?: string;
+  family?: string;
   needsSetup?: "key" | "models";
+  pinned?: boolean;
 };
 export type ProviderStatus = {
   id: string;

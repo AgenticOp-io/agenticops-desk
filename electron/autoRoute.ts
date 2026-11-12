@@ -48,7 +48,7 @@ export function labelOf(model: string): string {
 
 // Everything Auto could use right now. Local-only privacy keeps it on this computer.
 export function autoAvailable(): string[] {
-  const all = [CLAUDE_DEFAULT, ...listModels().filter((m) => m.value !== AUTO && !m.needsSetup).map((m) => m.value)];
+  const all = [CLAUDE_DEFAULT, ...listModels().filter((m) => m.value !== AUTO && !m.needsSetup && !m.pinned).map((m) => m.value)];
   if (privacyMode() !== "local") return all;
   return all.filter((m) => {
     const d = parseDirectModel(m);

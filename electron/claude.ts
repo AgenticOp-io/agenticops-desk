@@ -16,7 +16,7 @@ import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
 import { loadSettings } from "./settings";
 import { LOCAL_ONLY_MESSAGE, privacyMode, privacyVault, privateAppend, protecting, scrubOutgoing } from "./privacy";
-import { directModelOptions } from "./providers";
+import { directModelOptions, PRESETS } from "./providers";
 import { commandTouchesSecretFile, isSecretFile, mapStrings, wrapCommand } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
 
@@ -86,7 +86,11 @@ export type ModelOption = {
   displayName: string;
   description?: string;
   group?: string;
+  // Submenu inside the group, such as "Opus".
+  family?: string;
   needsSetup?: "key" | "models";
+  // A fixed model version. Auto skips these: they share the sign-in's limits with the default.
+  pinned?: boolean;
 };
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
 
@@ -1097,15 +1101,30 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "haiku", displayName: "Haiku" },
 ];
 
+const FAMILIES = ["Fable", "Opus", "Sonnet", "Haiku"];
+function familyOf(m: ModelOption): string | undefined {
+  const text = `${m.displayName} ${m.value}`.toLowerCase();
+  return FAMILIES.find((f) => text.includes(f.toLowerCase()));
+}
+
 export function listModels(): ModelOption[] {
-  const claudeCode = (modelCache ?? FALLBACK_MODELS).map((m) => ({ ...m, group: "Claude Code" }));
+  const aliases = (modelCache ?? FALLBACK_MODELS).map((m) => ({
+    ...m,
+    displayName: FAMILIES.includes(m.displayName) ? `Latest ${m.displayName}` : m.displayName,
+    group: "Claude Code",
+  }));
+  const versions = (PRESETS.anthropic.models ?? [])
+    .filter((m) => !aliases.some((a) => a.value === m.id))
+    .map((m) => ({ value: m.id, displayName: m.name, group: "Claude Code", pinned: true }));
+  const claudeCode = [...aliases, ...versions].map((m) => ({ ...m, family: familyOf(m) }));
   const auto: ModelOption = {
     value: "auto",
     displayName: "Auto",
     description: "Uses your enabled AIs and moves to the next one on a rate limit, quota, key or outage error",
     group: "Auto",
   };
-  return [auto, ...claudeCode, ...directModelOptions()];
+  const direct = directModelOptions().map((m) => (m.value.startsWith("direct:anthropic:") ? { ...m, family: familyOf(m) } : m));
+  return [auto, ...claudeCode, ...direct];
 }
 
 function toOptions(list: ModelInfo[]): ModelOption[] {
