@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import path from "node:path";
 import { PRESETS, parseDirectModel, providerBaseUrl, providerKey } from "./providers";
 import { lineDiff } from "./pureFeatures";
+import { recordUsage } from "./usageLog";
 
 // Second opinion: after a run changes files, a model from a different provider (any Direct model the
 // user set up) checks the change against what the user actually asked, before the user reads the diff.
@@ -70,6 +71,12 @@ export async function askDirect(
       },
       { signal },
     );
+    recordUsage("anthropic", msg.model, {
+      input: msg.usage.input_tokens ?? 0,
+      output: msg.usage.output_tokens ?? 0,
+      cacheRead: msg.usage.cache_read_input_tokens ?? 0,
+      cacheWrite: msg.usage.cache_creation_input_tokens ?? 0,
+    });
     if (msg.stop_reason === "refusal") return { label, text: "", refused: true };
     return { label, text: msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim() };
   }
@@ -78,5 +85,6 @@ export async function askDirect(
     { model: pick.model, messages: [{ role: "system", content: system }, { role: "user", content: user }] },
     { signal },
   );
+  if (res.usage) recordUsage(pick.provider, pick.model, { input: res.usage.prompt_tokens ?? 0, output: res.usage.completion_tokens ?? 0 });
   return { label, text: res.choices[0]?.message?.content?.trim() ?? "" };
 }

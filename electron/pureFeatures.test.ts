@@ -25,6 +25,31 @@ test("handoff only past the budget and only with a transcript to carry", async (
   assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, RESUME_TTL_MS + 1), false);
 });
 
+test("usage adds up per model, by day, and old days drop out", async () => {
+  const { addUsage, summarizeUsage, percentUsed, USAGE_DAYS } = await import("./pureFeatures.ts");
+  const now = new Date(2026, 10, 11, 22).getTime();
+  const day = 86_400_000;
+  const log = { days: {} };
+  addUsage(log, now - (USAGE_DAYS + 5) * day, "claude-code", "claude-fable-5-1", { input: 999 });
+  addUsage(log, now - 3 * day, "claude-code", "claude-fable-5-1", { cacheWrite: 240_000, output: 8_000, costUsd: 2 });
+  addUsage(log, now, "claude-code", "claude-fable-5-1", { cacheRead: 300_000 });
+  addUsage(log, now, "openai", "gpt-5", { input: 10, output: 5 });
+  assert.equal(Object.keys(log.days).length, 2, "a day older than the window is removed");
+  const rows = summarizeUsage(log, now);
+  const fable = rows.find((r) => r.model === "claude-fable-5-1")!;
+  assert.equal(rows[0], fable, "the busiest model comes first");
+  assert.equal(fable.today.cacheRead, 300_000);
+  assert.equal(fable.week.cacheWrite, 240_000);
+  assert.equal(fable.month.costUsd, 2);
+  assert.equal(fable.daily.at(-1), 300_000);
+  assert.equal(fable.daily.at(-4), 248_000);
+  assert.equal(rows.find((r) => r.source === "openai")!.today.calls, 1);
+  assert.equal(percentUsed(0.42, "fraction"), 42);
+  assert.equal(percentUsed(1, "percent"), 1);
+  assert.equal(percentUsed(140, "percent"), 100);
+  assert.equal(percentUsed(null, "percent"), null);
+});
+
 test("a session brief keeps the ask and the latest reply, and stays short", async () => {
   const { sessionBrief } = await import("./pureFeatures.ts");
   const history = [

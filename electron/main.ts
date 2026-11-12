@@ -22,6 +22,7 @@ import {
   updatePlugin,
 } from "./plugins";
 import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
+import { usageReport } from "./usageLog";
 import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
@@ -38,6 +39,7 @@ import {
   onNotificationClick,
   pendingRuns,
   probeClaude,
+  refreshPlanLimits,
   resumePendingRun,
   revertChanges,
   runClaude,
@@ -967,6 +969,8 @@ ipcMain.handle("claude:login", async () => {
   return true;
 });
 
+ipcMain.handle("usage:get", () => usageReport());
+ipcMain.handle("usage:plan", () => refreshPlanLimits());
 ipcMain.handle("providers:list", () => providerStatus());
 ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
   setProvider(id, patch),

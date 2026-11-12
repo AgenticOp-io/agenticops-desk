@@ -37,6 +37,7 @@ import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./provid
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { loadSettings } from "./settings";
+import { recordUsage } from "./usageLog";
 
 // The Direct engine: AgenticOps Desk's own agent loop, talking straight to a model API instead of Claude Code.
 // It reuses the chat session for approvals, folder trust, change snapshots and stop handling.
@@ -611,8 +612,11 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     const read = u.cache_read_input_tokens ?? 0;
     const wrote = u.cache_creation_input_tokens ?? 0;
     const rate = price?.long && fresh + read + wrote > 100_000 ? price.long : price;
-    if (rate) cost += (fresh * rate.input + wrote * rate.input * 1.25 + read * rate.read + (u.output_tokens ?? 0) * rate.output) / 1e6;
-    sendUsage(ctx, { costUsd: cost, contextTokens: fresh + read + wrote, contextWindow: 1_000_000, model: message.model });
+    const turnCost = rate ? (fresh * rate.input + wrote * rate.input * 1.25 + read * rate.read + (u.output_tokens ?? 0) * rate.output) / 1e6 : 0;
+    cost += turnCost;
+    recordUsage("anthropic", message.model, { input: fresh, output: u.output_tokens ?? 0, cacheRead: read, cacheWrite: wrote, costUsd: turnCost });
+    // The chat's meter adds each event's cost, so send this turn's share, not the run total.
+    sendUsage(ctx, { costUsd: turnCost, contextTokens: fresh + read + wrote, contextWindow: 1_000_000, model: message.model });
 
     if (message.stop_reason === "refusal") {
       messages.push({ role: "assistant", content: message.content });
@@ -725,6 +729,12 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
           if (tc.function?.arguments) slot.args += tc.function.arguments;
         }
         if (chunk.usage) {
+          const cached = (chunk.usage as { prompt_tokens_details?: { cached_tokens?: number } }).prompt_tokens_details?.cached_tokens ?? 0;
+          recordUsage(provider, model, {
+            input: Math.max(0, (chunk.usage.prompt_tokens ?? 0) - cached),
+            cacheRead: cached,
+            output: chunk.usage.completion_tokens ?? 0,
+          });
           sendUsage(ctx, { costUsd: 0, contextTokens: chunk.usage.prompt_tokens ?? 0, contextWindow: 0, model });
         }
       }

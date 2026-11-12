@@ -28,7 +28,7 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 ## The window
 
 - **Messages:** a short note pops up after something you did, such as "Saved CLAUDE.md", and clears after 8 seconds. First-launch download progress shows the same way and stays until the download ends.
-- **Far-left icons:** Inbox (with a count when something waits on you), Briefing, Help and Settings, then the switch between projects and chats or the folder tree.
+- **Top bar:** **Chats** and **Files** switch the sidebar between projects and chats and the folder tree. On the right are **Waiting on you** (the inbox, with a count when something waits on you), **Chat status** (the briefing), **Help** and **Settings**.
 - **Left side:** projects and chats, or the folder tree.
 - **Right side:** the conversation and message box. **Code** opens the editor beside it.
 - **Under the message box:** Terminal, Git, Preview, Instructions and Rules.
@@ -47,6 +47,7 @@ There is no status bar. Sign-in state and the agent engine's state are in **Sett
 | **Chats & projects** | Hidden items, Project cleanup, Where chats live, Import from other tools, and Cursor folders in Git mode |
 | **Engine & sign-in** | Claude Code status, Sign in, Check |
 | **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Spending cap, Auto model |
+| **Usage** | Plan limits, and tokens and cost per engine, provider and model |
 | **Plugins** | Browse, install and manage plugins |
 | **Updates** | Check for a newer release, and Restart to update |
 
@@ -130,6 +131,7 @@ The list has three sections, top to bottom:
 | `/theme`, `/palette`, `/help` | Switch light and dark, open the command palette, open Help |
 - **Agent** edits and runs commands. **Plan** writes a plan and waits. **Auto-edit** applies edits without an extra prompt.
 - The meter shows how full the chat's context is and a rough cost since the window opened.
+- **Settings → Usage** has one card per engine and provider. The Claude sign-in card shows the plan limits, such as the 5-hour session and the weekly limits, with the percent used and when each one resets; **Refresh** reads them again. Each card shows tokens for today, the last 7 days and the last 30 days, with a 14-day chart for each model. Cost appears where the provider reports a price. The first time you open it, the last 30 days are counted from the default engine's session logs. Second-opinion and autocomplete calls count tokens but not cost.
 - **Settings → AI models → Spending cap** stops a run once it has spent $1–$50 (off by default). It covers the default engine and Claude API keys, which report cost; with a Claude sign-in that cost is an estimate. Other providers don't report a price and stop after 80 steps. A capped run leaves a note, and your next message continues the chat.
 
 ## Engines and models
@@ -279,7 +281,7 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 - **Preview:** loads a web address. In a project with a `dev`, `start` or `serve` script, **Run npm run dev** (or the pnpm, yarn or bun form its lockfile names) starts it in the project's terminal and opens the local address it prints. The Terminal tab shows its output, and Restart there stops it.
 - **Instructions:** edits `CLAUDE.md`, `AGENTS.md` and the project's `.mcp.json`.
 - **Rules:** standing orders for the folder: rules added to every run, paths the agent may not edit, and checks that must pass. Checks run on both engines when a run changed files. A failure goes back to the agent with the output, up to the attempt limit you set. A team can commit `.agenticops/orders.json` with rules and protected paths. Any `checks` in that file are ignored, so a cloned repository can't run commands by itself.
-- **Inbox** lists everything waiting on you across chats: a permission request from another chat waits there instead of covering the chat you are in. **Briefing** shows where the last three days of chats stand, and opens by itself when you come back after 8 hours away. **Ctrl+Shift+P** opens the command palette.
+- **Waiting on you** (the inbox) lists everything waiting on you across chats: a permission request from another chat waits there instead of covering the chat you are in. **Chat status** (the briefing) shows where the last three days of chats stand, and opens by itself when you come back after 8 hours away. **Ctrl+Shift+P** opens the command palette.
 - Links in replies, and pages that try to open a new window, open in your browser. The Preview frame is sandboxed and can't take over the app's window.
 
 ## Memory

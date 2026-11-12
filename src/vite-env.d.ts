@@ -21,6 +21,11 @@ export type ApprovalRequest = {
 };
 
 export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type UsageTally = { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number; calls: number };
+export type UsageRow = { source: string; model: string; today: UsageTally; week: UsageTally; month: UsageTally; daily: number[] };
+export type PlanWindow = { id: string; label: string; percent: number | null; resetsAt: number | null };
+export type PlanLimits = { updatedAt: number; subscription: string | null; windows: PlanWindow[]; note?: string };
+export type UsageReport = { rows: UsageRow[]; plan: PlanLimits | null };
 export type ModelOption = {
   value: string;
   displayName: string;
@@ -188,6 +193,8 @@ declare global {
       updateMarketplace: (name?: string) => Promise<PluginResult>;
       autoStatus: () => Promise<AutoStatus>;
       wakeAuto: (model?: string) => Promise<AutoStatus>;
+      usageReport: () => Promise<UsageReport>;
+      refreshPlanLimits: () => Promise<PlanLimits | null>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
       loadProviderModels: (id: string) => Promise<ProviderStatus[]>;

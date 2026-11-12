@@ -113,6 +113,78 @@ export function sessionBrief(history: { role: string; text: string }[] | undefin
   return text.length <= limit ? text : `…${text.slice(-limit)}`;
 }
 
+// Token and cost totals per day, per engine or provider, per model. Kept for USAGE_DAYS days.
+export type UsageTally = { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number; calls: number };
+export type UsageLog = { days: Record<string, Record<string, UsageTally>> };
+export const USAGE_DAYS = 60;
+
+export function usageDay(at: number): string {
+  const d = new Date(at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+export function addUsage(log: UsageLog, at: number, source: string, model: string, add: Partial<UsageTally>): UsageLog {
+  const day = usageDay(at);
+  const key = `${source}|${model || "unknown"}`;
+  const row = ((log.days[day] ??= {})[key] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, calls: 0 });
+  row.input += add.input ?? 0;
+  row.output += add.output ?? 0;
+  row.cacheRead += add.cacheRead ?? 0;
+  row.cacheWrite += add.cacheWrite ?? 0;
+  row.costUsd += add.costUsd ?? 0;
+  row.calls += add.calls ?? 1;
+  const oldest = usageDay(at - USAGE_DAYS * 86_400_000);
+  for (const d of Object.keys(log.days)) if (d < oldest) delete log.days[d];
+  return log;
+}
+
+export type UsageRow = {
+  source: string;
+  model: string;
+  today: UsageTally;
+  week: UsageTally;
+  month: UsageTally;
+  // Tokens per day, oldest first, for the last `span` days.
+  daily: number[];
+};
+
+const tokensOf = (t: UsageTally) => t.input + t.output + t.cacheRead + t.cacheWrite;
+
+export function summarizeUsage(log: UsageLog, now: number, span = 14): UsageRow[] {
+  const zero = (): UsageTally => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, calls: 0 });
+  const plus = (a: UsageTally, b: UsageTally) => {
+    a.input += b.input;
+    a.output += b.output;
+    a.cacheRead += b.cacheRead;
+    a.cacheWrite += b.cacheWrite;
+    a.costUsd += b.costUsd;
+    a.calls += b.calls;
+  };
+  const days = Array.from({ length: 30 }, (_, i) => usageDay(now - i * 86_400_000));
+  const rows = new Map<string, UsageRow>();
+  days.forEach((day, age) => {
+    for (const [key, tally] of Object.entries(log.days[day] ?? {})) {
+      const [source, model] = key.split("|");
+      let row = rows.get(key);
+      if (!row) {
+        row = { source, model, today: zero(), week: zero(), month: zero(), daily: Array(span).fill(0) };
+        rows.set(key, row);
+      }
+      if (age === 0) plus(row.today, tally);
+      if (age < 7) plus(row.week, tally);
+      plus(row.month, tally);
+      if (age < span) row.daily[span - 1 - age] += tokensOf(tally);
+    }
+  });
+  return [...rows.values()].sort((a, b) => tokensOf(b.month) - tokensOf(a.month));
+}
+
+// Plan limits come as 0-1 in stream events and 0-100 from the usage request.
+export function percentUsed(value: number | null | undefined, scale: "fraction" | "percent"): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, scale === "fraction" ? value * 100 : value));
+}
+
 export function contextTokens(usage: {
   input_tokens?: number;
   cache_read_input_tokens?: number;

@@ -122,6 +122,8 @@ contextBridge.exposeInMainWorld("desk", {
   updateMarketplace: (name?: string) => ipcRenderer.invoke("plugins:updateMarketplace", name),
   autoStatus: () => ipcRenderer.invoke("auto:status"),
   wakeAuto: (model?: string) => ipcRenderer.invoke("auto:wake", model),
+  usageReport: () => ipcRenderer.invoke("usage:get"),
+  refreshPlanLimits: () => ipcRenderer.invoke("usage:plan"),
   listProviders: () => ipcRenderer.invoke("providers:list"),
   setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
     ipcRenderer.invoke("providers:set", id, patch),

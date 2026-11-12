@@ -9,7 +9,8 @@ import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials }
 import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { prepareMemory } from "./memory";
-import { contextTokens, HANDOFF_TOKENS, latestContextTokens, RESUME_TTL_MS, sessionBrief, shouldHandOff, turnIsOver } from "./pureFeatures";
+import { contextTokens, HANDOFF_TOKENS, latestContextTokens, percentUsed, RESUME_TTL_MS, sessionBrief, shouldHandOff, turnIsOver } from "./pureFeatures";
+import { recordPlan, recordUsage, type PlanLimits, type PlanWindow } from "./usageLog";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
@@ -142,6 +143,8 @@ type Session = {
   lastContext?: number;
   // When that turn happened, so a later message can tell a warm session from a cold one.
   lastTurnAt?: number;
+  // Per-model totals this run has already written to the usage log.
+  loggedUsage?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number }>;
   // The user's instruction for the current run (kept local), for the "why" trail on changed files.
   lastPrompt?: string;
   // Times a standing-order check has sent this run back to Claude.
@@ -817,6 +820,11 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       }
       const usage = runUsage(msg, session);
       if (usage) send(win, { kind: "usage", usage, chatId, running: true });
+      logRunUsage(msg, session);
+      return;
+    }
+    if (type === "rate_limit_event") {
+      notePlanLimit(msg.rate_limit_info as Record<string, unknown> | undefined);
       return;
     }
   } catch {
@@ -824,7 +832,159 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
   }
 }
 
-type ModelUsageRow = { contextWindow?: number; costUSD?: number };
+type ModelUsageRow = {
+  contextWindow?: number;
+  costUSD?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+};
+
+// A run's result repeats the totals so far, and a guided run can report more than once. Log only what is new.
+function logRunUsage(msg: Record<string, unknown>, session: Session) {
+  const seen = (session.loggedUsage ??= {});
+  for (const [model, row] of Object.entries((msg.modelUsage ?? {}) as Record<string, ModelUsageRow>)) {
+    const now = {
+      input: row.inputTokens ?? 0,
+      output: row.outputTokens ?? 0,
+      cacheRead: row.cacheReadInputTokens ?? 0,
+      cacheWrite: row.cacheCreationInputTokens ?? 0,
+      costUsd: row.costUSD ?? 0,
+    };
+    const before = seen[model] ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 };
+    const add = {
+      input: Math.max(0, now.input - before.input),
+      output: Math.max(0, now.output - before.output),
+      cacheRead: Math.max(0, now.cacheRead - before.cacheRead),
+      cacheWrite: Math.max(0, now.cacheWrite - before.cacheWrite),
+      costUsd: Math.max(0, now.costUsd - before.costUsd),
+    };
+    seen[model] = now;
+    if (add.input + add.output + add.cacheRead + add.cacheWrite > 0) recordUsage("claude-code", model, add);
+  }
+}
+
+const PLAN_LABELS: Record<string, string> = {
+  five_hour: "5-hour window",
+  seven_day: "Weekly, all models",
+  seven_day_opus: "Weekly, Opus",
+  seven_day_sonnet: "Weekly, Sonnet",
+  seven_day_oauth_apps: "Weekly, connected apps",
+  seven_day_overage_included: "Weekly, included extra usage",
+  overage: "Extra usage",
+};
+
+function notePlanLimit(info: Record<string, unknown> | undefined) {
+  const id = typeof info?.rateLimitType === "string" ? info.rateLimitType : "";
+  if (!id) return;
+  const percent = percentUsed(info?.utilization as number | undefined, "fraction");
+  const resetsAt = typeof info?.resetsAt === "number" ? info.resetsAt * 1000 : null;
+  const rejected = info?.status === "rejected";
+  recordPlan((plan) => {
+    const others = plan.windows.filter((w) => w.id !== id);
+    const prior = plan.windows.find((w) => w.id === id);
+    const window = { id, label: PLAN_LABELS[id] ?? id, percent: rejected ? 100 : (percent ?? prior?.percent ?? null), resetsAt: resetsAt ?? prior?.resetsAt ?? null };
+    return { ...plan, updatedAt: Date.now(), windows: [...others, window] };
+  });
+}
+
+type UsageAnswer = {
+  subscription_type?: string | null;
+  rate_limits_available?: boolean;
+  rate_limits?: Record<string, unknown> | null;
+};
+
+function planFromAnswer(answer: UsageAnswer): PlanLimits {
+  const windows: PlanWindow[] = [];
+  const limits = answer.rate_limits ?? {};
+  for (const [id, value] of Object.entries(limits)) {
+    if (id === "model_scoped" && Array.isArray(value)) {
+      for (const row of value as Array<{ display_name?: string; utilization?: number | null; resets_at?: string | null }>) {
+        const name = row.display_name ?? "model";
+        windows.push({
+          id: `model:${name}`,
+          label: `Weekly, ${name}`,
+          percent: percentUsed(row.utilization, "percent"),
+          resetsAt: row.resets_at ? Date.parse(row.resets_at) : null,
+        });
+      }
+      continue;
+    }
+    if (id === "extra_usage") {
+      const extra = value as { is_enabled?: boolean; utilization?: number | null } | null;
+      if (extra?.is_enabled) windows.push({ id, label: "Extra usage this month", percent: percentUsed(extra.utilization, "percent"), resetsAt: null });
+      continue;
+    }
+    const row = value as { utilization?: number | null; resets_at?: string | null } | null;
+    if (!row) continue;
+    windows.push({ id, label: PLAN_LABELS[id] ?? id, percent: percentUsed(row.utilization, "percent"), resetsAt: row.resets_at ? Date.parse(row.resets_at) : null });
+  }
+  return {
+    updatedAt: Date.now(),
+    subscription: answer.subscription_type ?? null,
+    windows,
+    ...(answer.rate_limits_available === false ? { note: "Plan limits apply only to a Claude sign-in, not an API key." } : {}),
+  };
+}
+
+type UsageQuery = Query & { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (o?: { skipBehaviors?: boolean }) => Promise<UsageAnswer> };
+
+// Asks the engine for the plan's limit windows. Uses a running chat if there is one; otherwise starts the engine
+// without a prompt, which sends nothing to the model.
+export async function refreshPlanLimits(): Promise<PlanLimits | null> {
+  const ask = async (q: UsageQuery) => {
+    const fn = q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (typeof fn !== "function") throw new Error("This engine version does not report plan limits.");
+    const answer = await Promise.race([
+      fn.call(q, { skipBehaviors: true }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("The engine did not answer in time.")), 20_000)),
+    ]);
+    return planFromAnswer(answer);
+  };
+  const live = [...sessions.values()].find((s) => s.query && s.engine === "claude")?.query;
+  let plan: PlanLimits;
+  if (live) plan = await ask(live as UsageQuery);
+  else {
+    const exe = await ensureClaudeBinary().catch(() => findClaudeJs() ?? findClaudeCli());
+    const { query } = await loadAgentSdk();
+    const abort = new AbortController();
+    let stop = () => {};
+    const idle = (async function* (): AsyncGenerator<SDKUserMessage> {
+      await new Promise<void>((resolve) => {
+        stop = resolve;
+      });
+    })();
+    const q = query({
+      prompt: idle,
+      options: {
+        cwd: os.homedir(),
+        pathToClaudeCodeExecutable: exe,
+        abortController: abort,
+        env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "AgenticOps-Desk" },
+        spawnClaudeCodeProcess: (spec) =>
+          spawnHidden(spec.command, spec.args, spec.cwd ?? os.homedir(), spec.env as NodeJS.ProcessEnv, spec.signal) as unknown as SpawnedProcess,
+      },
+    }) as UsageQuery;
+    try {
+      plan = await ask(q);
+    } finally {
+      stop();
+      abort.abort();
+      try {
+        q.close();
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+  recordPlan((prev) => {
+    // The request leaves out windows the stream reported (Extra usage, for one). Keep those.
+    const ids = new Set(plan.windows.map((w) => w.id));
+    return { ...plan, windows: [...plan.windows, ...prev.windows.filter((w) => !ids.has(w.id))] };
+  });
+  return plan;
+}
 
 function runUsage(msg: Record<string, unknown>, session: Session): UsageInfo | null {
   const cost = typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0;
@@ -1371,6 +1531,7 @@ export function runClaude(opts: RunOptions) {
   session.decisions = new Map();
   session.stderr = "";
   session.backgroundTasks = 0;
+  session.loggedUsage = {};
 
   const mode = chosenPermissionMode(opts.permissionMode);
   if (!resuming) session.claudeSession = undefined;

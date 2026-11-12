@@ -21,6 +21,7 @@ import { ProjectCleanup } from "./ProjectCleanup";
 import { isStale, projectForChat } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
+import { UsageSettings } from "./UsageSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, BriefingItem, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
@@ -1520,51 +1521,58 @@ export function App() {
           {setupNote || status}
         </div>
       )}
+      <nav className="topbar" aria-label="Main">
+        <div className="topbar-group" role="tablist" aria-label="Sidebar shows">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sideView === "chats"}
+            className={sideView === "chats" ? "on" : ""}
+            title="Show your projects and chats"
+            onClick={() => setSideView("chats")}
+          >
+            <Glyph name="chats" />
+            <span>Chats</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sideView === "files"}
+            className={sideView === "files" ? "on" : ""}
+            title="Show the project's files (Ctrl+Shift+E)"
+            onClick={() => setSideView("files")}
+          >
+            <Glyph name="files" />
+            <span>Files</span>
+          </button>
+        </div>
+        <div className="topbar-group">
+          <button
+            type="button"
+            className={inboxOpen ? "on" : ""}
+            title={pendingApprovals.length ? `Everything waiting on you (${pendingApprovals.length})` : "Everything waiting on you, across all chats"}
+            onClick={() => setInboxOpen((v) => !v)}
+          >
+            <Glyph name="inbox" />
+            <span>Waiting on you</span>
+            {pendingApprovals.length > 0 && <span className="topbar-badge">{pendingApprovals.length}</span>}
+          </button>
+          <button type="button" title="Where every recent chat stands" onClick={showBriefing}>
+            <Glyph name="briefing" />
+            <span>Chat status</span>
+          </button>
+          <button type="button" title="Help (F1)" onClick={() => setShowHelp(true)}>
+            <Glyph name="help" />
+            <span>Help</span>
+          </button>
+          <button type="button" title="Settings" onClick={() => { setSettingsSection(""); setShowSettings(true); }}>
+            <Glyph name="settings" />
+            <span>Settings</span>
+          </button>
+        </div>
+      </nav>
       <div className="workspace">
         <aside className="sidebar">
-          <nav className="rail" aria-label="Sidebar">
-            <button
-              type="button"
-              className={inboxOpen ? "on" : ""}
-              title={pendingApprovals.length ? `Everything waiting on you (${pendingApprovals.length})` : "Everything waiting on you, across all chats"}
-              aria-label="Inbox"
-              onClick={() => setInboxOpen((v) => !v)}
-            >
-              <Glyph name="inbox" />
-              {pendingApprovals.length > 0 && <span className="rail-badge">{pendingApprovals.length}</span>}
-            </button>
-            <button type="button" title="Where every recent chat stands" aria-label="Briefing" onClick={showBriefing}>
-              <Glyph name="briefing" />
-            </button>
-            <button type="button" title="Help (F1)" aria-label="Help" onClick={() => setShowHelp(true)}>
-              <Glyph name="help" />
-            </button>
-            <button
-              type="button"
-              title="Settings"
-              aria-label="Settings"
-              onClick={() => { setSettingsSection(""); setShowSettings(true); }}
-            >
-              <Glyph name="settings" />
-            </button>
-            <span className="rail-sep" />
-            <button
-              type="button"
-              className={sideView === "chats" ? "on" : ""}
-              title="Chats"
-              onClick={() => setSideView("chats")}
-            >
-              <Glyph name="chats" />
-            </button>
-            <button
-              type="button"
-              className={sideView === "files" ? "on" : ""}
-              title="Files (Ctrl+Shift+E)"
-              onClick={() => setSideView("files")}
-            >
-              <Glyph name="files" />
-            </button>
-          </nav>
           <div className="side-panel">
           {sideView === "files" ? (
             <Explorer
@@ -2548,6 +2556,8 @@ export function App() {
                   </>
                 )}
 
+                {settingsSection === "usage" && <UsageSettings />}
+
                 {settingsSection === "plugins" && (
                   <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
                 )}
@@ -2624,6 +2634,10 @@ export function App() {
                 <button className="settings-entry" onClick={() => setSettingsSection("models")}>
                   <strong>AI models</strong>
                   <span>Providers, second opinion, autocomplete, Auto</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("usage")}>
+                  <strong>Usage</strong>
+                  <span>Plan limits, and tokens per engine, provider and model</span>
                 </button>
                 <button className="settings-entry" onClick={() => setSettingsSection("plugins")}>
                   <strong>Plugins</strong>

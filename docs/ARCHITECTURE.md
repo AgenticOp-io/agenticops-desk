@@ -75,6 +75,7 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `sync-config.json`, `desk-sync\` | Sync address and its working clone | n/a |
 | `allows.json` | Folder trust | No |
 | `claude-sessions.json`, `direct\` | Engine session state and Direct history | No |
+| `usage.json` | Tokens and cost per day, source and model (60 days), plus the last plan-limit reading (`usageLog.ts`) | No |
 | `claude-code\` | Downloaded agent SDK (`sdk.mjs`) and binary, per SDK version | No |
 | `orders\`, `watches.json`, `provenance.json` | Standing orders, log watches, file origins | No |
 | `cursor-archive\`, `cursor-converted.json`, `cursor-import.json` | Cursor import state | Partly, by Cursor mode |
