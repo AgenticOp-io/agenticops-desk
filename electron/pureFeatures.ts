@@ -696,24 +696,6 @@ export function cleanupProposals(rows: CleanupRow[]): CleanupProposal[] {
   return out;
 }
 
-export function copiesToDrop(rows: Array<{ id: string; key: string; at: number }>): string[] {
-  const best = new Map<string, { id: string; at: number }>();
-  const drop: string[] = [];
-  for (const row of rows) {
-    if (!row.key) continue;
-    const cur = best.get(row.key);
-    if (!cur) {
-      best.set(row.key, { id: row.id, at: row.at });
-      continue;
-    }
-    if (row.at > cur.at) {
-      drop.push(cur.id);
-      best.set(row.key, { id: row.id, at: row.at });
-    } else drop.push(row.id);
-  }
-  return drop;
-}
-
 // A project with no folder and no chats is leftover from a scan. A live empty folder stays, so a new project can.
 export function emptyGoneProjectIds(rows: Array<{ id: string; exists: boolean; chats: number }>): string[] {
   return rows.filter((row) => !row.exists && row.chats === 0).map((row) => row.id);

@@ -1,12 +1,28 @@
-// An open project shows its most recently used chats plus any that must stay in view, in the project's own order.
-export function collapsedChats<T extends { id: string; updatedAt: number; lastUsedAt?: number }>(
-  chats: T[],
-  limit: number,
-  mustShow: (chat: T) => boolean,
-): T[] {
-  const used = (c: T) => c.lastUsedAt ?? c.updatedAt;
-  const recent = new Set([...chats].sort((a, b) => used(b) - used(a)).slice(0, limit).map((c) => c.id));
-  return chats.filter((c) => recent.has(c.id) || mustShow(c));
+// Same folder, whatever slash or trailing separator the two sides used.
+export function normPath(p: string): string {
+  return p.replace(/[\\/]+/g, "\\").replace(/\\+$/, "").toLowerCase();
+}
+
+// A chat stays on the project it was filed under. The path is only a fallback, and a slug is used only when one
+// project has it: two checkouts of the same name must not steal each other's chats.
+export function projectForChat<T extends { id?: string; path: string; slug: string }>(
+  projects: T[],
+  chat: { projectId?: string; projectPath?: string | null; slug: string },
+): T | undefined {
+  const id = chat.projectId?.toLowerCase();
+  if (id) {
+    const hit = projects.find((p) => p.id?.toLowerCase() === id);
+    if (hit) return hit;
+  }
+  if (chat.projectPath) {
+    const key = normPath(chat.projectPath);
+    const hit = projects.find((p) => p.path && normPath(p.path) === key);
+    if (hit) return hit;
+  }
+  const slug = chat.slug.toLowerCase();
+  if (!slug) return undefined;
+  const hits = projects.filter((p) => p.slug.toLowerCase() === slug);
+  return hits.length === 1 ? hits[0] : undefined;
 }
 
 // Unopened for about three months: its project moves to the archive row in the sidebar.

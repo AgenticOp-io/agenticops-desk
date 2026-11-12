@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChangesBar } from "./ChangesBar";
-import { appendStep, appendText, Conversation, type TranscriptMsg } from "./Conversation";
+import { appendStep, appendText, appendThinking, Conversation, type TranscriptMsg } from "./Conversation";
 import type { DiffView } from "./CodePane";
 import { Windowed } from "./Windowed";
 
@@ -18,7 +18,7 @@ import { ChatStorage } from "./ChatStorage";
 import { SavedLogins } from "./SavedLogins";
 import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
-import { collapsedChats, isStale } from "./sideChats";
+import { isStale, projectForChat } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { extractCodeBlocks } from "./codeBlocks";
@@ -50,8 +50,6 @@ type SideGroup = { key: string; name: string; path: string; slug: string; exists
 type SideRow =
   | { kind: "project"; id: string; group: SideGroup }
   | { kind: "chat"; id: string; group: SideGroup; chat: CursorChat }
-  | { kind: "more"; id: string; group: SideGroup; count: number }
-  | { kind: "less"; id: string; group: SideGroup }
   | { kind: "note"; id: string; text: string }
   | { kind: "other"; id: string; count: number; open: boolean };
 
@@ -59,8 +57,7 @@ type SideRow =
 function sideRowHeight(row: SideRow, font: number) {
   if (row.kind === "chat") return Math.ceil(font * 2.5) + 18;
   if (row.kind === "project") return Math.ceil(font * 1.35) + 18;
-  if (row.kind === "note" || row.kind === "other") return 32;
-  return 28;
+  return 32;
 }
 type Tab = { path: string; name: string; contents: string; dirty: boolean };
 type RunProgress = { status: string; steps: string[]; phase?: RunPhase };
@@ -291,7 +288,6 @@ export function App() {
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [otherOpen, setOtherOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  const [allChats, setAllChats] = useState<Set<string>>(() => new Set());
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
@@ -544,6 +540,13 @@ export function App() {
           };
         });
         patchThread(chatId, (m) => appendStep(m, ev.text ?? ""));
+      }
+      if (ev.kind === "thinking" && ev.text) {
+        setProgressByChat((p) => ({
+          ...p,
+          [chatId]: { status: "Thinking…", steps: p[chatId]?.steps ?? [], phase: "thinking" },
+        }));
+        patchThread(chatId, (m) => appendThinking(m, ev.text ?? ""));
       }
       if (ev.kind === "line" && ev.text) {
         setProgressByChat((p) => ({
@@ -1285,12 +1288,11 @@ export function App() {
       });
     }
     for (const c of chats) {
-      const pathKey = (c.projectPath || "").toLowerCase();
-      const slugKey = c.slug.toLowerCase();
+      const owner = projectForChat(projects, c);
+      const ownerKey = owner ? (owner.path || owner.id || owner.slug).toLowerCase() : "";
+      const slugKey = c.slug.toLowerCase() || c.id;
       const g =
-        (pathKey && map.get(pathKey)) ||
-        (c.projectId && map.get(c.projectId.toLowerCase())) ||
-        map.get(slugKey) ||
+        (ownerKey && map.get(ownerKey)) ||
         put(slugKey, {
           key: slugKey,
           name: c.projectPath || c.projectId ? c.projectName : "No project",
@@ -1316,6 +1318,14 @@ export function App() {
       } else {
         g.chats.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt);
       }
+    }
+    // Two checkouts with the same folder name stay separate, and the parent folder tells them apart.
+    const nameCount = new Map<string, number>();
+    for (const g of map.values()) nameCount.set(g.name, (nameCount.get(g.name) ?? 0) + 1);
+    for (const g of map.values()) {
+      if ((nameCount.get(g.name) ?? 0) < 2 || !g.path) continue;
+      const parent = g.path.split(/[\\/]/).filter(Boolean).at(-2);
+      if (parent) g.name = `${g.name} · ${parent}`;
     }
     let list = [...map.values()];
     if (q) {
@@ -1378,8 +1388,9 @@ export function App() {
   };
   const bringOut = (key: string) => {
     markArchive(key, Date.now());
-    // A project that is not on GitHub comes back under Other folders, so that row opens to show where it went.
-    if (!groups.find((g) => g.key === key)?.github) setOtherOpen(true);
+    // A folder with no chats comes back under Other folders, so that row opens to show where it went.
+    const back = groups.find((g) => g.key === key);
+    if (back && !back.github && back.chats.length === 0) setOtherOpen(true);
   };
   const sideHeight = useMemo(() => (row: SideRow) => sideRowHeight(row, prefs.itemFont), [prefs.itemFont]);
   const sideRows = useMemo(() => {
@@ -1387,26 +1398,22 @@ export function App() {
     const pushGroup = (g: (typeof visibleGroups)[number]) => {
       const current = samePath(g.path, workspace);
       const opened = Boolean(q) || Boolean(prefs.expanded[g.key]);
-      const every = Boolean(q) || allChats.has(g.key);
       const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
-      // A closed project is one row, so a long list of folders is easy to scan. An open one shows its recent chats.
-      const visibleChats = !opened
-        ? []
-        : every
-          ? liveChats
-          : collapsedChats(liveChats, 5, (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id);
-      const hiddenCount = opened ? liveChats.length - visibleChats.length : 0;
+      // A closed project is one row, so a long list of folders is easy to scan. An open one keeps every chat.
+      const visibleChats = opened ? liveChats : [];
       rows.push({ kind: "project", id: `p:${g.key}`, group: g });
       for (const c of visibleChats) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
-      if (hiddenCount > 0) rows.push({ kind: "more", id: `more:${g.key}`, group: g, count: hiddenCount });
-      if (opened && !q && every && liveChats.length > 5) rows.push({ kind: "less", id: `less:${g.key}`, group: g });
       if (liveChats.length === 0 && (opened || current)) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
     };
-    // A search shows every match. Otherwise GitHub projects stay in the list, and the rest sit behind one row.
+    // A search shows every match. Otherwise GitHub projects and any project that still has chats stay in the list.
     const inUse = (g: (typeof visibleGroups)[number]) =>
       samePath(g.path, workspace) || g.chats.some((c) => runningByChat[c.id] || c.id === activeChat?.id);
     const archived = q ? [] : visibleGroups.filter((g) => archivedKeys.has(g.key));
-    const primary = q ? visibleGroups : visibleGroups.filter((g) => !archivedKeys.has(g.key) && (g.github || inUse(g)));
+    const primary = q
+      ? visibleGroups
+      : visibleGroups.filter(
+          (g) => !archivedKeys.has(g.key) && (g.github || g.chats.some((c) => !hiddenChatSet.has(c.id)) || inUse(g)),
+        );
     const rest = q ? [] : visibleGroups.filter((g) => !primary.includes(g) && !archived.includes(g));
     for (const g of primary) pushGroup(g);
     if (rest.length) {
@@ -1419,7 +1426,7 @@ export function App() {
       if (archiveOpen) for (const g of archived) pushGroup(g);
     }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, allChats, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen]);
+  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen]);
 
   // A newly opened chat shows in the list, once: collapsing its project afterwards stays collapsed.
   const shownChat = useRef<string | null>(null);
@@ -1647,40 +1654,6 @@ export function App() {
                     }}
                   >
                     {row.open ? "Hide" : "Show"} {row.id === "archive" ? `archive (${row.count})` : `${row.count} other folder${row.count === 1 ? "" : "s"}`}
-                  </button>
-                );
-              }
-              if (row.kind === "more") {
-                const g = row.group;
-                return (
-                  <button
-                    type="button"
-                    className="more-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAllChats((all) => new Set(all).add(g.key));
-                    }}
-                  >
-                    {row.count} more
-                  </button>
-                );
-              }
-              if (row.kind === "less") {
-                const g = row.group;
-                return (
-                  <button
-                    type="button"
-                    className="more-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAllChats((all) => {
-                        const next = new Set(all);
-                        next.delete(g.key);
-                        return next;
-                      });
-                    }}
-                  >
-                    Show less
                   </button>
                 );
               }

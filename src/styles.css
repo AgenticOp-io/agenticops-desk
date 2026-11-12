@@ -1470,6 +1470,27 @@ select.pill { appearance: auto; }
 .app[data-theme="light"] .work { background: #f4f4f5; border-color: #e4e4e7; }
 .app[data-theme="light"] .work.live { background: #f0fdf4; border-color: #bbf7d0; }
 
+.thought {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+.thought.live { border-color: color-mix(in srgb, var(--text) 18%, transparent); }
+.thought-body {
+  margin-top: 6px;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-ui);
+  font-size: calc(var(--window-font) * 0.86);
+  line-height: 1.55;
+  color: var(--muted);
+}
+.app[data-theme="light"] .thought { background: #f4f4f5; border-color: #e4e4e7; }
+
 /* Decisions inbox: a side panel, not a modal, so the app stays usable while it is open. */
 .inbox {
   position: fixed;

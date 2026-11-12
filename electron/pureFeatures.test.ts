@@ -299,14 +299,8 @@ test("synced projects attach by remote only when there is no doubt", async () =>
   assert.deepEqual(matchSyncedProjects([{ id: "l" }], [{ id: "x", name: "R", remotes: [] }]), {});
 });
 
-test("duplicate chats keep the one used last, and an empty folder that is gone can leave", async () => {
-  const { copiesToDrop, emptyGoneProjectIds } = await import("./pureFeatures.ts");
-  assert.deepEqual(copiesToDrop([
-    { id: "old", key: "same", at: 1 },
-    { id: "new", key: "same", at: 5 },
-    { id: "only", key: "other", at: 1 },
-    { id: "blank", key: "", at: 9 },
-  ]), ["old"]);
+test("an empty folder that is gone can leave, and one that still has chats stays", async () => {
+  const { emptyGoneProjectIds } = await import("./pureFeatures.ts");
   assert.deepEqual(emptyGoneProjectIds([
     { id: "ghost", exists: false, chats: 0 },
     { id: "kept", exists: false, chats: 2 },
@@ -361,19 +355,21 @@ test("Cursor's folders stay unless every copy worked and Cursor is closed", asyn
   assert.match(cursorRemovalRefusal({ mode: "github", running: false, errors: ["chat: disk full"] })!, /disk full/);
 });
 
-test("a collapsed project shows the last used chat, plus any that must stay in view", async () => {
-  const { collapsedChats } = await import("../src/sideChats.ts");
-  const chats = [
-    { id: "pinned-old", updatedAt: 1 },
-    { id: "newest-update", updatedAt: 50, lastUsedAt: 2 },
-    { id: "last-used", updatedAt: 3, lastUsedAt: 90 },
-    { id: "running", updatedAt: 4 },
+test("a chat stays on its project even when the path spelling differs", async () => {
+  const { projectForChat } = await import("../src/sideChats.ts");
+  const projects = [
+    { id: "desk", path: "C:\\Users\\user\\projects\\my-app", slug: "c-users-user-projects-my-app" },
+    { id: "other-work", path: "C:\\Users\\user\\work\\other-app", slug: "c-work-other" },
+    { id: "other-projects", path: "C:\\Users\\user\\projects\\other-app", slug: "c-projects-other" },
   ];
-  const ids = (limit: number, must: string[] = []) => collapsedChats(chats, limit, (c) => must.includes(c.id)).map((c) => c.id);
-  assert.deepEqual(ids(1), ["last-used"]);
-  assert.deepEqual(ids(1, ["running"]), ["last-used", "running"]);
-  assert.deepEqual(ids(5), ["pinned-old", "newest-update", "last-used", "running"]);
-  assert.deepEqual(collapsedChats([], 1, () => true), []);
+  assert.equal(projectForChat(projects, { projectId: "desk", projectPath: "C:/Users/user/projects/my-app/", slug: "other" })?.id, "desk");
+  assert.equal(projectForChat(projects, { projectPath: "c:/users/user/projects/my-app", slug: "c-projects-other" })?.id, "desk");
+  assert.equal(projectForChat(projects, { slug: "c-work-other" })?.id, "other-work");
+  assert.equal(
+    projectForChat([...projects, { id: "copy", path: "D:\\other-app", slug: "c-work-other" }], { slug: "c-work-other" }),
+    undefined,
+  );
+  assert.equal(projectForChat(projects, { projectId: "missing", projectPath: null, slug: "" }), undefined);
 });
 
 test("a chat opened after an empty one still shows its rounds", async () => {

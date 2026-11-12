@@ -1,11 +1,11 @@
 import { app } from "electron";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listCursorChats, listCursorProjects, slugFromPath, type CursorChat, type CursorProject } from "./cursor";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
-import { cleanupProposals, copiesToDrop, emptyGoneProjectIds, mergeRemotes, remoteKey, type CleanupProposal, type SyncProject } from "./pureFeatures";
+import { cleanupProposals, emptyGoneProjectIds, mergeRemotes, remoteKey, type CleanupProposal, type SyncProject } from "./pureFeatures";
 
 export type ProjectRecord = CursorProject & { lastUsedAt: number };
 
@@ -378,51 +378,26 @@ function hydrate(lib: Library): Library {
   return lib;
 }
 
-// Same transcript saved under several chats, and projects whose folder and chats are both gone.
-// The kept chat is unchanged. A copy of library.json is saved the first time anything is removed.
+// A project whose folder and chats are both gone. Chats are never removed here: an earlier pass deleted
+// identical transcripts, and that threw away conversations the user still wanted.
 async function tidyLibrary(lib: Library): Promise<boolean> {
-  const rows: Array<{ id: string; key: string; at: number }> = [];
-  for (const chat of lib.chats) {
-    let key = "";
-    // A branch starts as an exact copy on purpose, and blank chats match without being copies of anything.
-    if (!chat.parentId) {
-      try {
-        const bytes = await fs.readFile(threadFile(chat.id));
-        if (bytes.toString("utf8").trim() !== "[]") key = createHash("sha256").update(bytes).digest("hex");
-      } catch {
-        key = "";
-      }
-    }
-    rows.push({ id: chat.id, key, at: chat.lastUsedAt ?? chat.updatedAt ?? 0 });
-  }
-  const drop = new Set(copiesToDrop(rows));
   const counts = new Map<string, number>();
-  for (const chat of lib.chats) if (chat.projectId && !drop.has(chat.id)) counts.set(chat.projectId, (counts.get(chat.projectId) ?? 0) + 1);
+  for (const chat of lib.chats) if (chat.projectId) counts.set(chat.projectId, (counts.get(chat.projectId) ?? 0) + 1);
   const ghosts = new Set(
     emptyGoneProjectIds(lib.added.map((row) => ({ id: row.id, exists: Boolean(row.path) && existsSync(row.path), chats: counts.get(row.id) ?? 0 }))),
   );
-  if (!drop.size && !ghosts.size) return false;
+  if (!ghosts.size) return false;
   const backup = path.join(app.getPath("userData"), "backups", "library-before-tidy.json");
   if (!existsSync(backup)) {
     await fs.mkdir(path.dirname(backup), { recursive: true });
     await fs.copyFile(libraryFile(), backup).catch(() => undefined);
   }
-  if (drop.size) {
-    lib.chats = lib.chats.filter((chat) => !drop.has(chat.id));
-    for (const id of drop) {
-      if (!lib.deleted.includes(id)) lib.deleted.push(id);
-      delete lib.chatLastUsed[id];
-      await fs.rm(threadFile(id), { force: true }).catch(() => undefined);
-    }
+  for (const row of lib.added) {
+    if (!ghosts.has(row.id) || !row.path) continue;
+    const key = keyOf(row.path);
+    if (!lib.removed.includes(key)) lib.removed.push(key);
   }
-  if (ghosts.size) {
-    for (const row of lib.added) {
-      if (!ghosts.has(row.id) || !row.path) continue;
-      const key = keyOf(row.path);
-      if (!lib.removed.includes(key)) lib.removed.push(key);
-    }
-    lib.added = lib.added.filter((row) => !ghosts.has(row.id));
-  }
+  lib.added = lib.added.filter((row) => !ghosts.has(row.id));
   return true;
 }
 

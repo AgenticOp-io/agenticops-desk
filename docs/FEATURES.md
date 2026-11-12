@@ -58,15 +58,15 @@ The list has three sections, top to bottom:
 
 | Section | What is in it |
 |---|---|
-| Main list | Projects with a GitHub remote, plus whatever is open or running now |
-| **Other folders** | Everything else. One row until you open it |
+| Main list | Projects on GitHub, projects that still have chats, and whatever is open or running now |
+| **Other folders** | Folders with no chats. One row until you open it |
 | **Archive** | Projects not opened for 90 days, and any you moved there |
 
 **Clicking a project**
 
 - Clicking another project goes to the chat you used there last and opens its list.
 - Clicking the project you are in collapses or reopens it. That never changes the chat on screen.
-- An open project shows its five most recent chats, plus any that are running. **N more** and **Show less** change that.
+- An open project lists every chat. Collapsing the project hides those rows; the chats stay, and opening it shows them again. Two folders with the same name show the parent folder after the name.
 
 **Running chats** show one word in the sidebar: Starting, Thinking, Working, Writing, Pushing, or Needs permission. The detail, such as which command is running, stays in the chat header. A collapsed project shows the same word on its row.
 
@@ -91,7 +91,7 @@ The list has three sections, top to bottom:
 - Each chat resumes its own session for about 45 minutes, so a short reply like "yes" keeps its context. After that, or once the context passes 150,000 tokens, the next message does not resume the session. Resuming would resend the whole history, including old file contents and command output. Instead the message carries a short brief: the first request and the latest replies. A note in the chat says so. Project memory still applies, and the agent reads again any file it needs. The size and the time of the last turn are remembered after a restart.
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
-- **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
+- **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. While the model is reasoning, that reasoning streams in the round and folds away when the reply starts. Open **Thought** to read it again. It stays in the chat and is not sent back on the next command. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
 - **Notifications:** when a chat finishes or needs you and the window isn't in front, a desktop notice appears. Clicking it brings the window back, even from the tray.
 - Closing the window while a chat is working hides the app to the tray and keeps going. **Quit** from the tray icon stops it. A run cut off by quitting resumes the next time you send.
 - Closing the window when nothing is running saves open chats first. On macOS the app stays open after its window closes, and a reopened window saves its chats the same way.

@@ -586,6 +586,10 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
       },
       { signal: ctx.signal },
     );
+    stream.on("thinking", (delta) => {
+      if (!delta) return;
+      send(ctx.win, { kind: "thinking", text: delta, phase: "thinking", chatId: ctx.chatId, running: true });
+    });
     stream.on("text", (delta) => {
       if (!lastWasText) {
         sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing the reply…");
@@ -707,6 +711,8 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
           break;
         }
         const delta = chunk.choices[0]?.delta;
+        const thought = delta ? reasoningText(delta) : "";
+        if (thought) send(ctx.win, { kind: "thinking", text: thought, phase: "thinking", chatId: ctx.chatId, running: true });
         if (delta?.content) {
           if (!text) sendPhase(ctx.win, ctx.chatId, ctx.session, "writing", "Writing the reply…");
           text += delta.content;
@@ -772,6 +778,13 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       messages.push({ role: "tool", tool_call_id: id, content: r.text });
     }
   }
+}
+
+function reasoningText(delta: object): string {
+  const row = delta as { reasoning_content?: unknown; reasoning?: unknown };
+  if (typeof row.reasoning_content === "string") return row.reasoning_content;
+  if (typeof row.reasoning === "string") return row.reasoning;
+  return "";
 }
 
 function sendUsage(ctx: Ctx, usage: UsageInfo) {

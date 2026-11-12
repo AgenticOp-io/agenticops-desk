@@ -1,57 +1,15 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { roundsToShow } from "./sideChats";
+import { type TranscriptMsg } from "./transcript";
 
-export type TranscriptPart = { kind: "text"; text: string } | { kind: "step"; text: string };
-export type TranscriptMsg = {
-  role: "user" | "assistant" | "system" | "error";
-  text: string;
-  steer?: boolean;
-  parts?: TranscriptPart[];
-};
-
-const STEP_CAP = 80;
-
-export function appendStep(msgs: TranscriptMsg[], text: string): TranscriptMsg[] {
-  const last = msgs[msgs.length - 1];
-  if (last?.role === "assistant") {
-    const parts = last.parts ?? (last.text ? [{ kind: "text" as const, text: last.text }] : []);
-    const prev = parts[parts.length - 1];
-    if (prev?.kind === "step" && prev.text === text) return msgs;
-    return [...msgs.slice(0, -1), { ...last, parts: capSteps([...parts, { kind: "step", text }]) }];
-  }
-  return [...msgs, { role: "assistant", text: "", parts: [{ kind: "step", text }] }];
-}
-
-export function appendText(msgs: TranscriptMsg[], chunk: string): TranscriptMsg[] {
-  const last = msgs[msgs.length - 1];
-  if (last?.role === "assistant") {
-    const parts = last.parts ? [...last.parts] : last.text ? [{ kind: "text" as const, text: last.text }] : [];
-    const prev = parts[parts.length - 1];
-    if (prev?.kind === "text") parts[parts.length - 1] = { kind: "text", text: prev.text + chunk };
-    else parts.push({ kind: "text", text: chunk });
-    return [...msgs.slice(0, -1), { ...last, text: last.text + chunk, parts }];
-  }
-  return [...msgs, { role: "assistant", text: chunk, parts: [{ kind: "text", text: chunk }] }];
-}
-
-function capSteps(parts: TranscriptPart[]): TranscriptPart[] {
-  let steps = 0;
-  for (const part of parts) if (part.kind === "step") steps += 1;
-  if (steps <= STEP_CAP) return parts;
-  let drop = steps - STEP_CAP;
-  return parts.filter((part) => {
-    if (part.kind === "step" && drop > 0) {
-      drop -= 1;
-      return false;
-    }
-    return true;
-  });
-}
+export type { TranscriptMsg, TranscriptPart } from "./transcript";
+export { appendStep, appendText, appendThinking } from "./transcript";
 
 type Step = { text: string };
 type Piece =
   | { kind: "steps"; steps: Step[] }
+  | { kind: "thought"; text: string }
   | { kind: "text"; text: string }
   | { kind: "steer"; text: string; index: number }
   | { kind: "error"; text: string }
@@ -97,7 +55,9 @@ function buildTurns(msgs: TranscriptMsg[]): Turn[] {
       if (msg.parts?.length) {
         for (const part of msg.parts) {
           if (part.kind === "step") pushStep(part.text);
-          else if (part.text) open().pieces.push({ kind: "text", text: part.text });
+          else if (part.kind === "thinking") {
+            if (part.text) open().pieces.push({ kind: "thought", text: part.text });
+          } else if (part.text) open().pieces.push({ kind: "text", text: part.text });
         }
       } else if (msg.text) {
         open().pieces.push({ kind: "text", text: msg.text });
@@ -156,12 +116,41 @@ function Work({ steps, live, liveStatus }: { steps: Step[]; live: boolean; liveS
   );
 }
 
+function Thought({ text, live }: { text: string; live: boolean }) {
+  const [opened, setOpened] = useState(live);
+  const wasLive = useRef(live);
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (live && !wasLive.current) setOpened(true);
+    if (!live && wasLive.current) setOpened(false);
+    wasLive.current = live;
+  }, [live]);
+  useEffect(() => {
+    const el = body.current;
+    if (live && opened && el) el.scrollTop = el.scrollHeight;
+  }, [text, live, opened]);
+  return (
+    <div className={`thought ${live ? "live" : ""}`}>
+      <button type="button" className="work-toggle" onClick={() => setOpened((value) => !value)}>
+        <span className="work-caret" aria-hidden>{opened ? "▾" : "▸"}</span>
+        <span>{live ? "Thinking" : "Thought"}</span>
+      </button>
+      {opened && (
+        <div className="thought-body" ref={body}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const PAGE = 12;
 
 function turnSignature(turn: Turn) {
   const bits = [String(turn.promptIndex ?? ""), String(turn.prompt?.length ?? 0)];
   for (const piece of turn.pieces) {
     if (piece.kind === "text") bits.push("t", String(piece.text.length), piece.text.slice(-32));
+    else if (piece.kind === "thought") bits.push("h", String(piece.text.length), piece.text.slice(-32));
     else if (piece.kind === "steps") bits.push("s", String(piece.steps.length), piece.steps[piece.steps.length - 1]?.text ?? "");
     else if (piece.kind === "steer") bits.push("g", String(piece.index), String(piece.text.length));
     else bits.push(piece.kind, String(piece.text.length), piece.text.slice(-32));
@@ -186,7 +175,7 @@ const TurnView = memo(function TurnView({
   onBranch: (index: number) => void;
   onReplay: (index: number) => void;
 }) {
-  const waiting = live && turn.pieces.every((piece) => piece.kind !== "steps" && piece.kind !== "text");
+  const waiting = live && turn.pieces.every((piece) => piece.kind !== "steps" && piece.kind !== "text" && piece.kind !== "thought");
   return (
     <section className={`turn ${live ? "live" : ""}`}>
       {turn.prompt !== undefined && turn.promptIndex !== undefined && (
@@ -211,6 +200,9 @@ const TurnView = memo(function TurnView({
               liveStatus={live && trailing ? liveStatus : undefined}
             />
           );
+        }
+        if (piece.kind === "thought") {
+          return <Thought key={`thought-${pieceIndex}`} text={piece.text} live={live && trailing} />;
         }
         if (piece.kind === "text") {
           return (

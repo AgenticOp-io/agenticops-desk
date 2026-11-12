@@ -84,7 +84,7 @@ export type BriefingItem = {
 };
 
 export type ClaudeEvent = {
-  kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan" | "note" | "route";
+  kind: "status" | "line" | "thinking" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan" | "note" | "route";
   model?: string;
   todos?: Array<{ content: string; status: string }>;
   // "changes": files Claude edited in this chat that the user has not kept or undone yet.
