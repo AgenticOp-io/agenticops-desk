@@ -15,6 +15,8 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **AIs checking each other:** with a **Second opinion** model set, a model from another provider reviews every change against your request, and its concerns go back to the agent to fix (up to two rounds).
 
+**Cheaper long chats:** a chat that comes back after a break, or grows past 150,000 tokens, starts a fresh session from a short brief instead of resending its whole history. The brief lists work already verified in the chat, and with a **Summaries** model (**Settings → AI models**) it carries a running summary instead of clipped turns. **Set up local model** there, or the box in the Windows setup, installs Ollama and a free local model and turns this on with no further steps.
+
 **@ symbols:** `@handleLogin` in the message box points the agent at that function's file and line, not just a file.
 
 **Team rules:** commit `.agenticops/orders.json` (`{"rules": [...], "protect": [...]}`) and everyone working in the repo gets the same standing orders. The app only reads it, and ignores any `checks` in it, so a cloned repo cannot make it run commands.

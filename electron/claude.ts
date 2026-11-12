@@ -9,7 +9,19 @@ import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials }
 import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { prepareMemory } from "./memory";
-import { contextTokens, HANDOFF_TOKENS, latestContextTokens, percentUsed, RESUME_TTL_MS, sessionBrief, shouldHandOff, turnIsOver } from "./pureFeatures";
+import { capsulesBrief, chatSummary, forgetCapsules, recordCapsule, summarizeRun } from "./capsules";
+import {
+  contextTokens,
+  gateCommand,
+  gatePassed,
+  HANDOFF_TOKENS,
+  latestContextTokens,
+  percentUsed,
+  RESUME_TTL_MS,
+  sessionBrief,
+  shouldHandOff,
+  turnIsOver,
+} from "./pureFeatures";
 import { recordPlan, recordUsage, type PlanLimits, type PlanWindow } from "./usageLog";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
@@ -153,6 +165,10 @@ type Session = {
   lastPrompt?: string;
   // Times a standing-order check has sent this run back to Claude.
   fixAttempts?: number;
+  // This run's check commands by tool call id, the ones that passed, and the final reply: its capsule.
+  gateCalls?: Map<string, string>;
+  passedGates?: string[];
+  finalText?: string;
 };
 
 // What survives a restart: the CLI session to resume, and any run that was cut off mid-flight.
@@ -301,6 +317,7 @@ function deliver(win: BrowserWindow | null, event: ClaudeEvent) {
 
 export function forgetSession(chatId: string) {
   clearClaudeSession(chatId, sessionFor(chatId));
+  forgetCapsules(chatId);
 }
 
 function noteStructured(win: BrowserWindow | null, chatId: string, name: string, input: unknown) {
@@ -637,6 +654,10 @@ function announceTool(
   input: unknown,
   id?: string,
 ) {
+  const gate = gateCommand(name, input);
+  if (gate && id) (session.gateCalls ??= new Map()).set(id, gate);
+  // A check proves only the code it ran on; an edit after it needs a new one.
+  if (/^(Edit|MultiEdit|Write|NotebookEdit)$/.test(name)) session.passedGates = [];
   if (id && session.announcedTools?.has(id)) return;
   if (id) {
     session.announcedTools ??= new Set();
@@ -809,12 +830,19 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       return;
     }
     if (type === "user") {
+      const results = (msg.message as { content?: unknown } | undefined)?.content;
+      for (const b of Array.isArray(results) ? results : []) {
+        const r = b as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
+        const gate = r.type === "tool_result" && r.tool_use_id ? session.gateCalls?.get(r.tool_use_id) : undefined;
+        if (gate && gatePassed(r)) (session.passedGates ??= []).push(gate);
+      }
       if (!session.approvals.size) sendPhase(win, chatId, session, "thinking", "Thinking…");
       return;
     }
     if (type === "result") {
       const result = typeof msg.result === "string" ? msg.result : "";
       const err = typeof msg.is_error === "boolean" && msg.is_error;
+      if (result && !err) session.finalText = result;
       // The result repeats the final assistant text; only show it if nothing streamed.
       if (result && !err && !session.sawText) send(win, { kind: "line", text: result, sessionId, chatId, running: true });
       if (err && result) send(win, { kind: "error", text: result, sessionId, chatId, running: true });
@@ -1389,14 +1417,20 @@ export function withHistory(prompt: string, history?: HistoryMsg[]): string {
 }
 
 // A resumed session would resend its tool history. Carry the brief instead: a few thousand tokens, not the whole log.
-export function withBrief(prompt: string, history?: HistoryMsg[]): string {
-  const brief = sessionBrief(history);
-  if (!brief) return prompt;
+export function withBrief(prompt: string, history?: HistoryMsg[], verified = "", summary = ""): string {
+  const brief = summary || sessionBrief(history);
+  if (!brief && !verified) return prompt;
   return [
-    "This continues an earlier session. Its working context was not reloaded, so file contents and command output from it are not here. What was said:",
-    "<session>",
-    brief,
-    "</session>",
+    "This continues an earlier session. Its working context was not reloaded, so file contents and command output from it are not here.",
+    ...(verified
+      ? [
+          "Work already verified in this chat (its checks passed and those files are unchanged since; trust it instead of re-checking):",
+          "<verified>",
+          verified,
+          "</verified>",
+        ]
+      : []),
+    ...(brief ? ["What was said:", "<session>", brief, "</session>"] : []),
     "Treat that as where the work stands. Read a file again only if this message needs it. Reply to the user's new message:",
     prompt,
   ].join("\n\n");
@@ -1535,7 +1569,7 @@ export function runClaude(opts: RunOptions) {
   }
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
-  const scrubbed = scrubOutgoing(resuming ? opts.prompt : handOff ? withBrief(opts.prompt, opts.history) : withHistory(opts.prompt, opts.history));
+  const scrubbed = scrubOutgoing(resuming ? opts.prompt : handOff ? withBrief(opts.prompt, opts.history, capsulesBrief(chatId), chatSummary(chatId, opts.history)) : withHistory(opts.prompt, opts.history));
   const prompt = scrubbed.text;
   const cwd = opts.workspace;
   session.workspace = cwd;
@@ -1551,6 +1585,9 @@ export function runClaude(opts: RunOptions) {
   session.stderr = "";
   session.backgroundTasks = 0;
   session.loggedUsage = {};
+  session.gateCalls = new Map();
+  session.passedGates = [];
+  session.finalText = "";
 
   const mode = chosenPermissionMode(opts.permissionMode);
   if (!resuming) session.claudeSession = undefined;
@@ -1875,6 +1912,16 @@ export function runClaude(opts: RunOptions) {
         send(opts.win, { kind: "error", text: failed, chatId, running: false });
       }
       patchStored(chatId, (s) => delete s.pending);
+      if (!failed && !session.stopping) {
+        const capsule = recordCapsule(chatId, {
+          request: opts.reviewRequest ?? opts.prompt,
+          outcome: session.finalText ?? "",
+          gates: session.passedGates ?? [],
+          files: [...session.changes.values()].map((c) => c.path),
+        });
+        const turns = [...(opts.history ?? []), { role: "user", text: opts.prompt }, { role: "assistant", text: session.finalText ?? "" }];
+        void loadSettings().then((s) => (s.summarizer ? summarizeRun(chatId, s.summarizer, turns, capsule) : undefined));
+      }
       send(opts.win, {
         kind: "done",
         running: false,

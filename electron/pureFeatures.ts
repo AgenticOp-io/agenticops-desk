@@ -185,6 +185,81 @@ export function percentUsed(value: number | null | undefined, scale: "fraction" 
   return Math.max(0, Math.min(100, scale === "fraction" ? value * 100 : value));
 }
 
+// Intelligence Shorthand (IS-T3) for chats: what a finished run proved, kept
+// instead of its transcript. Only a run whose checks passed leaves one, and a capsule whose files changed since
+// is dropped (IS demote-on-digest-mismatch), so the next session trusts only what is still true.
+export type Capsule = {
+  at: number;
+  request: string;
+  outcome: string;
+  gates: string[];
+  files: { path: string; digest: string | null }[];
+};
+
+const GATE =
+  /\b(tsc|vitest|jest|pytest|ruff|eslint|cargo (test|build|check)|go (test|build|vet)|node --test|(npm|pnpm|yarn|bun)( run)? (test|check|lint|build|typecheck)\b|git commit|git push)/i;
+
+// A shell call whose success proves something about the work, e.g. "npx tsc --noEmit". Null for anything else.
+export function gateCommand(name: string, input: unknown): string | null {
+  if (!/^(bash|powershell|shell)$/i.test(name)) return null;
+  const command = input && typeof input === "object" ? (input as { command?: unknown }).command : undefined;
+  if (typeof command !== "string") return null;
+  const hit = command.match(GATE);
+  return hit ? hit[0].toLowerCase() : null;
+}
+
+// Did a check's tool result pass? Wrapped commands always "succeed" and report the real code as "[exit code: N]".
+// shortcut: a chain like "tsc; npm test" reports only its last exit code; parse per command if that misleads.
+export function gatePassed(result: { is_error?: boolean; content?: unknown }): boolean {
+  if (result.is_error === true) return false;
+  const c = result.content;
+  const text =
+    typeof c === "string"
+      ? c
+      : Array.isArray(c)
+        ? c.map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : "")).join("\n")
+        : "";
+  const codes = [...text.matchAll(/\[exit code: (-?\d+)\]/g)];
+  return !codes.length || codes[codes.length - 1][1] === "0";
+}
+
+const clipText = (text: string, n: number) => {
+  const t = text.trim().replace(/\s+/g, " ");
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+};
+
+export function makeCapsule(input: {
+  at: number;
+  request: string;
+  outcome: string;
+  gates: string[];
+  files: { path: string; digest: string | null }[];
+}): Capsule | null {
+  if (!input.gates.length || !input.outcome.trim()) return null;
+  return {
+    at: input.at,
+    request: clipText(input.request, 300),
+    outcome: clipText(input.outcome, 700),
+    gates: [...new Set(input.gates)],
+    files: input.files.slice(0, 30),
+  };
+}
+
+// Verified capsules still true on disk, newest last, within `limit` characters.
+export function capsuleBrief(capsules: Capsule[], digestOf: (file: string) => string | null, limit = 3_000): string {
+  const fresh = capsules.filter((c) => c.files.every((f) => digestOf(f.path) === f.digest));
+  const blocks: string[] = [];
+  let size = 0;
+  for (const c of [...fresh].reverse()) {
+    const files = c.files.length ? `\n  Files: ${c.files.map((f) => f.path.split(/[\\/]/).pop()).join(", ")}` : "";
+    const block = `- Asked: ${c.request}\n  Result: ${c.outcome}\n  Passed: ${c.gates.join(", ")}${files}`;
+    if (size + block.length > limit) break;
+    blocks.unshift(block);
+    size += block.length;
+  }
+  return blocks.join("\n");
+}
+
 export function contextTokens(usage: {
   input_tokens?: number;
   cache_read_input_tokens?: number;
@@ -380,12 +455,14 @@ export function chatStorage(value: unknown): ChatStorage | "" {
 }
 
 // What the Windows installer wrote. Anything else is ignored, so a bad file cannot pick a mode.
-export function installChoices(raw: unknown): { storage: ChatStorage; importCursor: boolean; importTools: boolean } | null {
+export function installChoices(
+  raw: unknown,
+): { storage: ChatStorage; importCursor: boolean; importTools: boolean; localModel: boolean } | null {
   if (!raw || typeof raw !== "object") return null;
   const storage = chatStorage((raw as { storage?: unknown }).storage);
   if (!storage) return null;
-  const flags = raw as { importCursor?: unknown; importTools?: unknown };
-  return { storage, importCursor: flags.importCursor === true, importTools: flags.importTools === true };
+  const flags = raw as { importCursor?: unknown; importTools?: unknown; localModel?: unknown };
+  return { storage, importCursor: flags.importCursor === true, importTools: flags.importTools === true, localModel: flags.localModel === true };
 }
 
 export function cursorMode(value: unknown): CursorMode {

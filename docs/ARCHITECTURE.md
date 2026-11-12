@@ -27,6 +27,8 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `preload.ts` | The renderer's whole API |
 | **Engines** | |
 | `claude.ts` | Claude Code runs: streaming, approvals, tool hooks, resume after restart |
+| `capsules.ts` | Verified run records per chat (Intelligence Shorthand IS-T3), fed into the handoff brief; dropped when their files change. Also the running chat summaries the Summaries model writes after each run |
+| `localModel.ts` | One-click local Summaries model: installs Ollama (signature-checked, silent), starts `ollama serve`, pulls the model through `/api/pull`, sets `summarizer`. The installer's box leaves `local-model-setup.json`, which the first normal start consumes |
 | `claudeBinary.ts` | Finds or downloads the agent SDK and the binary for this computer; installers carry neither |
 | `direct.ts` | Own agent loop and tools for API providers |
 | `directMcp.ts` | MCP servers for Direct runs: config from `.mcp.json` and `~/.claude.json`, start, list tools, call, idle stop |
@@ -58,7 +60,7 @@ The renderer's main files: `App.tsx` (sidebar, chat pane, settings), `Composer.t
 
 `boot/boot.mjs` is the packaged entry point. It chooses between the installed code and a patch, and falls back if a patch fails to open a window.
 
-`build/installer.nsh` adds the Windows setup's two pages (where chats live, and importing Cursor and other tools) and runs the app with `--apply-install`.
+`build/installer.nsh` adds the Windows setup's three pages (where chats live, importing Cursor and other tools, and the local Summaries model) and runs the app with `--apply-install`.
 
 ## App data
 
@@ -76,6 +78,9 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `allows.json` | Folder trust | No |
 | `claude-sessions.json`, `direct\` | Engine session state and Direct history | No |
 | `usage.json` | Tokens and cost per day, source and model (60 days), plus the last plan-limit reading (`usageLog.ts`) | No |
+| `capsules.json` | Verified run records per chat (last 12) | No |
+| `chat-summaries.json` | Running summary per chat and how many turns it covers | No |
+| `local-model-setup.json` | Left by the setup's local-model box; the next normal start deletes it and runs `setupLocalModel` | No |
 | `claude-code\` | Downloaded agent SDK (`sdk.mjs`) and binary, per SDK version | No |
 | `orders\`, `watches.json`, `provenance.json` | Standing orders, log watches, file origins | No |
 | `cursor-archive\`, `cursor-converted.json`, `cursor-import.json` | Cursor import state | Partly, by Cursor mode |
@@ -125,10 +130,27 @@ A message sent while a Direct run is going sets `session.guide`. For DeepSeek it
 
 ### Install
 
-1. The setup writes `install-choices.json` (`{"storage":"github"|"hybrid"|"local","importCursor":bool,"importTools":bool}`) and waits on `--apply-install`.
-2. `applyInstallChoices` in `main.ts` reads and deletes the file, imports Cursor or writes the skip marker, imports other tools' chats if asked (`importOtherTools`), runs `ensureGitHubLogin` for Git and Hybrid, then `chooseChatStorage`.
+1. The setup writes `install-choices.json` (`{"storage":"github"|"hybrid"|"local","importCursor":bool,"importTools":bool,"localModel":bool}`) and waits on `--apply-install`.
+2. `applyInstallChoices` in `main.ts` reads and deletes the file, imports Cursor or writes the skip marker, imports other tools' chats if asked (`importOtherTools`), writes `local-model-setup.json` if a local model was asked for, runs `ensureGitHubLogin` for Git and Hybrid, then `chooseChatStorage`.
 3. The result line goes to `install-result.txt` for the setup to print. A non-zero exit stops the setup.
 4. When the app is already open, `--apply-install` can't take the single-instance lock. It leaves the file in place, and the next normal start applies it.
+
+### Handoff brief, capsules and summaries
+
+When a chat starts a fresh session instead of resuming (idle about 45 minutes, or past 150,000 tokens), `withBrief` in `claude.ts` builds the opening message:
+
+1. `capsulesBrief` (`capsules.ts`) lists the chat's verified runs: a run whose checks (type check, tests, lint, build, commit) passed after its last edit leaves a capsule with the request, the outcome and the changed files' hashes. A capsule whose files have changed since is left out.
+2. `chatSummary` returns the chat's running summary if it covers every turn so far; otherwise `sessionBrief` clips the first request and the latest turns.
+3. After each run, with `settings.summarizer` set, `summarizeRun` asks that Direct model (`askDirect`) to merge the new turns into the summary and to shorten a long capsule outcome. Text goes through `scrubOutgoing` first. A failure keeps the plain brief.
+
+### Local model setup
+
+`setupLocalModel` in `localModel.ts`, one at a time, progress sent as `localModel:status`:
+
+1. Find `ollama.exe` (`%LOCALAPPDATA%\Programs\Ollama`). If missing on Windows, download `OllamaSetup.exe` into a fresh temp folder, run it only if `Get-AuthenticodeSignature` says Valid and the signer is `O=Ollama Inc.`, with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`. Other systems must already have Ollama.
+2. Start `ollama serve` detached unless `127.0.0.1:11434/api/version` answers.
+3. Stream `POST /api/pull` for `LOCAL_MODEL` until `success`.
+4. `pullProviderModels("ollama")`, then `patchSettings({ summarizer: "direct:ollama:<model>" })`.
 
 ### Saved login
 

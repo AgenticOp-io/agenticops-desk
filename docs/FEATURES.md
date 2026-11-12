@@ -46,7 +46,7 @@ There is no status bar. Sign-in state and the agent engine's state are in **Sett
 | **Sync** | The sync repository, and what Cursor chats do |
 | **Chats & projects** | Hidden items, Project cleanup, Where chats live, Import from other tools, and Cursor folders in Git mode |
 | **Engine & sign-in** | Claude Code status, Sign in, Check |
-| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Spending cap, Auto model |
+| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Summaries, Spending cap, Auto model |
 | **Usage** | Plan limits, and tokens and cost per engine, provider and model |
 | **Plugins** | Browse, install and manage plugins |
 | **Updates** | Check for a newer release, and Restart to update |
@@ -89,7 +89,7 @@ The list has three sections, top to bottom:
 
 ## Chats
 
-- Each chat resumes its own session for about 45 minutes, so a short reply like "yes" keeps its context. After that, or once the context passes 150,000 tokens, the next message does not resume the session. Resuming would resend the whole history, including old file contents and command output. Instead the message carries a short brief: the first request and the latest replies. A note in the chat says so. Project memory still applies, and the agent reads again any file it needs. The size and the time of the last turn are remembered after a restart.
+- Each chat resumes its own session for about 45 minutes, so a short reply like "yes" keeps its context. After that, or once the context passes 150,000 tokens, the next message does not resume the session. Resuming would resend the whole history, including old file contents and command output. Instead the message carries a short brief: the first request and the latest replies. A note in the chat says so. The brief also lists work already verified in this chat: each run whose checks (type check, tests, lint, build, commit) passed after its last edit leaves a small record of what was asked, the result, and the files it changed. A record is left out once one of those files changes, so the agent trusts only what still holds and does not re-check it. With a **Summaries** model picked (**Settings → AI models → Summaries**), that model updates a short running summary of the chat after each run and shortens each record's result; the brief then carries the summary instead of clipped turns. A local Ollama model does this at no cost, and nothing changes if it is off or fails. **Set up local model** under Summaries (or the box on the installer's last page) does it all in the background: it downloads and silently installs Ollama if it is missing, after checking that Ollama Inc. signed the installer, starts it, downloads qwen2.5-coder 7B (about 5 GB) and picks it for Summaries. Project memory still applies, and the agent reads again any file it needs. The size and the time of the last turn are remembered after a restart.
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
 - **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. While the model is reasoning, that reasoning streams in the round and folds away when the reply starts. Open **Thought** to read it again. It stays in the chat and is not sent back on the next command. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
@@ -222,7 +222,7 @@ Other git hosts work with a pasted https or ssh address, including GitLab subgro
 ## Setting up another computer
 
 1. Install [Git for Windows](https://git-scm.com) and the [GitHub CLI](https://cli.github.com) if you want Git or Hybrid. The setup signs in with `gh auth login`.
-2. Install the app from the release's `-win-setup.exe`. Windows SmartScreen asks once, because the build isn't code-signed: choose **More info → Run anyway**. The setup asks Git, Local, or Hybrid, then whether to import Cursor. Git and Hybrid sign in to GitHub if needed and create the repository.
+2. Install the app from the release's `-win-setup.exe`. Windows SmartScreen asks once, because the build isn't code-signed: choose **More info → Run anyway**. The setup asks Git, Local, or Hybrid, then whether to import Cursor, then whether to set up a free local model for chat summaries (ticked by default). Git and Hybrid sign in to GitHub if needed and create the repository. The local model (Ollama and qwen2.5-coder 7B, about 7 GB with Ollama) downloads in the background once the app first opens; its progress shows under **Settings → AI models → Summaries**. If it fails, for example with no network, press **Set up local model** there to try again.
 3. Sign in under **Settings → Engine & sign-in**.
 4. A computer that skipped the questions can use **Settings → Sync**: leave the address empty and click **Create repository and sync**. It finds your existing repository, so your chats do not split across two.
 5. Your chats, projects and memory come down. Passwords and tokens stay hidden in those chats, because the repository only holds the hidden copy.

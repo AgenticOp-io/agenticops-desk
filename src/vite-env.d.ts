@@ -200,6 +200,9 @@ declare global {
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
       loadProviderModels: (id: string) => Promise<ProviderStatus[]>;
+      localModelStatus: () => Promise<{ running: boolean; text: string; ok?: boolean }>;
+      setupLocalModel: () => Promise<{ running: boolean; text: string; ok?: boolean }>;
+      onLocalModel: (cb: (s: { running: boolean; text: string; ok?: boolean }) => void) => () => void;
       authStatus: () => Promise<{ ok: boolean; raw: string }>;
       runClaude: (payload: {
         prompt: string;

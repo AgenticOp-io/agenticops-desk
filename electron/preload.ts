@@ -128,6 +128,13 @@ contextBridge.exposeInMainWorld("desk", {
   setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
     ipcRenderer.invoke("providers:set", id, patch),
   loadProviderModels: (id: string) => ipcRenderer.invoke("providers:load", id),
+  localModelStatus: () => ipcRenderer.invoke("localModel:status"),
+  setupLocalModel: () => ipcRenderer.invoke("localModel:setup"),
+  onLocalModel: (cb: (s: { running: boolean; text: string; ok?: boolean }) => void) => {
+    const listener = (_: unknown, s: { running: boolean; text: string; ok?: boolean }) => cb(s);
+    ipcRenderer.on("localModel:status", listener);
+    return () => ipcRenderer.removeListener("localModel:status", listener);
+  },
   changedFiles: (chatId: string) => ipcRenderer.invoke("claude:changes", chatId) as Promise<string[]>,
   changeBase: (chatId: string, filePath: string) =>
     ipcRenderer.invoke("claude:changeBase", chatId, filePath) as Promise<string | null>,

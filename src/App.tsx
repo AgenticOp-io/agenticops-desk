@@ -303,6 +303,17 @@ export function App() {
     void window.desk.pluginCommands().then(setPluginCmds).catch(() => {});
   }, []);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [localModel, setLocalModel] = useState<{ running: boolean; text: string; ok?: boolean }>({ running: false, text: "" });
+  useEffect(() => {
+    void window.desk.localModelStatus().then(setLocalModel);
+    return window.desk.onLocalModel((s) => {
+      setLocalModel(s);
+      if (!s.ok) return;
+      // The main process turned Summaries on; show it here without saving it back.
+      void window.desk.listModels().then((list) => list.length && setModels(list));
+      void window.desk.getSettings().then((p) => setPrefs((cur) => ({ ...cur, summarizer: p.summarizer })));
+    });
+  }, []);
   const [usageByChat, setUsageByChat] = useState<Record<string, UsageInfo>>({});
   const [changesByChat, setChangesByChat] = useState<Record<string, string[]>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
@@ -2540,6 +2551,43 @@ export function App() {
                     {!models.some((m) => m.value.startsWith("direct:") && !m.needsSetup) && (
                       <p className="settings-hint">Needs a Direct provider: a Claude API key (Haiku is fast and cheap) or a local Ollama model.</p>
                     )}
+                    <div className="settings-label">Summaries</div>
+                    <label className="settings-row">
+                      <span>
+                        After each run, this model updates a short summary of the chat and of what the run proved. When a long or idle chat
+                        starts a fresh session, it gets that summary instead of clipped turns. A local Ollama model costs nothing.
+                      </span>
+                      <select value={prefs.summarizer} onChange={(e) => patchPrefs({ summarizer: e.target.value })}>
+                        <option value="">Off</option>
+                        {models
+                          .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
+                          .map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.group?.replace(/^Direct · /, "")} · {m.displayName}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <div className="settings-row">
+                      <span>
+                        Set up a free local model: installs Ollama if it is missing, downloads qwen2.5-coder 7B (about 5 GB), and picks it
+                        here. It runs in the background.
+                        {localModel.text && (
+                          <span className="settings-hint" role="status">
+                            {" "}
+                            {localModel.text}
+                          </span>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={localModel.running}
+                        onClick={() => void window.desk.setupLocalModel()}
+                      >
+                        {localModel.running ? "Setting up…" : localModel.ok ? "Set up again" : "Set up local model"}
+                      </button>
+                    </div>
                     <div className="settings-label">Spending cap</div>
                     <label className="settings-row">
                       <span>Stop a run once it has spent this much. Covers the default engine and Claude API keys; other providers don't report a price and stop after 80 steps. With a Claude sign-in the cost is an estimate.</span>

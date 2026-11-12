@@ -77,6 +77,7 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
+import { localModelStatus, pendingSetupFile, setupLocalModel, type LocalModelStatus } from "./localModel";
 import { carryProjectMemory } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { canInstallUpdate, confirmPatch, installFullUpdate, updateCode } from "./patcher";
@@ -133,6 +134,7 @@ function dataFolder() {
 }
 
 let win: BrowserWindow | null = null;
+const sendLocalModel = (s: LocalModelStatus) => win?.webContents.send("localModel:status", s);
 let workspace = process.cwd();
 let watcher: FSWatcher | null = null;
 let tray: Tray | null = null;
@@ -413,6 +415,8 @@ async function applyInstallChoices(): Promise<number> {
     await importOtherTools().catch((err) => console.error("AgenticOps Desk could not import other tools' chats", err));
     await flushLibrary();
   }
+  // Several GB to download, so the first normal start does it in the background instead of holding the installer.
+  if (choices.localModel) await fs.writeFile(pendingSetupFile(), "{}", "utf8").catch(() => undefined);
   if (choices.storage !== "local") {
     const login = await ensureGitHubLogin();
     if (!login.ok) {
@@ -506,6 +510,11 @@ app.whenReady().then(async () => {
   });
   onNotificationClick(() => showWindow());
   createWindow();
+  if (existsSync(pendingSetupFile())) {
+    // Removed first, so a setup that fails is retried from Settings, not on every start.
+    await fs.rm(pendingSetupFile(), { force: true }).catch(() => undefined);
+    void setupLocalModel(sendLocalModel);
+  }
   setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
   void convertIfChosen().catch((err) => console.error("AgenticOps Desk could not convert from Cursor", err));
   setInterval(() => void syncNow(), 3 * 60_000);
@@ -979,6 +988,8 @@ ipcMain.handle("providers:load", async (_e, id: string) => {
   await pullProviderModels(String(id ?? ""));
   return providerStatus();
 });
+ipcMain.handle("localModel:status", () => localModelStatus());
+ipcMain.handle("localModel:setup", () => setupLocalModel(sendLocalModel));
 
 ipcMain.handle("claude:auth", async () => {
   const cli = (await ensureClaudeBinary().catch(() => null)) ?? findClaudeCli();

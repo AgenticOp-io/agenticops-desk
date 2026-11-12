@@ -15,9 +15,35 @@
   Var RadioLocal
   Var RadioHybrid
   Var ImportBox
+  Var DeskLocalModel
+  Var LocalModelBox
 
   Page custom DeskStorageCreate DeskStorageLeave
   Page custom DeskImportCreate DeskImportLeave
+  Page custom DeskLocalModelCreate DeskLocalModelLeave
+
+Function DeskLocalModelCreate
+  !insertmacro MUI_HEADER_TEXT "Set up a free local model?" "It writes short chat summaries on this computer, so long chats cost less to continue."
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  ${NSD_CreateCheckbox} 0 0 100% 18u "Install Ollama and download qwen2.5-coder 7B (about 5 GB)"
+  Pop $LocalModelBox
+  ${NSD_Check} $LocalModelBox
+  ${NSD_CreateLabel} 0 24u 100% 36u "The download starts in the background when AgenticOps Desk first opens. You can also do this later in Settings, AI models."
+  Pop $0
+  nsDialogs::Show
+FunctionEnd
+
+Function DeskLocalModelLeave
+  StrCpy $DeskLocalModel "false"
+  ${NSD_GetState} $LocalModelBox $0
+  ${If} $0 = ${BST_CHECKED}
+    StrCpy $DeskLocalModel "true"
+  ${EndIf}
+FunctionEnd
 
 Function DeskStorageCreate
   !insertmacro MUI_HEADER_TEXT "Where should chats be stored?" "Git and Hybrid sync through a private GitHub repository. Local stays on this computer."
@@ -139,8 +165,11 @@ FunctionEnd
     ${If} $DeskImportTools != "true"
       StrCpy $DeskImportTools "false"
     ${EndIf}
+    ${If} $DeskLocalModel != "true"
+      StrCpy $DeskLocalModel "false"
+    ${EndIf}
     FileOpen $1 "$APPDATA\AgenticOps Desk\install-choices.json" w
-    FileWrite $1 "{$\"storage$\":$\"$DeskStorage$\",$\"importCursor$\":$0,$\"importTools$\":$DeskImportTools}"
+    FileWrite $1 "{$\"storage$\":$\"$DeskStorage$\",$\"importCursor$\":$0,$\"importTools$\":$DeskImportTools,$\"localModel$\":$DeskLocalModel}"
     FileClose $1
     ${If} $DeskStorage != "local"
       DetailPrint "Signing in to GitHub, then creating the chat repository..."

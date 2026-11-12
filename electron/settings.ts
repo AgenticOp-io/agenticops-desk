@@ -25,6 +25,8 @@ export type UiPrefs = {
   autoModels: string[];
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
+  // Direct model that writes chat summaries and capsule results after each run; empty uses the plain brief. Per computer.
+  summarizer: string;
   // Stop a run once its cost passes this many dollars; 0 is off. Only engines that report cost can be capped.
   runBudgetUsd: number;
   privacy: "standard" | "protect" | "local";
@@ -54,6 +56,7 @@ const defaults = (): UiPrefs => ({
   reviewer: "",
   autoModels: [],
   autocomplete: "",
+  summarizer: "",
   runBudgetUsd: 0,
   privacy: "protect",
   cursorIntegration: "off",
@@ -99,6 +102,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     theme: r.theme === "light" ? "light" : "dark",
     reviewer: typeof r.reviewer === "string" && r.reviewer.startsWith("direct:") ? r.reviewer : "",
     autocomplete: typeof r.autocomplete === "string" && r.autocomplete.startsWith("direct:") ? r.autocomplete : "",
+    summarizer: typeof r.summarizer === "string" && r.summarizer.startsWith("direct:") ? r.summarizer : "",
     runBudgetUsd: typeof r.runBudgetUsd === "number" && r.runBudgetUsd > 0 && r.runBudgetUsd <= 1000 ? r.runBudgetUsd : 0,
     autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",

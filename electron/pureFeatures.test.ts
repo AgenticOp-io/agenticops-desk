@@ -2,6 +2,30 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chatModelIds, globToRegExp, lineDiff, ownerFromRemote } from "./pureFeatures.ts";
 
+test("run capsules: only checked work, dropped once its files change", async () => {
+  const { capsuleBrief, gateCommand, gatePassed, makeCapsule } = await import("./pureFeatures.ts");
+  assert.equal(gatePassed({ is_error: true, content: "x" }), false);
+  assert.equal(gatePassed({ content: "ok\n[exit code: 2]" }), false);
+  assert.equal(gatePassed({ content: [{ type: "text", text: "Found 0 errors\n[exit code: 0]" }] }), true);
+  assert.equal(gatePassed({ content: "plain output" }), true);
+  assert.equal(gateCommand("PowerShell", { command: "npx tsc --noEmit; npm test" }), "tsc");
+  assert.equal(gateCommand("Bash", { command: "git commit -m x" }), "git commit");
+  assert.equal(gateCommand("Bash", { command: "ls -la" }), null);
+  assert.equal(gateCommand("Read", { command: "tsc" }), null);
+  assert.equal(makeCapsule({ at: 1, request: "fix it", outcome: "done", gates: [], files: [] }), null);
+  const a = makeCapsule({ at: 1, request: "fix resume", outcome: "Fixed in 0.1.26", gates: ["tsc", "tsc"], files: [{ path: "C:/r/a.ts", digest: "d1" }] })!;
+  const b = makeCapsule({ at: 2, request: "add reasoning", outcome: "Streams now", gates: ["node --test"], files: [{ path: "C:/r/b.ts", digest: "d2" }] })!;
+  assert.deepEqual(a.gates, ["tsc"]);
+  const disk: Record<string, string> = { "C:/r/a.ts": "d1", "C:/r/b.ts": "d2" };
+  const brief = capsuleBrief([a, b], (f) => disk[f] ?? null);
+  assert.ok(brief.indexOf("fix resume") < brief.indexOf("add reasoning"));
+  assert.match(brief, /Files: a\.ts/);
+  disk["C:/r/a.ts"] = "changed";
+  const after = capsuleBrief([a, b], (f) => disk[f] ?? null);
+  assert.ok(!after.includes("fix resume") && after.includes("add reasoning"));
+  assert.ok(capsuleBrief([a, b], (f) => disk[f] ?? null, 10) === "");
+});
+
 test("deepseek drops stored reasoning before the next command", async () => {
   const { stripDeepSeekReasoning } = await import("./pureFeatures.ts");
   const messages = [
@@ -691,9 +715,10 @@ test("a shortcut inside the folder cannot point a file outside it", async () => 
 
 test("the installer choice is Git, Local, or Hybrid, and import is only an explicit yes", async () => {
   const { installChoices } = await import("./pureFeatures.ts");
-  assert.deepEqual(installChoices({ storage: "github", importCursor: true }), { storage: "github", importCursor: true, importTools: false });
-  assert.deepEqual(installChoices({ storage: "hybrid", importCursor: false, importTools: true }), { storage: "hybrid", importCursor: false, importTools: true });
-  assert.deepEqual(installChoices({ storage: "local" }), { storage: "local", importCursor: false, importTools: false });
+  assert.deepEqual(installChoices({ storage: "github", importCursor: true }), { storage: "github", importCursor: true, importTools: false, localModel: false });
+  assert.deepEqual(installChoices({ storage: "hybrid", importCursor: false, importTools: true }), { storage: "hybrid", importCursor: false, importTools: true, localModel: false });
+  assert.deepEqual(installChoices({ storage: "local", localModel: true }), { storage: "local", importCursor: false, importTools: false, localModel: true });
+  assert.deepEqual(installChoices({ storage: "local", localModel: "yes" }), { storage: "local", importCursor: false, importTools: false, localModel: false });
   assert.equal(installChoices({ storage: "cloud", importCursor: true }), null);
   assert.equal(installChoices(null), null);
 });
