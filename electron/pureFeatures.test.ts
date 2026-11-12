@@ -14,12 +14,46 @@ test("deepseek drops stored reasoning before the next command", async () => {
 });
 
 test("handoff only past the budget and only with a transcript to carry", async () => {
-  const { shouldHandOff, HANDOFF_TOKENS } = await import("./pureFeatures.ts");
+  const { shouldHandOff, HANDOFF_TOKENS, RESUME_TTL_MS } = await import("./pureFeatures.ts");
   assert.equal(shouldHandOff(HANDOFF_TOKENS + 1, 4), true);
   assert.equal(shouldHandOff(HANDOFF_TOKENS, 4), false);
   assert.equal(shouldHandOff(undefined, 4), false);
   // Review rounds and resumed runs pass no history: never drop their session.
   assert.equal(shouldHandOff(900_000, 0), false);
+  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, RESUME_TTL_MS + 1), true);
+  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, RESUME_TTL_MS), false);
+  assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, RESUME_TTL_MS + 1), false);
+});
+
+test("a session brief keeps the ask and the latest reply, and stays short", async () => {
+  const { sessionBrief } = await import("./pureFeatures.ts");
+  const history = [
+    { role: "user", text: "Solve the monotonicity proof" },
+    { role: "assistant", text: "x".repeat(5_000) },
+    { role: "user", text: "keep going" },
+    { role: "assistant", text: "The proof holds for n > 1." },
+    { role: "user", text: "did we fix all of this?" },
+  ];
+  const brief = sessionBrief(history, 2_000);
+  assert.match(brief, /Solve the monotonicity proof/);
+  assert.match(brief, /did we fix all of this\?/);
+  assert.ok(brief.length <= 2_000);
+  assert.equal(sessionBrief([]), "");
+});
+
+test("a transcript's last real context survives a trailing empty usage", async () => {
+  const { latestContextTokens } = await import("./pureFeatures.ts");
+  const usage = (n: number) =>
+    `{"input_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":${n},"output_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":${n},"ephemeral_5m_input_tokens":0}}`;
+  const echo = `${"x".repeat(2100)} "usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`;
+  const transcript = [
+    `{"type":"assistant","isSidechain":false,"message":{"role":"assistant","model":"claude-fable-5-1","usage":${usage(241755)}}}`,
+    `{"type":"user","message":{"role":"user","content":${JSON.stringify(echo)}}}`,
+    `{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"role":"assistant","usage":${usage(900000)}}}`,
+    `{"type":"assistant","message":{"role":"assistant","model":"<synthetic>","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}`,
+  ].join("\n");
+  assert.equal(latestContextTokens(transcript), 241757);
+  assert.equal(latestContextTokens(""), undefined);
 });
 
 test("every Claude API model has a price, or the spending cap never counts its cost", async () => {

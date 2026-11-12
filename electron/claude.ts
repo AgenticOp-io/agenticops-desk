@@ -1,6 +1,6 @@
 import type { ModelInfo, PermissionResult, PermissionUpdate, Query, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, Notification, shell } from "electron";
@@ -9,7 +9,7 @@ import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials }
 import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { prepareMemory } from "./memory";
-import { shouldHandOff, turnIsOver } from "./pureFeatures";
+import { contextTokens, HANDOFF_TOKENS, latestContextTokens, RESUME_TTL_MS, sessionBrief, shouldHandOff, turnIsOver } from "./pureFeatures";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
@@ -140,6 +140,8 @@ type Session = {
   changes: Map<string, { path: string; before: string | null }>;
   // Prompt tokens on the latest main-agent turn, i.e. how full the context is.
   lastContext?: number;
+  // When that turn happened, so a later message can tell a warm session from a cold one.
+  lastTurnAt?: number;
   // The user's instruction for the current run (kept local), for the "why" trail on changed files.
   lastPrompt?: string;
   // Times a standing-order check has sent this run back to Claude.
@@ -150,6 +152,10 @@ type Session = {
 type StoredSession = {
   claudeSession?: string;
   workspace?: string;
+  // Prompt tokens on the latest main-agent turn, and when it happened. Kept so a restart still
+  // hands off a full or cold session instead of resuming it.
+  lastContext?: number;
+  lastTurnAt?: number;
   pending?: { prompt: string; permissionMode?: string; startedAt: number; started: boolean };
 };
 
@@ -211,6 +217,8 @@ export function sessionFor(chatId: string): Session {
       child: null,
       claudeSession: stored?.claudeSession,
       workspace: stored?.workspace,
+      lastContext: typeof stored?.lastContext === "number" ? stored.lastContext : undefined,
+      lastTurnAt: typeof stored?.lastTurnAt === "number" ? stored.lastTurnAt : undefined,
       approvals: new Map(),
       decisions: new Map(),
       changes: new Map(),
@@ -227,8 +235,9 @@ export function onNotificationClick(fn: () => void) {
   notificationClick = fn;
 }
 
-// Streamed text arrives a few characters at a time, and each event re-renders the chat. Text for a chat is
-// combined and sent at most every 30 ms; any other event for that chat sends the waiting text first, so order holds.
+// Streamed text and thinking arrive a few characters at a time, and each event re-renders the chat.
+// A chat's reply or thinking is combined and sent at most every 30 ms. Any other event sends what is
+// waiting first, so order holds. Thinking is never joined onto the reply.
 const TEXT_BATCH_MS = 30;
 const pendingText = new Map<string, { win: BrowserWindow | null; event: ClaudeEvent; timer: ReturnType<typeof setTimeout> }>();
 
@@ -242,9 +251,15 @@ function flushText(chatId: string) {
 
 export function send(win: BrowserWindow | null, event: ClaudeEvent) {
   const chatId = event.chatId;
-  if (event.kind === "line" && chatId && event.text) {
+  if ((event.kind === "line" || event.kind === "thinking") && chatId && event.text) {
     const waiting = pendingText.get(chatId);
-    if (waiting && waiting.win === win && waiting.event.phase === event.phase && waiting.event.sessionId === event.sessionId) {
+    if (
+      waiting &&
+      waiting.win === win &&
+      waiting.event.kind === event.kind &&
+      waiting.event.phase === event.phase &&
+      waiting.event.sessionId === event.sessionId
+    ) {
       waiting.event.text = `${waiting.event.text ?? ""}${event.text}`;
       return;
     }
@@ -564,8 +579,12 @@ export async function probeClaude(onStatus?: (text: string) => void): Promise<{ 
 // Forget the Claude Code session for a chat, so the next Claude Code message starts fresh with the transcript.
 export function clearClaudeSession(chatId: string, session: Session) {
   session.claudeSession = undefined;
+  session.lastContext = undefined;
+  session.lastTurnAt = undefined;
   patchStored(chatId, (s) => {
     delete s.claudeSession;
+    delete s.lastContext;
+    delete s.lastTurnAt;
     delete s.pending;
   });
 }
@@ -661,11 +680,20 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
     if (type === "assistant") {
       const usage = (msg.message as { usage?: Record<string, number> } | undefined)?.usage;
       if (usage && !msg.parent_tool_use_id) {
-        session.lastContext =
-          (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+        const tokens = contextTokens(usage);
+        // A limit error reports a synthetic turn with no tokens. Keep the last real size.
+        if (tokens > 0) {
+          const at = Date.now();
+          session.lastTurnAt = at;
+          if (tokens !== session.lastContext) session.lastContext = tokens;
+          patchStored(chatId, (s) => {
+            if (session.lastContext) s.lastContext = session.lastContext;
+            s.lastTurnAt = at;
+          });
+        }
       }
       const content = (msg.message as {
-        content?: Array<{ type?: string; text?: string; name?: string; id?: string; input?: unknown }>;
+        content?: Array<{ type?: string; text?: string; thinking?: string; name?: string; id?: string; input?: unknown }>;
       } | undefined)?.content;
       // A subagent's text is for the main agent, which reports back; several at once would garble the reply.
       if (msg.parent_tool_use_id) {
@@ -673,6 +701,14 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
           if (b.type === "tool_use" && b.name) announceTool(win, chatId, session, b.name, b.input, b.id);
         }
         return;
+      }
+      // Partials already delivered the thinking. This copy is only for a turn that did not stream.
+      if (!session.streamedThinking) {
+        for (const b of content ?? []) {
+          if (b.type === "thinking" && b.thinking) {
+            send(win, { kind: "thinking", text: b.thinking, phase: "thinking", sessionId, chatId, running: true });
+          }
+        }
       }
       const text = content
         ?.filter((b) => b.type === "text" && b.text)
@@ -687,9 +723,6 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
         session.lastWasText = true;
       }
       for (const b of content ?? []) {
-        if (b.type === "thinking" && !session.streamedThinking) {
-          sendPhase(win, chatId, session, "thinking", "Thinking…");
-        }
         if (b.type === "tool_use" && b.name) announceTool(win, chatId, session, b.name, b.input, b.id);
       }
       session.streamedText = false;
@@ -707,7 +740,6 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
         const block = ev.content_block;
         session.block = { type: block?.type, name: block?.name, id: block?.id, partial: "" };
         if (block?.type === "thinking") {
-          session.streamedThinking = true;
           session.block.label = "Thinking…";
           sendPhase(win, chatId, session, "thinking", "Thinking…");
         } else if (block?.type === "text") {
@@ -722,10 +754,13 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       if (ev?.type === "content_block_delta") {
         const delta = ev.delta;
         if (delta?.type === "thinking_delta" || delta?.thinking) {
-          session.streamedThinking = true;
           if (session.block?.label !== "Thinking…") {
             if (session.block) session.block.label = "Thinking…";
             sendPhase(win, chatId, session, "thinking", "Thinking…");
+          }
+          if (delta.thinking) {
+            session.streamedThinking = true;
+            send(win, { kind: "thinking", text: delta.thinking, phase: "thinking", sessionId, chatId, running: true });
           }
           return;
         }
@@ -798,8 +833,7 @@ function runUsage(msg: Record<string, unknown>, session: Session): UsageInfo | n
   // The model that cost the most is the one doing the work; helper calls use cheaper models.
   const main = [...rows].sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0))[0];
   const usage = (msg.usage ?? {}) as Record<string, number>;
-  const fallback =
-    (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  const fallback = contextTokens(usage);
   return {
     costUsd: cost,
     contextTokens: session.lastContext ?? fallback,
@@ -1108,6 +1142,17 @@ export function resumePendingRun(win: BrowserWindow | null, chatId: string) {
     return false;
   }
   const cwd = stored.workspace;
+  // Resuming a session whose cache has expired resends its whole history. Let the next message carry a brief instead.
+  if (pending.started && stored.claudeSession && (rememberedSession(stored.claudeSession)?.idleMs ?? 0) > RESUME_TTL_MS) {
+    patchStored(chatId, (s) => delete s.pending);
+    send(win, {
+      kind: "note",
+      chatId,
+      running: false,
+      text: "This run was interrupted long enough ago that resuming it would resend the whole session. Send a message to continue from a short brief.",
+    });
+    return false;
+  }
   // If the CLI never reported a session, the original prompt was never seen; send it again.
   const prompt =
     pending.started && stored.claudeSession
@@ -1120,6 +1165,31 @@ export function resumePendingRun(win: BrowserWindow | null, chatId: string) {
 export type HistoryMsg = { role: string; text: string };
 
 const HISTORY_LIMIT = 60_000;
+
+// Claude Code keeps the session log under ~/.claude/projects/<folder>/<id>.jsonl. The id is enough to find it.
+function rememberedSession(sessionId: string): { tokens?: number; idleMs: number } | undefined {
+  if (!/^[\da-f-]{36}$/i.test(sessionId)) return undefined;
+  const root = path.join(os.homedir(), ".claude", "projects");
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return undefined;
+  }
+  for (const name of names) {
+    const file = path.join(root, name, `${sessionId}.jsonl`);
+    if (!existsSync(file)) continue;
+    try {
+      return {
+        tokens: latestContextTokens(readFileSync(file, "utf8")),
+        idleMs: Math.max(0, Date.now() - statSync(file).mtimeMs),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 // With no CLI session to resume (a Cursor chat, or one the CLI lost), hand Claude the visible transcript.
 export function withHistory(prompt: string, history?: HistoryMsg[]): string {
@@ -1135,6 +1205,20 @@ export function withHistory(prompt: string, history?: HistoryMsg[]): string {
     transcript,
     "</conversation>",
     "Keep that conversation in mind and reply to the user's new message:",
+    prompt,
+  ].join("\n\n");
+}
+
+// A resumed session would resend its tool history. Carry the brief instead: a few thousand tokens, not the whole log.
+export function withBrief(prompt: string, history?: HistoryMsg[]): string {
+  const brief = sessionBrief(history);
+  if (!brief) return prompt;
+  return [
+    "This continues an earlier session. Its working context was not reloaded, so file contents and command output from it are not here. What was said:",
+    "<session>",
+    brief,
+    "</session>",
+    "Treat that as where the work stands. Read a file again only if this message needs it. Reply to the user's new message:",
     prompt,
   ].join("\n\n");
 }
@@ -1237,21 +1321,42 @@ export function runClaude(opts: RunOptions) {
   // session there with its transcript.
   if (session.claudeSession && session.workspace && path.resolve(session.workspace).toLowerCase() !== path.resolve(opts.workspace).toLowerCase()) {
     session.claudeSession = undefined;
+    session.lastContext = undefined;
+    session.lastTurnAt = undefined;
   }
-  // A full context makes every turn re-read old tool output. Hand the chat to a fresh session with its transcript.
-  if (session.claudeSession && shouldHandOff(session.lastContext, opts.history?.length ?? 0)) {
+  let idleMs = session.lastTurnAt ? Date.now() - session.lastTurnAt : undefined;
+  // Sessions saved before this was recorded have the size and the time in the local transcript.
+  if (session.claudeSession && (opts.history?.length ?? 0) > 0 && (session.lastContext === undefined || idleMs === undefined)) {
+    const remembered = rememberedSession(session.claudeSession);
+    if (remembered) {
+      if (session.lastContext === undefined && remembered.tokens) {
+        session.lastContext = remembered.tokens;
+        patchStored(chatId, (s) => {
+          s.lastContext = remembered.tokens;
+        });
+      }
+      if (idleMs === undefined) idleMs = remembered.idleMs;
+    }
+  }
+  // A full or cold context makes this turn re-read old tool output. Carry a short brief instead.
+  const handOff = Boolean(session.claudeSession && shouldHandOff(session.lastContext, opts.history?.length ?? 0, HANDOFF_TOKENS, idleMs ?? 0));
+  if (handOff) {
+    const full = (session.lastContext ?? 0) > HANDOFF_TOKENS;
     send(opts.win, {
       kind: "note",
       chatId,
       running: false,
-      text: `The context reached ${Math.round((session.lastContext ?? 0) / 1000)}k tokens, so this message starts a fresh session with the chat so far. Earlier file contents and command output are left out; the agent reads again what it needs.`,
+      text: full
+        ? `The context reached ${Math.round((session.lastContext ?? 0) / 1000)}k tokens, so this message continues from a short brief of the chat instead of resuming the session. Earlier file contents and command output are left out; the agent reads again what it needs.`
+        : "This session has been idle long enough that resuming it would resend its history, so this message continues from a short brief of the chat. Earlier file contents and command output are left out; the agent reads again what it needs.",
     });
     session.claudeSession = undefined;
     session.lastContext = undefined;
+    session.lastTurnAt = undefined;
   }
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
-  const scrubbed = scrubOutgoing(resuming ? opts.prompt : withHistory(opts.prompt, opts.history));
+  const scrubbed = scrubOutgoing(resuming ? opts.prompt : handOff ? withBrief(opts.prompt, opts.history) : withHistory(opts.prompt, opts.history));
   const prompt = scrubbed.text;
   const cwd = opts.workspace;
   session.workspace = cwd;
@@ -1275,7 +1380,11 @@ export function runClaude(opts: RunOptions) {
 
   patchStored(chatId, (s) => {
     s.workspace = cwd;
-    if (!resuming) delete s.claudeSession;
+    if (!resuming) {
+      delete s.claudeSession;
+      delete s.lastContext;
+      delete s.lastTurnAt;
+    }
     s.pending = { prompt: opts.prompt, permissionMode: mode, startedAt: Date.now(), started: false };
   });
 
@@ -1542,7 +1651,13 @@ export function runClaude(opts: RunOptions) {
       failed = err instanceof Error ? err.message : String(err);
       if (resuming && /no conversation found/i.test(`${failed}\n${session.stderr ?? ""}`)) {
         session.claudeSession = undefined;
-        patchStored(chatId, (s) => delete s.claudeSession);
+        session.lastContext = undefined;
+        session.lastTurnAt = undefined;
+        patchStored(chatId, (s) => {
+          delete s.claudeSession;
+          delete s.lastContext;
+          delete s.lastTurnAt;
+        });
         failed = "The previous agent session no longer exists. Send again to start a new one.";
       } else if (!session.stopping && !shuttingDown) {
         const tail = (session.stderr ?? "").trim().slice(-500);

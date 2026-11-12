@@ -81,10 +81,97 @@ export function autoStep(
 // lower budgets hand off so often that rewriting the transcript eats the saving.
 export const HANDOFF_TOKENS = 150_000;
 
-// Start a fresh agent session with the visible transcript instead of resuming a bloated one. Only when the user
-// sent the message (so there is a transcript to carry) and the last turn was over budget.
-export function shouldHandOff(lastContext: number | undefined, historyMessages: number, budget = HANDOFF_TOKENS): boolean {
-  return historyMessages > 0 && (lastContext ?? 0) > budget;
+// Claude Code's prompt cache for these sessions lasts an hour. Resuming after that rewrites the whole history.
+export const RESUME_TTL_MS = 45 * 60_000;
+
+// Start fresh instead of resuming when the last turn filled the context, or the cache would be cold.
+// Only when the user sent the message, so a review round with no transcript keeps its session.
+export function shouldHandOff(
+  lastContext: number | undefined,
+  historyMessages: number,
+  budget = HANDOFF_TOKENS,
+  idleMs = 0,
+): boolean {
+  if (historyMessages <= 0) return false;
+  return (lastContext ?? 0) > budget || idleMs > RESUME_TTL_MS;
+}
+
+const BRIEF_LIMIT = 8_000;
+
+// What a fresh session needs in order to continue: the original request and the latest replies, not tool output.
+export function sessionBrief(history: { role: string; text: string }[] | undefined, limit = BRIEF_LIMIT): string {
+  const turns = (history ?? []).filter((m) => (m.role === "user" || m.role === "assistant") && m.text.trim());
+  if (!turns.length) return "";
+  const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)}…` : text);
+  const line = (m: { role: string; text: string }, n: number) => `${m.role === "user" ? "User" : "Assistant"}: ${clip(m.text.trim(), n)}`;
+  const first = turns[0];
+  const recent = turns.slice(-4);
+  const lines = recent.includes(first) ? recent.map((m) => line(m, 1600)) : [line(first, 800), ...recent.map((m) => line(m, 1600))];
+  let text = lines.join("\n\n");
+  if (text.length <= limit) return text;
+  text = [lines[0], ...lines.slice(-2)].join("\n\n");
+  return text.length <= limit ? text : `…${text.slice(-limit)}`;
+}
+
+export function contextTokens(usage: {
+  input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+} | undefined): number {
+  if (!usage) return 0;
+  return (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+}
+
+// Last main-agent context in a Claude Code session transcript. A limit error at the end reports zeros and must
+// not hide the turn that filled the window. Tool output can echo a usage object; only an assistant message counts.
+export function latestContextTokens(transcript: string): number | undefined {
+  const needle = '"usage":';
+  let last = 0;
+  let i = 0;
+  while (i < transcript.length) {
+    const at = transcript.indexOf(needle, i);
+    if (at < 0) break;
+    const before = transcript.slice(Math.max(0, at - 2000), at);
+    const brace = transcript.indexOf("{", at);
+    i = at + needle.length;
+    if (brace < 0 || brace > at + needle.length + 5) continue;
+    if (!/"role"\s*:\s*"assistant"/.test(before)) continue;
+    if (/"parent_tool_use_id"\s*:\s*"/.test(before) || /"isSidechain"\s*:\s*true/.test(before)) continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let end = -1;
+    for (let j = brace; j < transcript.length && j < brace + 4000; j++) {
+      const c = transcript[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          end = j + 1;
+          break;
+        }
+      }
+    }
+    if (end < 0) continue;
+    try {
+      const tokens = contextTokens(JSON.parse(transcript.slice(brace, end)));
+      if (tokens > 0) last = tokens;
+    } catch {
+      /* not a usage object */
+    }
+    i = end;
+  }
+  return last > 0 ? last : undefined;
 }
 
 // Rate limits and quota errors last a while; anything else gets a short rest.
@@ -609,7 +696,6 @@ export function cleanupProposals(rows: CleanupRow[]): CleanupProposal[] {
   return out;
 }
 
-// Identical chats: keep the one used most recently. Anything with an empty key is left alone.
 export function copiesToDrop(rows: Array<{ id: string; key: string; at: number }>): string[] {
   const best = new Map<string, { id: string; at: number }>();
   const drop: string[] = [];

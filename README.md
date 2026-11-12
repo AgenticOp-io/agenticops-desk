@@ -36,7 +36,7 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **Private beta, in daily use.** Built and used daily on Windows. macOS and Linux builds ship with every release; they get full installers but not code patches.
 
-- **Chats:** each one resumes its own Claude Code session, so a short reply like "yes" keeps its context. Runs cut off by closing the app resume on the next launch.
+- **Chats:** each one resumes its own Claude Code session for about 45 minutes, so a short reply like "yes" keeps its context. After that, or past 150,000 tokens, the next message continues from a short brief instead of resending the session. A run cut off within that time resumes on the next launch.
 - **Permissions:** the first action in a folder asks once. After that, edits, tests, git and network commands run without a prompt. Disk format, administrator commands and shutdown still ask. Questions and plans always ask.
 - **Memory:** a global index under `%APPDATA%\AgenticOps Desk\memory` and the project's Claude Code memory folder go into every run.
 - **Imports:** chats and projects from the editor you used before show up in the sidebar and can be handed to the agent with **Catch up**.

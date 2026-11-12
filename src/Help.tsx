@@ -8,7 +8,7 @@ const SECTIONS: Section[] = [
     title: "Start here",
     body: [
       "AgenticOps Desk is a desktop workspace for AI coding agents. The left side is your projects and chats. The right side is the conversation, and Code opens the files the agent is working in.",
-      "Each chat keeps its own conversation. Send continues that chat, including a short reply like “yes”. Closing the app and opening it again brings the same chats back. A run that was cut off resumes the next time you send.",
+      "Each chat keeps its own conversation. A short reply like “yes” continues it for about 45 minutes. After that, or when the conversation has grown very large, the next message continues from a short brief instead of resending the whole session. Closing the app and opening it again brings the same chats back. A run cut off within that time resumes the next time you send.",
       "Several chats can work at once. The list shows one word for each, such as Thinking, Working or Writing. The detail is next to the chat title.",
     ],
   },

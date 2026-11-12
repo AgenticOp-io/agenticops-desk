@@ -88,8 +88,7 @@ The list has three sections, top to bottom:
 
 ## Chats
 
-- Each chat resumes its own session, so a short reply like "yes" keeps its context.
-- When a default-engine chat's context passes 150,000 tokens, your next message starts a fresh session that receives the chat so far: what you and the agent said, without old file contents and command output. A note in the chat says so. Every turn re-reads the whole context, so this cuts the cost of long chats (about 30% across 65 real sessions) and makes their turns faster. The agent reads again any file it needs.
+- Each chat resumes its own session for about 45 minutes, so a short reply like "yes" keeps its context. After that, or once the context passes 150,000 tokens, the next message does not resume the session. Resuming would resend the whole history, including old file contents and command output. Instead the message carries a short brief: the first request and the latest replies. A note in the chat says so. Project memory still applies, and the agent reads again any file it needs. The size and the time of the last turn are remembered after a restart.
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
 - **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
