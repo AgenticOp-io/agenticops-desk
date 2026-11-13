@@ -60,11 +60,13 @@ export function PrivacySettings({ mode, onMode }: { mode: Mode; onMode: (mode: M
         setOpen(false);
       }
     };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", esc, true);
+    // The menu may be in a pop-out window, so listen on its own document.
+    const doc = menuRef.current?.ownerDocument ?? document;
+    doc.addEventListener("mousedown", close);
+    doc.addEventListener("keydown", esc, true);
     return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", esc, true);
+      doc.removeEventListener("mousedown", close);
+      doc.removeEventListener("keydown", esc, true);
     };
   }, [open]);
 

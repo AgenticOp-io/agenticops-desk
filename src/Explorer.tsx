@@ -3,7 +3,8 @@ import { copyText } from "./codeBlocks";
 
 type Entry = { name: string; path: string; isDir: boolean };
 type Editing = { kind: "file" | "folder"; parent: string } | { kind: "rename"; path: string; name: string };
-type Menu = { x: number; y: number; entry: Entry | null };
+// win is the window the menu opened in (the main one or a popped-out Files window).
+type Menu = { x: number; y: number; entry: Entry | null; win: Window };
 
 const sep = (p: string) => (p.includes("/") && !p.includes("\\") ? "/" : "\\");
 const join = (dir: string, name: string) => `${dir.replace(/[\\/]+$/, "")}${sep(dir)}${name}`;
@@ -140,11 +141,12 @@ export function Explorer({
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
+    const w = menu.win;
+    w.addEventListener("click", close);
+    w.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
+      w.removeEventListener("click", close);
+      w.removeEventListener("blur", close);
     };
   }, [menu]);
 
@@ -214,7 +216,7 @@ export function Explorer({
     onMenu: (e: ReactMouseEvent, entry: Entry | null) => {
       e.preventDefault();
       e.stopPropagation();
-      setMenu({ x: e.clientX, y: e.clientY, entry });
+      setMenu({ x: e.clientX, y: e.clientY, entry, win: (e.currentTarget as Element).ownerDocument.defaultView ?? window });
     },
   };
   const creatingAtRoot = editing && editing.kind !== "rename" && norm(editing.parent) === norm(root);

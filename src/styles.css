@@ -907,9 +907,10 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
 .settings-row input[type="range"] { width: 100%; }
 .settings-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
 .help {
-  width: min(640px, 94vw);
-  max-height: 78vh;
-  overflow: auto;
+  width: min(900px, 94vw);
+  height: 82vh;
+  display: flex;
+  flex-direction: column;
   background: #252526;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -925,9 +926,30 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
   padding: 8px 10px;
   outline: none;
 }
-.help-section { margin: 0 0 14px; }
-.help-section h3 { margin: 0 0 6px; font-size: 14px; }
-.help-section p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: #d4d4d4; }
+.help-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px 1fr; gap: 18px; }
+.help-nav { display: flex; flex-direction: column; gap: 2px; overflow: auto; border-right: 1px solid var(--border); padding-right: 10px; }
+.help-nav button { text-align: left; padding: 6px 8px; font-size: 13px; }
+.help-text { overflow: auto; padding-right: 6px; }
+.help-section { margin: 0 0 22px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.help-section:last-child { border-bottom: 0; }
+.help-section h3 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
+.help-section p { margin: 0 0 10px; max-width: 68ch; font-size: 13.5px; line-height: 1.65; color: var(--text); }
+.help-section strong { font-weight: 600; }
+.help-section code { font-size: 12.5px; padding: 1px 5px; border-radius: 4px; background: rgba(127, 127, 127, 0.18); }
+.help-section kbd {
+  font: 12px ui-monospace, Consolas, monospace;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.12);
+  white-space: nowrap;
+}
+.help-key { display: grid; grid-template-columns: 170px 1fr; gap: 12px; padding: 6px 0; font-size: 13.5px; border-bottom: 1px solid var(--border); }
+@media (max-width: 640px) {
+  .help-body { grid-template-columns: 1fr; }
+  .help-nav { display: none; }
+}
 .settings-hidden { margin-top: 12px; max-height: 220px; overflow: auto; }
 .other-folders { display: block; width: 100%; text-align: left; padding-left: 28px; }
 .settings-label { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
@@ -1201,6 +1223,16 @@ select.pill { appearance: auto; }
 
 /* Settings: Claude Code sign-in and Direct providers */
 .settings { width: min(620px, 94vw); max-height: 88vh; overflow: auto; }
+/* Settings and Help in their own window (PopOut.tsx) fill it. */
+.app.popout { display: block; }
+.app.popout .settings,
+.app.popout .help { width: auto; height: 100%; max-height: none; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; }
+.app.popout .settings { padding: 18px 24px 24px; }
+.app.popout .sidebar { width: auto; min-width: 0; max-width: none; height: 100vh; border-right: 0; }
+.app.popout .inbox,
+.app.popout .briefing { position: static; width: auto; height: 100vh; max-height: none; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; }
+.workspace.no-side { grid-template-columns: minmax(0, 1fr); }
+.settings-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .settings-index { display: flex; flex-direction: column; gap: 6px; }
 .settings-entry {
   display: flex;

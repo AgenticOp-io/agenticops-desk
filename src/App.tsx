@@ -1,9 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChangesBar } from "./ChangesBar";
 import { appendStep, appendText, appendThinking, Conversation, type TranscriptMsg } from "./Conversation";
 import type { DiffView } from "./CodePane";
 import { Windowed } from "./Windowed";
+import { PopOut, type Look } from "./PopOut";
 
 const CodePane = lazy(() => import("./CodePane").then((m) => ({ default: m.CodePane })));
 import { Composer, type ComposerHandle } from "./Composer";
@@ -23,11 +25,13 @@ import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
 import { extractCodeBlocks } from "./codeBlocks";
-import { clamp, defaultPrefs, moveKey, type UiPrefs } from "./prefs";
+import { clamp, defaultPrefs, moveKey, PANELS, type PanelKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, BriefingItem, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
 
-type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string };
+// host is the popped-out window's root when the menu was opened there.
+type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string; host?: Element };
 type DragPayload = { kind: "project" | "chat"; key?: string; id?: string };
+const portalTo = (host: Element | undefined, node: ReactNode) => (host ? createPortal(node, host) : node);
 
 function parseDrag(e: DragEvent): DragPayload | null {
   const raw = e.dataTransfer.getData("application/json") || e.dataTransfer.getData("text/plain");
@@ -292,6 +296,8 @@ export function App() {
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
+  // Popped-out Chats/Files windows are open unless closed here; the topbar button toggles them.
+  const [winClosed, setWinClosed] = useState<Partial<Record<"chats" | "files", boolean>>>({});
   const [mode, setMode] = useState(() => localStorage.getItem("desk.mode") || "default");
   const [model, setModel] = useState(() => localStorage.getItem("desk.model") || "");
   const [keyAsk, setKeyAsk] = useState<{ id: string; label: string; pick: string; hint: string; key: string; busy: boolean; error: string } | null>(null);
@@ -401,6 +407,7 @@ export function App() {
     if (ws) await refreshTree(ws);
   };
 
+  const popped = (k: PanelKey) => prefs.popOut.includes(k);
   const patchPrefs = (partial: Partial<UiPrefs>) => {
     if (!prefsReady.current) return;
     setPrefs((p) => ({ ...p, ...partial }));
@@ -1455,9 +1462,12 @@ export function App() {
   const openMenu = (e: ReactMouseEvent, extra: Partial<CtxMenu> = {}) => {
     e.preventDefault();
     e.stopPropagation();
+    const doc = (e.currentTarget as Element).ownerDocument;
+    const view = doc.defaultView ?? window;
     setMenu({
-      x: Math.min(e.clientX, window.innerWidth - 220),
-      y: Math.min(e.clientY, window.innerHeight - 240),
+      x: Math.min(e.clientX, view.innerWidth - 220),
+      y: Math.min(e.clientY, view.innerHeight - 240),
+      host: doc === document ? undefined : (e.currentTarget as Element).closest(".app") ?? undefined,
       ...extra,
     });
   };
@@ -1508,25 +1518,31 @@ export function App() {
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
+    const w = menu.host?.ownerDocument.defaultView ?? window;
+    w.addEventListener("click", close);
+    w.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
+      w.removeEventListener("click", close);
+      w.removeEventListener("blur", close);
     };
   }, [menu]);
 
+  const look: Look = {
+    theme: prefs.theme,
+    style: { "--window-font": `${prefs.windowFont}px`, "--item-font": `${prefs.itemFont}px` } as CSSProperties,
+  };
+  const winShown = (view: "chats" | "files") => popped(view) && !winClosed[view];
+  const otherView = sideView === "files" ? "chats" : "files";
+  // The sidebar shows whichever of Chats/Files isn't in its own window; neither if both are.
+  const inSide = !popped(sideView) ? sideView : !popped(otherView) ? otherView : null;
+  const showSide = (view: "chats" | "files") => {
+    if (popped(view)) setWinClosed((c) => ({ ...c, [view]: !c[view] }));
+    else setSideView(view);
+  };
+  const sideOn = (view: "chats" | "files") => (popped(view) ? winShown(view) : inSide === view);
+
   return (
-    <div
-      className="app"
-      data-theme={prefs.theme}
-      style={
-        {
-          "--window-font": `${prefs.windowFont}px`,
-          "--item-font": `${prefs.itemFont}px`,
-        } as CSSProperties
-      }
-    >
+    <div className="app" data-theme={look.theme} style={look.style}>
       {(setupNote || status) && (
         <div className="toast" role="status">
           {setupNote || status}
@@ -1537,10 +1553,10 @@ export function App() {
           <button
             type="button"
             role="tab"
-            aria-selected={sideView === "chats"}
-            className={sideView === "chats" ? "on" : ""}
+            aria-selected={sideOn("chats")}
+            className={sideOn("chats") ? "on" : ""}
             title="Show your projects and chats"
-            onClick={() => setSideView("chats")}
+            onClick={() => showSide("chats")}
           >
             <Glyph name="chats" />
             <span>Chats</span>
@@ -1548,10 +1564,10 @@ export function App() {
           <button
             type="button"
             role="tab"
-            aria-selected={sideView === "files"}
-            className={sideView === "files" ? "on" : ""}
+            aria-selected={sideOn("files")}
+            className={sideOn("files") ? "on" : ""}
             title="Show the project's files (Ctrl+Shift+E)"
-            onClick={() => setSideView("files")}
+            onClick={() => showSide("files")}
           >
             <Glyph name="files" />
             <span>Files</span>
@@ -1582,10 +1598,10 @@ export function App() {
           </button>
         </div>
       </nav>
-      <div className="workspace">
-        <aside className="sidebar">
-          <div className="side-panel">
-          {sideView === "files" ? (
+      <div className={`workspace${inSide ? "" : " no-side"}`}>
+        {(() => {
+          // One render of each panel, used in the sidebar or in its own window.
+          const panel = (view: "chats" | "files") => view === "files" ? (
             <Explorer
               root={workspace}
               roots={roots}
@@ -1845,12 +1861,39 @@ export function App() {
             </div>
           )}
           </>
-          )}
-          <button className="settings-item" onClick={() => { setSettingsSection(""); setShowSettings(true); }}>
-            Settings
-          </button>
-          </div>
-        </aside>
+          );
+          const win = (view: "chats" | "files", title: string) =>
+            winShown(view) && (
+              <PopOut
+                name={view}
+                title={`${title} — AgenticOps Desk`}
+                width={380}
+                height={820}
+                look={look}
+                onClose={() => setWinClosed((c) => ({ ...c, [view]: true }))}
+              >
+                <div className="sidebar">
+                  <div className="side-panel">{panel(view)}</div>
+                </div>
+              </PopOut>
+            );
+          return (
+            <>
+              {inSide && (
+                <aside className="sidebar">
+                  <div className="side-panel">
+                    {panel(inSide)}
+                    <button className="settings-item" onClick={() => { setSettingsSection(""); setShowSettings(true); }}>
+                      Settings
+                    </button>
+                  </div>
+                </aside>
+              )}
+              {win("chats", "Chats")}
+              {win("files", "Files")}
+            </>
+          );
+        })()}
 
         <section
           className={`agent ${prefs.showCode ? "with-code" : ""}`}
@@ -2056,7 +2099,7 @@ export function App() {
         </div>
       )}
 
-      {menu && (
+      {menu && portalTo(menu.host, (
         <div
           className="ctx-menu"
           style={{ left: menu.x, top: menu.y }}
@@ -2190,7 +2233,7 @@ export function App() {
             <div className="ctx-empty">Nothing hidden</div>
           ) : null}
         </div>
-      )}
+      ))}
 
       {(() => {
         // The floating card is for the chat you are in. Everything else waits in the inbox, so another
@@ -2209,27 +2252,49 @@ export function App() {
       })()}
 
       {inboxOpen && (
-        <Inbox
-          cards={pendingApprovals}
-          chatTitle={(id) => chats.find((c) => c.id === id)?.title ?? "Chat"}
-          onAnswer={(card, decision) => answerCard(card, decision)}
-          onOpen={(id) => {
-            openChatById(id);
-            setInboxOpen(false);
-          }}
+        <PopOut
+          name="inbox"
+          title="Waiting on you — AgenticOps Desk"
+          width={480}
+          height={760}
+          look={look}
+          windowed={popped("inbox")}
+          modal={false}
           onClose={() => setInboxOpen(false)}
-        />
+        >
+          <Inbox
+            cards={pendingApprovals}
+            chatTitle={(id) => chats.find((c) => c.id === id)?.title ?? "Chat"}
+            onAnswer={(card, decision) => answerCard(card, decision)}
+            onOpen={(id) => {
+              openChatById(id);
+              // A separate window stays open; the in-app drawer gets out of the way.
+              if (!popped("inbox")) setInboxOpen(false);
+            }}
+            onClose={() => setInboxOpen(false)}
+          />
+        </PopOut>
       )}
 
       {briefing && (
-        <Briefing
-          items={briefing}
-          onOpen={(id) => {
-            openChatById(id);
-            setBriefing(null);
-          }}
+        <PopOut
+          name="status"
+          title="Chat status — AgenticOps Desk"
+          width={760}
+          height={760}
+          look={look}
+          windowed={popped("status")}
           onClose={() => setBriefing(null)}
-        />
+        >
+          <Briefing
+            items={briefing}
+            onOpen={(id) => {
+              openChatById(id);
+              if (!popped("status")) setBriefing(null);
+            }}
+            onClose={() => setBriefing(null)}
+          />
+        </PopOut>
       )}
 
       {keyAsk && (
@@ -2334,12 +2399,20 @@ export function App() {
           </div>
         </div>
       )}
-      {showHelp && <Help onClose={() => setShowHelp(false)} />}
+      {showHelp && <Help look={look} windowed={popped("help")} onClose={() => setShowHelp(false)} />}
       {paletteOpen && <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} />}
 
       {showSettings && (
-        <div className="modal" onClick={() => { setShowSettings(false); setSettingsSection(""); }}>
-          <div className="settings" onClick={(e) => e.stopPropagation()}>
+        <PopOut
+          name="settings"
+          title="Settings — AgenticOps Desk"
+          width={720}
+          height={820}
+          look={look}
+          windowed={popped("settings")}
+          onClose={() => { setShowSettings(false); setSettingsSection(""); }}
+        >
+          <div className="settings">
             <div className="settings-head">
               <strong>Settings</strong>
               <button className="ghost" onClick={() => { setShowSettings(false); setSettingsSection(""); }}>
@@ -2389,6 +2462,22 @@ export function App() {
                       />
                       <em>{prefs.itemFont}px</em>
                     </label>
+                    <div className="settings-label">Open in their own window</div>
+                    <p className="settings-hint">Ticked panels open as separate windows you can move beside the chat. Unticked ones stay inside the main window.</p>
+                    {PANELS.map((p) => (
+                      <label key={p.key} className="settings-check">
+                        <input
+                          type="checkbox"
+                          checked={popped(p.key)}
+                          onChange={(e) =>
+                            patchPrefs({
+                              popOut: e.target.checked ? [...prefs.popOut, p.key] : prefs.popOut.filter((k) => k !== p.key),
+                            })
+                          }
+                        />
+                        {p.label}
+                      </label>
+                    ))}
                   </>
                 )}
 
@@ -2701,7 +2790,7 @@ export function App() {
               </div>
             )}
           </div>
-        </div>
+        </PopOut>
       )}
 
     </div>

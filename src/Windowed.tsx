@@ -55,7 +55,8 @@ export function Windowed<T>({
     };
     measure();
     el.addEventListener("scroll", measure, { passive: true });
-    const observer = new ResizeObserver(measure);
+    // The element may sit in a popped-out window; observe with that window's ResizeObserver.
+    const observer = new (el.ownerDocument.defaultView ?? window).ResizeObserver(measure);
     observer.observe(el);
     return () => {
       el.removeEventListener("scroll", measure);

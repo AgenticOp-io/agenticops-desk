@@ -26,7 +26,19 @@ export type UiPrefs = {
   cursorIntegration: "off" | "partial" | "full";
   chatStorage: "github" | "hybrid" | "local" | "";
   projectArchive: Record<string, "in" | number>;
+  // Panels that open in their own window instead of inside the main one.
+  popOut: PanelKey[];
 };
+
+export type PanelKey = "chats" | "files" | "inbox" | "status" | "help" | "settings";
+export const PANELS: { key: PanelKey; label: string }[] = [
+  { key: "chats", label: "Chats" },
+  { key: "files", label: "Files" },
+  { key: "inbox", label: "Waiting on you" },
+  { key: "status", label: "Chat status" },
+  { key: "help", label: "Help" },
+  { key: "settings", label: "Settings" },
+];
 
 export const defaultPrefs = (): UiPrefs => ({
   windowFont: 16,
@@ -52,6 +64,7 @@ export const defaultPrefs = (): UiPrefs => ({
   cursorIntegration: "off",
   chatStorage: "",
   projectArchive: {},
+  popOut: ["help", "settings"],
 });
 
 export function clamp(n: number, min: number, max: number) {

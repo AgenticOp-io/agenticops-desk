@@ -36,7 +36,12 @@ export type UiPrefs = {
   chatStorage: "github" | "hybrid" | "local" | "";
   /** A project moved by hand: "in" is archived, a time is brought out then. Per computer, keyed like hiddenProjects. */
   projectArchive: Record<string, "in" | number>;
+  /** Panels that open in their own window instead of inside the main one. */
+  popOut: PanelKey[];
 };
+
+const PANEL_KEYS = ["chats", "files", "inbox", "status", "help", "settings"] as const;
+type PanelKey = (typeof PANEL_KEYS)[number];
 
 const defaults = (): UiPrefs => ({
   windowFont: 16,
@@ -62,6 +67,7 @@ const defaults = (): UiPrefs => ({
   cursorIntegration: "off",
   chatStorage: "",
   projectArchive: {},
+  popOut: ["help", "settings"],
 });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -112,6 +118,9 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
       r.projectArchive && typeof r.projectArchive === "object" && !Array.isArray(r.projectArchive)
         ? Object.fromEntries(Object.entries(r.projectArchive).filter(([, v]) => v === "in" || typeof v === "number"))
         : {},
+    popOut: Array.isArray(r.popOut)
+      ? r.popOut.filter((k): k is PanelKey => (PANEL_KEYS as readonly unknown[]).includes(k))
+      : base.popOut,
   };
 }
 

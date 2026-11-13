@@ -148,8 +148,7 @@ export function Briefing({ items, onOpen, onClose }: { items: BriefingItem[]; on
   const order = { waiting: 0, error: 1, running: 2, done: 3 };
   const sorted = [...items].sort((a, b) => order[a.state] - order[b.state] || b.lastUsedAt - a.lastUsedAt);
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="briefing" onClick={(e) => e.stopPropagation()}>
+      <div className="briefing">
         <div className="settings-head">
           <strong>While you were away</strong>
           <button className="ghost" onClick={onClose}>
@@ -173,7 +172,6 @@ export function Briefing({ items, onOpen, onClose }: { items: BriefingItem[]; on
           </button>
         ))}
       </div>
-    </div>
   );
 }
 

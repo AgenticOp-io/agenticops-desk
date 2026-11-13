@@ -29,6 +29,7 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 
 - **Messages:** a short note pops up after something you did, such as "Saved CLAUDE.md", and clears after 8 seconds. First-launch download progress shows the same way and stays until the download ends.
 - **Top bar:** **Chats** and **Files** switch the sidebar between projects and chats and the folder tree. On the right are **Waiting on you** (the inbox, with a count when something waits on you), **Chat status** (the briefing), **Help** and **Settings**.
+- **Separate windows:** under Settings › Appearance › **Open in their own window**, tick any of Chats, Files, Waiting on you, Chat status, Help and Settings. A ticked panel opens as its own window, which you can move beside the chat, and it stays in sync with the main window. Its top-bar button opens or closes that window. Help and Settings are ticked to start with. When both Chats and Files are ticked, the sidebar goes away and the chat uses the full width. If a window can't open, the panel shows inside the main window instead.
 - **Left side:** projects and chats, or the folder tree.
 - **Right side:** the conversation and message box. **Code** opens the editor beside it.
 - **Under the message box:** Terminal, Git, Preview, Instructions and Rules.

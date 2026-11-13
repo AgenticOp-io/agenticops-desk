@@ -221,9 +221,23 @@ function openOutside(url: string) {
 }
 
 function guardNavigation(w: BrowserWindow) {
-  w.webContents.setWindowOpenHandler(({ url }) => {
+  w.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    // Panels pop out as blank windows the page draws into (src/PopOut.tsx).
+    if (w === win && url === "about:blank" && frameName.startsWith("desk-popout-")) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { backgroundColor: "#181818", autoHideMenuBar: true, minWidth: 420, minHeight: 360 },
+      };
+    }
     openOutside(url);
     return { action: "deny" };
+  });
+  w.webContents.on("did-create-window", (child) => {
+    child.setMenuBarVisibility(false);
+    guardNavigation(child);
+    w.once("closed", () => {
+      if (!child.isDestroyed()) child.close();
+    });
   });
   w.webContents.on("will-navigate", (e, url) => {
     if (isAppUrl(url)) return;

@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { helpParts } from "./helpText";
+import { PopOut, type Look } from "./PopOut";
 
 type Section = { id: string; title: string; body: string[] };
 
@@ -38,6 +40,7 @@ const SECTIONS: Section[] = [
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
       "The meter under the box is how full this chat’s context is, and a rough cost since this window opened.",
       "Once a chat’s context passes 150,000 tokens, your next message starts a fresh session that gets the conversation so far without old file contents and command output. A note says so. Long chats cost less and answer faster; the agent reads again any file it needs.",
+      "Summaries: pick a model under Settings › AI models › Summaries and it keeps a short running summary of each chat, which a fresh session gets instead of clipped turns. The brief also lists work this chat already verified (checks that passed), as long as those files have not changed. Set up local model there installs Ollama and a free local model in the background and picks it, so this costs nothing. The Windows setup offers the same.",
       "Settings › AI models › Spending cap stops a run once it has spent the amount you pick. It covers the default engine and Claude API keys; other providers don’t report a price. Your next message continues the chat.",
     ],
   },
@@ -160,7 +163,47 @@ const SECTIONS: Section[] = [
   },
 ];
 
-export function Help({ onClose }: { onClose: () => void }) {
+function Rich({ text }: { text: string }) {
+  return (
+    <>
+      {helpParts(text).map((p, i) =>
+        p.kind === "place" ? (
+          <strong key={i}>{p.text}</strong>
+        ) : p.kind === "key" ? (
+          <kbd key={i}>{p.text}</kbd>
+        ) : p.kind === "command" ? (
+          <code key={i}>{p.text}</code>
+        ) : (
+          p.text
+        ),
+      )}
+    </>
+  );
+}
+
+function Paragraph({ text }: { text: string }) {
+  const key = / — /.exec(text);
+  if (key) {
+    return (
+      <div className="help-key">
+        <span>
+          <Rich text={text.slice(0, key.index)} />
+        </span>
+        <span>{text.slice(key.index + 3)}</span>
+      </div>
+    );
+  }
+  // "Quick edit: select some code…" reads as a labelled item.
+  const lead = /^([A-Z][^:.]{1,30}): /.exec(text);
+  return (
+    <p>
+      {lead && <strong>{lead[1]}: </strong>}
+      <Rich text={lead ? text.slice(lead[0].length) : text} />
+    </p>
+  );
+}
+
+export function Help({ look, onClose, windowed }: { look: Look; onClose: () => void; windowed: boolean }) {
   const [q, setQ] = useState("");
   const needle = q.trim().toLowerCase();
   const shown = useMemo(
@@ -173,8 +216,8 @@ export function Help({ onClose }: { onClose: () => void }) {
   );
 
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="help" role="dialog" aria-labelledby="help-title" onClick={(e) => e.stopPropagation()}>
+    <PopOut name="help" title="Help — AgenticOps Desk" width={1000} height={820} look={look} onClose={onClose} windowed={windowed}>
+      <div className="help" role="dialog" aria-labelledby="help-title">
         <div className="settings-head">
           <strong id="help-title">Help</strong>
           <button className="ghost" onClick={onClose}>
@@ -188,16 +231,32 @@ export function Help({ onClose }: { onClose: () => void }) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        {shown.length === 0 && <p className="settings-hint">Nothing in the help matches that.</p>}
-        {shown.map((s) => (
-          <section key={s.id} className="help-section">
-            <h3>{s.title}</h3>
-            {s.body.map((p) => (
-              <p key={p}>{p}</p>
+        <div className="help-body">
+          <nav className="help-nav" aria-label="Help topics">
+            {shown.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="ghost"
+                onClick={(e) => e.currentTarget.ownerDocument.getElementById(`help-${s.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" })}
+              >
+                {s.title}
+              </button>
             ))}
-          </section>
-        ))}
+          </nav>
+          <div className="help-text">
+            {shown.length === 0 && <p className="settings-hint">Nothing in the help matches that.</p>}
+            {shown.map((s) => (
+              <section key={s.id} id={`help-${s.id}`} className="help-section">
+                <h3>{s.title}</h3>
+                {s.body.map((p) => (
+                  <Paragraph key={p} text={p} />
+                ))}
+              </section>
+            ))}
+          </div>
+        </div>
       </div>
-    </div>
+    </PopOut>
   );
 }
