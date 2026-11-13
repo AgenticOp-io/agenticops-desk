@@ -14,7 +14,7 @@ writeFileSync(path.join(data, "cursor-import.json"), "{}");
 const { mkdirSync } = await import("node:fs");
 mkdirSync(ws);
 writeFileSync(path.join(ws, "demo.js"), "function add(a, b) {\n  return a + b;\n}\n");
-writeFileSync(path.join(data, "settings.json"), JSON.stringify({ lastWorkspace: ws, showCode: true }));
+writeFileSync(path.join(data, "settings.json"), JSON.stringify({ lastWorkspace: ws, showCode: true, popOut: ["help"] }));
 
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VITE_|CLAUDE)/.test(k)));
 env.AGENTICOPS_DESK_DATA = data;
@@ -28,9 +28,11 @@ try {
   await page.waitForSelector("textarea", { timeout: 30_000 });
   assert.equal(await page.title(), "AgenticOps Desk");
 
-  await page.keyboard.press("F1");
-  await page.getByText("Start here", { exact: true }).waitFor();
-  await page.keyboard.press("Escape");
+  // Help opens in its own window; Settings (not ticked in popOut) stays inside the main one.
+  const [help] = await Promise.all([app.waitForEvent("window"), page.keyboard.press("F1")]);
+  await help.getByRole("heading", { name: "Start here" }).waitFor();
+  await help.keyboard.press("Escape");
+  await help.waitForEvent("close");
 
   await page.locator('button[title="Settings"]').click();
   await page.locator(".settings-entry", { hasText: "AI models" }).click();
