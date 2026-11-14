@@ -47,12 +47,22 @@ export function labelOf(model: string): string {
 }
 
 // Everything Auto could use right now. Local-only privacy keeps it on this computer.
+// Local models (Ollama) come first by default so most work stays off the cloud; the user's chosen
+// order (settings.autoModels) still wins.
 export function autoAvailable(): string[] {
-  const all = [CLAUDE_DEFAULT, ...listModels().filter((m) => m.value !== AUTO && !m.needsSetup && !m.pinned).map((m) => m.value)];
+  const enabled = listModels().filter((m) => m.value !== AUTO && !m.needsSetup && !m.pinned).map((m) => m.value);
+  const local = enabled.filter((m) => {
+    const d = parseDirectModel(m);
+    return Boolean(d && isLocalProvider(d.provider));
+  });
+  // Local models first (Ollama is free), then Claude Code's default, then the rest. "default" is not in
+  // listModels() output, so it is always included here explicitly.
+  const rest = enabled.filter((m) => !local.includes(m) && m !== CLAUDE_DEFAULT);
+  const all = [...new Set([...local, CLAUDE_DEFAULT, ...rest])];
   if (privacyMode() !== "local") return all;
   return all.filter((m) => {
     const d = parseDirectModel(m);
-    return Boolean(d && isLocalProvider(d.provider));
+    return m === CLAUDE_DEFAULT || Boolean(d && isLocalProvider(d.provider));
   });
 }
 
