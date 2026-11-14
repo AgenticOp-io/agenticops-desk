@@ -211,6 +211,7 @@ declare global {
       wakeAuto: (model?: string) => Promise<AutoStatus>;
       usageReport: () => Promise<UsageReport>;
       activityReport: () => Promise<ActivityEvent[]>;
+      opsTriage: (command: string) => Promise<{ ok: boolean; command: string; summary: string | null; raw: string }>;
       refreshPlanLimits: () => Promise<PlanLimits | null>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;

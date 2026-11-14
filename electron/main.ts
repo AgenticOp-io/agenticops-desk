@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initTeam, setManager, teamView } from "./team";
+import { initOpsTools } from "./opsTools";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
@@ -25,6 +26,7 @@ import {
 import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
 import { recentActivity } from "./activityLog";
+import { opsTriage } from "./opsTriage";
 import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
@@ -1023,6 +1025,7 @@ ipcMain.handle("claude:login", async () => {
 
 ipcMain.handle("usage:get", () => usageReport());
 ipcMain.handle("activity:get", () => recentActivity());
+ipcMain.handle("ops:triage", (_e, command: string) => opsTriage(String(command ?? "")));
 ipcMain.handle("usage:plan", () => refreshPlanLimits());
 ipcMain.handle("providers:list", () => providerStatus());
 ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
@@ -1120,6 +1123,7 @@ function startRun(model: string, run: AutoPayload) {
 }
 initAuto(startRun);
 initTeam(() => win);
+initOpsTools();
 ipcMain.handle("team:get", () => teamView());
 ipcMain.handle("team:manager", (_e, chatId: string, on: boolean) => setManager(String(chatId ?? ""), Boolean(on)));
 

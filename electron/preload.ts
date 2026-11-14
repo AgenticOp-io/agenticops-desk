@@ -125,6 +125,8 @@ contextBridge.exposeInMainWorld("desk", {
   wakeAuto: (model?: string) => ipcRenderer.invoke("auto:wake", model),
   usageReport: () => ipcRenderer.invoke("usage:get"),
   activityReport: () => ipcRenderer.invoke("activity:get"),
+  opsTriage: (command: string) =>
+    ipcRenderer.invoke("ops:triage", command) as Promise<{ ok: boolean; command: string; summary: string | null; raw: string }>,
   refreshPlanLimits: () => ipcRenderer.invoke("usage:plan"),
   listProviders: () => ipcRenderer.invoke("providers:list"),
   setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>

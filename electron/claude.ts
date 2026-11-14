@@ -310,11 +310,24 @@ export function onChatEvent(fn: (event: ClaudeEvent) => void) {
   return () => chatListeners.delete(fn);
 }
 
-// Extra in-process tool servers for a chat's runs: a manager chat's desk tools (team.ts).
+// Extra in-process tool servers for a chat's runs: the desk tools shared by every chat (ops), and a
+// manager chat's desk tools (team.ts). All registered providers run and their tools merge into the run.
 type ToolServers = { servers: Record<string, McpServerConfig>; allowed: string[] };
-let toolServers: ((chatId: string, signal: AbortSignal) => Promise<ToolServers | null>) | null = null;
-export function setToolServers(fn: typeof toolServers) {
-  toolServers = fn;
+const toolServerProviders: Array<(chatId: string, signal: AbortSignal) => Promise<ToolServers | null>> = [];
+export function setToolServers(fn: (chatId: string, signal: AbortSignal) => Promise<ToolServers | null>) {
+  toolServerProviders.push(fn);
+}
+
+async function mergedToolServers(chatId: string, signal: AbortSignal): Promise<ToolServers | null> {
+  const results = await Promise.all(toolServerProviders.map((fn) => fn(chatId, signal).catch(() => null)));
+  const servers: Record<string, McpServerConfig> = {};
+  const allowed: string[] = [];
+  for (const r of results) {
+    if (!r) continue;
+    Object.assign(servers, r.servers);
+    allowed.push(...r.allowed);
+  }
+  return Object.keys(servers).length ? { servers, allowed } : null;
 }
 
 export const lastAnswer = (chatId: string) => sessions.get(chatId)?.finalText ?? "";
@@ -1683,7 +1696,7 @@ export function runClaude(opts: RunOptions) {
       }
       const { query } = await loadAgentSdk();
       const { runBudgetUsd } = await loadSettings();
-      const extra = await toolServers?.(chatId, abort.signal);
+      const extra = await mergedToolServers(chatId, abort.signal);
       if (session.abort !== abort) return;
       q = query({
     prompt: stream,

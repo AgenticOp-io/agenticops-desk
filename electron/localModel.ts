@@ -150,3 +150,24 @@ export function setupLocalModel(onStatus: (s: LocalModelStatus) => void): Promis
 
 // The installer's "set up a local model" box leaves this file; the first normal start runs the setup.
 export const pendingSetupFile = () => path.join(app.getPath("userData"), "local-model-setup.json");
+
+// One-shot, cheap local completion for operational triage (git/gh status, log reads, "what failed and what
+// does it mean"). Returns null when Ollama or the model is not available, so the caller falls back to the
+// cloud agent instead of blocking. Nothing leaves this computer: the model is local and the prompt is local.
+export async function generateLocally(prompt: string, maxTokens = 400): Promise<string | null> {
+  if (!prompt.trim()) return null;
+  try {
+    if (!(await serverUp())) return null;
+    const res = await fetch(`${API}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: LOCAL_MODEL, prompt, stream: false, options: { num_predict: maxTokens, temperature: 0 } }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { response?: string };
+    return typeof data.response === "string" && data.response.trim() ? data.response.trim() : null;
+  } catch {
+    return null;
+  }
+}
