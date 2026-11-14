@@ -1123,14 +1123,36 @@ export function slugFromResolved(resolved: string): string {
   return resolved.replace(/^[A-Za-z]:/, (m) => m[0].toLowerCase()).replace(/[^A-Za-z0-9]+/g, "-");
 }
 
-export function mergeDeleted(a: string[], b: string[]): string[] {
-  return [...new Set([...a, ...b].filter((id) => typeof id === "string" && id.length > 0))];
+// Deletions carry the time they happened, so a stale deletion on one computer cannot wipe a chat that was
+// updated after it. The newest timestamp wins for the same id; formats without a time are treated as now
+// (still destructive, but only for genuinely fresh deletions). `a` is local, `b` is the remote copy.
+export function mergeDeleted(a: Record<string, number>, b: Record<string, number>): Record<string, number> {
+  const out = new Map<string, number>();
+  for (const [id, at] of Object.entries(a)) if (id && ((out.get(id) ?? 0) < at)) out.set(id, at);
+  for (const [id, at] of Object.entries(b)) if (id && ((out.get(id) ?? 0) < at)) out.set(id, at);
+  return Object.fromEntries(out);
+}
+
+// Accepts the older deleted.json shape (a plain list of ids) for backward compatibility.
+export function asDeleted(raw: unknown): Record<string, number> {
+  if (Array.isArray(raw)) {
+    const now = Date.now();
+    const out: Record<string, number> = {};
+    for (const id of raw) if (typeof id === "string" && id) out[id] = now;
+    return out;
+  }
+  if (raw && typeof raw === "object") {
+    const out: Record<string, number> = {};
+    for (const [id, at] of Object.entries(raw)) if (id && typeof at === "number" && at > 0) out[id] = at;
+    return out;
+  }
+  return {};
 }
 
 // Newer updatedAt wins, except the project: only a move changes that, so using a chat on an old computer can't undo one.
-// A deleted id stays deleted on every computer.
-export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: string[]): SyncChat[] {
-  const gone = new Set(deleted);
+// A deleted id stays deleted on every computer, but only a deletion newer than the chat itself removes it.
+export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: Record<string, number>): SyncChat[] {
+  const gone = new Set(Object.keys(deleted));
   const map = new Map<string, SyncChat>();
   for (const chat of [...local, ...incoming]) {
     if (!chat?.id || gone.has(chat.id)) continue;

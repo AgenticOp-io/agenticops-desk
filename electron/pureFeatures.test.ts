@@ -258,7 +258,7 @@ test("plugin CLI output and command descriptions", async () => {
 });
 
 test("a git remote has one key on every computer", async () => {
-  const { allowedGitRemote, blankValue, cursorMode, cursorTranscript, mergeChats, mergeDeleted, mergeProjects, portablePrefs, remoteKey } = await import("./pureFeatures.ts");
+  const { allowedGitRemote, asDeleted, blankValue, cursorMode, cursorTranscript, mergeChats, mergeDeleted, mergeProjects, portablePrefs, remoteKey } = await import("./pureFeatures.ts");
   assert.equal(remoteKey("https://github.com/AgenticOp-io/agenticops-desk.git"), "github.com/agenticop-io/agenticops-desk");
   assert.equal(remoteKey("git@github.com:AgenticOp-io/agenticops-desk.git"), "github.com/agenticop-io/agenticops-desk");
   assert.equal(remoteKey("C:\\repos\\local"), null);
@@ -300,12 +300,13 @@ test("a git remote has one key on every computer", async () => {
   assert.equal("openFiles" in prefs, false);
   const older = { id: "a", title: "Old", updatedAt: 1, projectId: "p1", projectName: "R", slug: "", size: 0 };
   const newer = { id: "a", title: "New", updatedAt: 2, projectId: null, projectName: "", slug: "", size: 0 };
-  const merged = mergeChats([older], [newer], []);
+  const merged = mergeChats([older], [newer], {});
   assert.equal(merged.length, 1);
   assert.equal(merged[0].title, "New");
   assert.equal(merged[0].projectId, "p1");
-  assert.deepEqual(mergeChats([older], [newer], ["a"]), []);
-  assert.deepEqual(mergeDeleted(["a"], ["a", "b"]), ["a", "b"]);
+  assert.deepEqual(mergeChats([older], [newer], { a: 1 }), []);
+  assert.deepEqual(mergeDeleted({ a: 1 }, { a: 2, b: 3 }), { a: 2, b: 3 });
+  assert.deepEqual(Object.keys(asDeleted(["a", "b"])).sort(), ["a", "b"]);
   const projects = mergeProjects(
     [{ id: "p1", remotes: ["https://github.com/O/R.git"], name: "R" }],
     [{ id: "p1", remotes: ["git@github.com:o/r.git", "https://github.com/N/R.git"], name: "R2" }],
@@ -321,7 +322,7 @@ test("using a chat on an old computer does not undo a move", async () => {
   const { mergeChats } = await import("./pureFeatures.ts");
   const moved = { id: "a", title: "T", updatedAt: 5, projectId: "new", projectMovedAt: 5, projectName: "New", slug: "", size: 0 };
   const used = { id: "a", title: "T2", updatedAt: 9, projectId: "old", projectName: "Old", slug: "", size: 0 };
-  for (const merged of [mergeChats([moved], [used], []), mergeChats([used], [moved], [])]) {
+  for (const merged of [mergeChats([moved], [used], {}), mergeChats([used], [moved], {})]) {
     assert.equal(merged[0].projectId, "new");
     assert.equal(merged[0].projectName, "New");
     assert.equal(merged[0].title, "T2");

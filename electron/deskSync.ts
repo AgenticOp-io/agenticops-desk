@@ -20,6 +20,7 @@ import { carryProjectMemory, memoryDirs } from "./memory";
 import { applyCursorLink, cursorArchiveChats, writeCursorArchiveThreads } from "./cursorLink";
 import {
   allowedGitRemote,
+  asDeleted,
   cursorMode,
   mergeChats,
   matchLocalRepos,
@@ -373,9 +374,9 @@ async function doSync(): Promise<SyncView> {
       const slice = await exportLibrarySlice();
       const localProjects: SyncProject[] = slice.projects.map(({ id, name, remotes }) => ({ id, name, remotes }));
       const incomingChats = asChats(await readJson(path.join(dir, "chats.json"), []));
-      const incomingDeleted = await readJson<string[]>(path.join(dir, "deleted.json"), []);
+      const incomingDeleted = asDeleted(await readJson(path.join(dir, "deleted.json"), []));
       const projects = mergeProjects(incomingProjects.filter((project) => !slice.merged[project.id]), localProjects);
-      const deleted = mergeDeleted(slice.deleted, Array.isArray(incomingDeleted) ? incomingDeleted : []);
+      const deleted = mergeDeleted(slice.deleted, incomingDeleted);
       const previous = new Map(slice.chats.map((chat) => [chat.id, chat.updatedAt ?? 0]));
       const merged = mergeChats(
         slice.chats.map(chatToSync),
@@ -384,8 +385,8 @@ async function doSync(): Promise<SyncView> {
       );
 
       await importSyncedLibrary(merged.map(chatFromSync), deleted);
-      if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(deleted));
-      await mergeThreadFiles(dir, merged, previous, new Set(deleted));
+      if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(Object.keys(deleted)));
+      await mergeThreadFiles(dir, merged, previous, deleted);
       await mergeMemory(slice);
       await writeSnapshot(dir, projects, merged, deleted, slice.merged);
 
@@ -453,14 +454,21 @@ async function viewOf(url: string, ok: boolean, note: string): Promise<SyncView>
   return { url, ok, note, cursor: await modeNow(), projects };
 }
 
-async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<string, number>, deleted: Set<string>) {
+async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<string, number>, deleted: Record<string, number>) {
   const localDir = path.join(app.getPath("userData"), "threads");
   const remoteDir = path.join(dir, "threads");
   await fs.mkdir(localDir, { recursive: true });
   await fs.mkdir(remoteDir, { recursive: true });
-  for (const id of deleted) {
-    if (!THREAD_ID.test(id)) continue;
-    await fs.rm(path.join(localDir, `${id}.json`), { force: true }).catch(() => undefined);
+  for (const [id, at] of Object.entries(deleted)) {
+    if (!THREAD_ID.test(id) || !(at > 0)) continue;
+    // Only delete if the deletion is not older than the chat on this computer; a stale tombstone must not
+    // wipe a thread that was updated after it.
+    const local = path.join(localDir, `${id}.json`);
+    if (at < (previous.get(id) ?? 0)) {
+      delete deleted[id];
+      continue;
+    }
+    await fs.rm(local, { force: true }).catch(() => undefined);
     await fs.rm(path.join(remoteDir, `${id}.json`), { force: true }).catch(() => undefined);
   }
   for (const chat of chats) {
@@ -524,13 +532,14 @@ async function mergeSettings(dir: string) {
   await writeJsonAtomic(file, { savedAt: Date.now(), prefs });
 }
 
-async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncChat[], deleted: string[], projectMerges: Record<string, string>) {
+async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncChat[], deleted: Record<string, number>, projectMerges: Record<string, string>) {
   await writeJsonAtomic(path.join(dir, "project-merges.json"), projectMerges);
   // Sorted, so the files are identical whichever computer wrote them and nothing commits without a real change.
   const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   await writeJsonAtomic(path.join(dir, "projects.json"), [...projects].sort(byId));
   await writeJsonAtomic(path.join(dir, "chats.json"), [...chats].sort(byId));
-  await writeJsonAtomic(path.join(dir, "deleted.json"), [...deleted].sort());
+  // Sorted by id so the file is stable across writers.
+  await writeJsonAtomic(path.join(dir, "deleted.json"), Object.fromEntries(Object.entries(deleted).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
 }
 
 // A message commits as soon as it is entered. The short wait lets the chat row and its thread land in one commit.

@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listCursorChats, listCursorProjects, slugFromPath, type CursorChat, type CursorProject } from "./cursor";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
-import { cleanupProposals, emptyGoneProjectIds, mergeRemotes, remoteKey, type CleanupProposal, type SyncProject } from "./pureFeatures";
+import { asDeleted, cleanupProposals, emptyGoneProjectIds, mergeRemotes, remoteKey, type CleanupProposal, type SyncProject } from "./pureFeatures";
 
 export type ProjectRecord = CursorProject & { lastUsedAt: number };
 
@@ -29,8 +29,9 @@ type Library = {
   lastUsed: Record<string, number>;
   chatLastUsed: Record<string, number>;
   chats: CursorChat[];
-  // Chats the user deleted. Cursor rescans and late saves skip these, so a deleted chat stays deleted.
-  deleted: string[];
+  // Chats the user deleted, keyed by when the deletion happened. Cursor rescans and late saves skip these, so a
+  // deleted chat stays deleted. The timestamp lets a stale deletion from another computer not wipe a newer chat.
+  deleted: Record<string, number>;
   // Project ids merged into another project, kept so a chat or computer still using an old id lands in the right place.
   merged: Record<string, string>;
   // The record of every change to a chat's project.
@@ -45,7 +46,7 @@ const empty = (): Library => ({
   lastUsed: {},
   chatLastUsed: {},
   chats: [],
-  deleted: [],
+  deleted: {},
   merged: {},
   moves: [],
 });
@@ -212,7 +213,7 @@ export function flushLibrary(): Promise<void> {
 
 export type LibrarySlice = {
   chats: CursorChat[];
-  deleted: string[];
+  deleted: Record<string, number>;
   projects: Array<{ id: string; path: string; name: string; remotes: string[] }>;
   merged: Record<string, string>;
 };
@@ -220,7 +221,7 @@ export type LibrarySlice = {
 export function exportLibrarySlice(): Promise<LibrarySlice> {
   return withLibrary((lib) => ({
     chats: lib.chats.map((chat) => ({ ...chat })),
-    deleted: [...lib.deleted],
+    deleted: { ...lib.deleted },
     projects: lib.added.map((row) => ({
       id: row.id,
       path: row.path,
@@ -296,15 +297,26 @@ export function importSyncedProjects(projects: SyncProject[], merged: Record<str
 }
 
 // Writes merged chats back. Unchanged data does not schedule another sync.
-export function importSyncedLibrary(chats: CursorChat[], deleted: string[]) {
+export function importSyncedLibrary(chats: CursorChat[], deleted: Record<string, number>) {
   return withLibrary(async (lib) => {
     let changed = false;
-    for (const id of deleted) {
-      if (!id || lib.deleted.includes(id)) continue;
-      lib.deleted.push(id);
+    // A deletion is only honored if it happened after the chat was last touched locally. A stale deletion
+    // (older than the local chat) means the chat was updated on this computer, so it is not really gone.
+    for (const [id, at] of Object.entries(deleted)) {
+      if (!id || !(at > 0)) continue;
+      const existing = lib.chats.find((c) => c.id === id);
+      const localAt = existing ? Math.max(existing.updatedAt ?? 0, existing.lastUsedAt ?? 0) : 0;
+      if (existing && at < localAt) {
+        // Stale deletion: resurrect the id so it is not re-deleted on the next write.
+        delete lib.deleted[id];
+        changed = true;
+        continue;
+      }
+      if ((lib.deleted[id] ?? 0) >= at) continue;
+      lib.deleted[id] = at;
       changed = true;
     }
-    const gone = new Set(lib.deleted);
+    const gone = new Set(Object.keys(lib.deleted));
     const before = lib.chats.length;
     lib.chats = lib.chats.filter((chat) => !gone.has(chat.id));
     if (lib.chats.length !== before) changed = true;
@@ -413,7 +425,7 @@ async function load(): Promise<Library> {
           lastUsed: raw.lastUsed && typeof raw.lastUsed === "object" ? raw.lastUsed : {},
           chatLastUsed: raw.chatLastUsed && typeof raw.chatLastUsed === "object" ? raw.chatLastUsed : {},
           chats: Array.isArray(raw.chats) ? (raw.chats as CursorChat[]) : [],
-          deleted: Array.isArray(raw.deleted) ? raw.deleted.filter((x): x is string => typeof x === "string") : [],
+          deleted: asDeleted(raw.deleted),
           merged: raw.merged && typeof raw.merged === "object" ? raw.merged : {},
           moves: Array.isArray(raw.moves) ? raw.moves : [],
         }
@@ -497,7 +509,7 @@ export function rememberChats(chats: CursorChat[]): Promise<CursorChat[]> {
   if (!chats.length) return Promise.resolve([]);
   return withLibrary(async (lib) => {
     const byId = new Map(lib.chats.map((c) => [c.id, c]));
-    const gone = new Set(lib.deleted);
+    const gone = new Set(Object.keys(lib.deleted));
     let changed = false;
     const filed: CursorChat[] = [];
     for (const c of chats) {
@@ -550,7 +562,7 @@ export function fileNewChats(chats: CursorChat[]) {
   return withLibrary((lib) => {
     let changed = false;
     for (const chat of chats) {
-      if (lib.deleted.includes(chat.id) || lib.chats.some((row) => row.id === chat.id)) continue;
+      if (lib.deleted[chat.id] || lib.chats.some((row) => row.id === chat.id)) continue;
       const next = { ...chat };
       fileChat(lib, next);
       lib.chats.push(next);
@@ -563,7 +575,7 @@ export function fileNewChats(chats: CursorChat[]) {
 // The renderer's copy can be out of date, so a save never changes which project a chat is in.
 export function upsertChat(chat: CursorChat) {
   return withLibrary(async (lib) => {
-    if (lib.deleted.includes(chat.id)) return;
+    if (lib.deleted[chat.id]) return;
     const i = lib.chats.findIndex((c) => c.id === chat.id);
     if (i >= 0) {
       const prev = lib.chats[i];
@@ -673,7 +685,7 @@ export function deleteChat(id: string) {
   return withLibrary(async (lib) => {
     lib.chats = lib.chats.filter((c) => c.id !== id);
     delete lib.chatLastUsed[id];
-    if (!lib.deleted.includes(id)) lib.deleted.push(id);
+    lib.deleted[id] = Date.now();
     remember(lib);
     await flushLibrary();
     await fs.rm(threadFile(id), { force: true }).catch(() => undefined);
@@ -681,7 +693,7 @@ export function deleteChat(id: string) {
 }
 
 export function deletedChatIds(): Promise<Set<string>> {
-  return withLibrary((lib) => new Set(lib.deleted));
+  return withLibrary((lib) => new Set(Object.keys(lib.deleted)));
 }
 
 type SavedMsg = { text?: unknown };
