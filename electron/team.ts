@@ -8,7 +8,7 @@ import { chatState, lastAnswer, listModels, onChatEvent, setToolServers } from "
 import { loadAgentSdk } from "./claudeBinary";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
-import { createWorktree } from "./worktrees";
+import { createWorktree, removeWorktree } from "./worktrees";
 
 // A manager chat gets "desk" tools to start, message and wait on worker chats. The window creates each worker
 // as an ordinary chat, so it shows in the sidebar, Waiting on you and Chat status like any other, and its
@@ -44,6 +44,20 @@ const save = () => writeJsonAtomicSync(file(), load());
 
 export const teamView = () => load();
 
+// Retires a finished, collected worker: it leaves the manager's roster and its worktree is torn down
+// (only when the worktree is clean, so unmerged changes are never thrown away). The chat itself stays,
+// so its history remains reviewable. Returns what happened, for the manager's reply.
+async function retireWorker(managerId: string, id: string, t: Team): Promise<string> {
+  if (t.workers[id] !== managerId) return "";
+  if (chatState(id).running || runs.get(id)?.done === false) return "";
+  if (!runs.get(id)?.collected) return "";
+  delete t.workers[id];
+  save();
+  runs.delete(id);
+  const removed = await removeWorktree(id, false);
+  return removed.ok ? "" : removed.note;
+}
+
 export function setManager(chatId: string, on: boolean): Team | string {
   const t = load();
   if (on && t.workers[chatId]) return "A worker chat can't be a manager.";
@@ -52,8 +66,10 @@ export function setManager(chatId: string, on: boolean): Team | string {
   return t;
 }
 
-// Each worker's run since the manager last started or messaged it.
-const runs = new Map<string, { done: boolean; text: string }>();
+// Each worker's run since the manager last started or messaged it. `collected` is set once the manager
+// has read the result through wait_for, which makes the worker eligible for cleanup (its worktree and
+// roster entry are released — the chat itself is left for review).
+const runs = new Map<string, { done: boolean; collected?: boolean; text: string }>();
 const settled = new Set<() => void>();
 
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
@@ -76,6 +92,12 @@ export function initTeam(window: () => BrowserWindow | null) {
     const { tool, createSdkMcpServer } = await loadAgentSdk();
     const mine = (id: string) => t.workers[id] === managerId;
     const busy = (id: string) => chatState(id).running || runs.get(id)?.done === false;
+    // Retire finished-and-collected workers before each tool call, so the roster only ever holds live work.
+    const prune = async () => {
+      for (const id of Object.keys(t.workers)) {
+        if (mine(id)) await retireWorker(managerId, id, t);
+      }
+    };
     const manager = async () => (await rememberedChats()).find((c) => c.id === managerId);
     const post = (channel: string, payload: unknown) => {
       const w = window();
@@ -95,6 +117,7 @@ export function initTeam(window: () => BrowserWindow | null) {
         "List the chats in this project: id, title, whether each is running, waiting on the user, or idle, and which are your workers.",
         {},
         async () => {
+          await prune();
           const me = await manager();
           const chats = (await rememberedChats())
             .filter((c) => c.id !== managerId && (me?.projectId ? c.projectId === me.projectId : c.projectPath === me?.projectPath))
@@ -113,7 +136,7 @@ export function initTeam(window: () => BrowserWindow | null) {
       ),
       tool(
         "start_chat",
-        `Start a worker chat in this project with its own task. It runs in its own git worktree by default, so workers don't edit the same files. At most ${MAX_RUNNING} of your workers run at once. Returns the worker's id; then call wait_for.`,
+        `Start a worker chat in this project with its own task. It runs in its own git worktree by default, so workers don't edit the same files. At most ${MAX_RUNNING} of your workers run at once. Returns the worker's id; then call wait_for. When you are done with a worker (its result read), call close_worker so it is cleaned up rather than left around.`,
         {
           title: z.string().min(1).max(80).describe("Short title shown in the sidebar"),
           prompt: z.string().min(1).describe("The full task. The worker can't see your chat, so include everything it needs."),
@@ -130,6 +153,7 @@ export function initTeam(window: () => BrowserWindow | null) {
           worktree: z.boolean().optional().describe("false to work in the project folder itself"),
         },
         async (args) => {
+          await prune();
           const running = Object.keys(t.workers).filter((id) => mine(id) && busy(id)).length;
           if (running >= MAX_RUNNING) return fail(`${running} of your workers are still running. Call wait_for first.`);
           if (args.model && !models.some((m) => m.value === args.model)) return fail(`Unknown model "${args.model}". Choose one of: ${menu}`);
@@ -166,6 +190,21 @@ export function initTeam(window: () => BrowserWindow | null) {
         },
       ),
       tool(
+        "close_worker",
+        "Retire workers you are done with. A finished worker whose result you have already read is removed from your roster and its worktree is cleaned up; its chat history stays for review. Only returns after each worker is no longer running.",
+        { chat_ids: z.array(z.string()).min(1).max(10) },
+        async (args) => {
+          const ids = args.chat_ids.filter(mine);
+          if (!ids.length) return fail("None of those are your workers.");
+          const notes: string[] = [];
+          for (const id of ids) {
+            const note = await retireWorker(managerId, id, t);
+            if (note) notes.push(`${id}: ${note}`);
+          }
+          return ok(notes.length ? `Closed, with notes:\n${notes.join("\n")}` : "Closed those workers.");
+        },
+      ),
+      tool(
         "wait_for",
         "Wait until the given workers finish, then get each one's result. Waits up to 20 minutes per call; call again for any still running. Approvals they need go to the user, not you.",
         { chat_ids: z.array(z.string()).min(1).max(10) },
@@ -193,6 +232,11 @@ export function initTeam(window: () => BrowserWindow | null) {
             check();
           });
           const titles = new Map((await rememberedChats()).map((c) => [c.id, c.title]));
+          // Once the manager has read a finished worker's result, it is collected and can be cleaned up.
+          for (const id of ids) {
+            const run = runs.get(id);
+            if (run && finished(id)) run.collected = true;
+          }
           return ok(
             ids
               .map((id) => {
