@@ -4,6 +4,7 @@ import { existsSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { initTeam, setManager, teamView } from "./team";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
@@ -1089,6 +1090,9 @@ function startRun(model: string, run: AutoPayload) {
   });
 }
 initAuto(startRun);
+initTeam(() => win);
+ipcMain.handle("team:get", () => teamView());
+ipcMain.handle("team:manager", (_e, chatId: string, on: boolean) => setManager(String(chatId ?? ""), Boolean(on)));
 
 ipcMain.handle("claude:models", () => listModels());
 ipcMain.handle("edit:quick", (_e, req: QuickEditRequest) => quickEdit(req));

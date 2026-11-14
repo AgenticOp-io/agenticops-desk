@@ -112,7 +112,7 @@ Agents working in this repo: read [`AGENTS.md`](./AGENTS.md).
 
 ## License
 
-AgenticOps Desk is free software under the [GNU AGPL-3.0](./LICENSE), with an added permission for the Claude Agent SDK and Claude Code, which keep Anthropic's own terms (see [`NOTICE`](./NOTICE)). A commercial license is available for use without the AGPL's terms: opensource@agenticop.io. Contributions need a signed contributor license agreement; see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+AgenticOps Desk is licensed under the [Apache License 2.0](./LICENSE). The Claude Agent SDK and Claude Code keep Anthropic's own terms and are not in the installer (see [`NOTICE`](./NOTICE)). Contributing: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ---
 

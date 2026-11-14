@@ -1,26 +1,8 @@
 AgenticOps Desk
-Copyright (C) 2026 AgenticOp-io
+Copyright 2026 AgenticOp-io
 
-This program is free software: you can redistribute it and/or modify it under the terms of the
-GNU Affero General Public License as published by the Free Software Foundation, version 3 only.
-The full text is in LICENSE.
+Licensed under the Apache License, Version 2.0. The full text is in LICENSE.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
-even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero
-General Public License for more details.
-
-Additional permission under GNU AGPL version 3 section 7
-
-If you modify this program, or any covered work, by linking or combining it with the Claude Agent
-SDK (@anthropic-ai/claude-agent-sdk) or the Claude Code executable (or a modified version of either),
-containing parts covered by the terms of Anthropic's own license, AgenticOp-io grants you additional
-permission to convey the resulting work. This permission does not extend to those Anthropic parts,
-which stay under Anthropic's terms, and does not change the terms that apply to the rest of this
-program. AgenticOp-io's installers do not contain those parts: the app downloads them from npm on
-first use.
-
-Commercial license
-
-AgenticOp-io also offers this program under a commercial license, for anyone who wants to use it
-without the AGPL's terms, for example inside a closed product or a service. Contact
-opensource@agenticop.io.
+The Claude Agent SDK (@anthropic-ai/claude-agent-sdk) and the Claude Code executable are not part of
+this program and stay under Anthropic's own terms. AgenticOp-io's installers do not contain them: the
+app downloads them from npm on first use.

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 type PrivacyStatus = ReturnType<typeof import("./privacy").privacyStatus>;
+type TeamOrder = { id: string; managerId?: string; title?: string; prompt?: string; model?: string; text?: string };
 
 export type ClaudeEvent = {
   kind: "status" | "line" | "tool" | "error" | "done" | "approval" | "approval_done" | "todos" | "plan";
@@ -288,6 +289,19 @@ contextBridge.exposeInMainWorld("desk", {
   setOrders: (cwd: string, next: unknown) => ipcRenderer.invoke("orders:set", cwd, next),
   originsOf: (file: string) => ipcRenderer.invoke("provenance:get", file),
   briefing: (sinceMs: number) => ipcRenderer.invoke("briefing:get", sinceMs),
+  getTeam: () => ipcRenderer.invoke("team:get"),
+  setManager: (chatId: string, on: boolean) => ipcRenderer.invoke("team:manager", chatId, on),
+  // A manager chat asks the window to start or message a worker chat, so it runs like any chat the user starts.
+  onTeam: (cb: (kind: "start" | "send", payload: TeamOrder) => void) => {
+    const start = (_: unknown, p: TeamOrder) => cb("start", p);
+    const send = (_: unknown, p: TeamOrder) => cb("send", p);
+    ipcRenderer.on("team:start", start);
+    ipcRenderer.on("team:send", send);
+    return () => {
+      ipcRenderer.removeListener("team:start", start);
+      ipcRenderer.removeListener("team:send", send);
+    };
+  },
   listWatches: (chatId?: string) => ipcRenderer.invoke("watch:list", chatId),
   addWatch: (chatId: string) => ipcRenderer.invoke("watch:add", chatId),
   removeWatch: (chatId: string, file: string) => ipcRenderer.invoke("watch:remove", chatId, file),

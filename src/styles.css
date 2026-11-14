@@ -1233,6 +1233,8 @@ select.pill { appearance: auto; }
 .app.popout .briefing { position: static; width: auto; height: 100vh; max-height: none; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; }
 .workspace.no-side { grid-template-columns: minmax(0, 1fr); }
 .settings-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.team-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #60a5fa66; color: #60a5fa; background: transparent; white-space: nowrap; }
+button.team-chip { cursor: pointer; }
 .settings-index { display: flex; flex-direction: column; gap: 6px; }
 .settings-entry {
   display: flex;

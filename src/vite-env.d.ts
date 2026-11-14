@@ -79,6 +79,10 @@ export type Orders = {
   team?: { rules: string[]; protect: string[] };
 };
 export type WatchInfo = { chatId: string; file: string; pattern: string };
+// Manager chats, and each worker chat's manager (electron/team.ts).
+export type Team = { managers: string[]; workers: Record<string, string> };
+export type TeamOrder = { id: string; managerId?: string; title?: string; prompt?: string; model?: string; text?: string };
+
 export type BriefingItem = {
   chatId: string;
   title: string;
@@ -341,6 +345,9 @@ declare global {
       setOrders: (cwd: string, next: Partial<Orders>) => Promise<Orders>;
       originsOf: (file: string) => Promise<Array<{ chatId: string; prompt: string; at: number }>>;
       briefing: (sinceMs: number) => Promise<BriefingItem[]>;
+      getTeam: () => Promise<Team>;
+      setManager: (chatId: string, on: boolean) => Promise<Team | string>;
+      onTeam: (cb: (kind: "start" | "send", order: TeamOrder) => void) => () => void;
       listWatches: (chatId?: string) => Promise<WatchInfo[]>;
       addWatch: (chatId: string) => Promise<WatchInfo[]>;
       removeWatch: (chatId: string, file: string) => Promise<WatchInfo[]>;

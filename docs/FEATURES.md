@@ -277,6 +277,8 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 
 ## Around the chat
 
+- **Manager chats:** right-click a chat and choose **Make manager**. It can then start worker chats in the same project, send them follow-ups, and wait for their results, so one agent can split a job across several. Each worker is an ordinary chat: it shows in Chats, its questions and approvals come to you in Waiting on you (the manager can't answer them), and Chat status lists it. Workers run in their own git worktree unless the manager says otherwise, at most three of a manager's workers run at once, and a worker can't become a manager itself. The chat header shows **Manager · n running** on a manager, and **Worker of …** on a worker, which opens its manager. A manager needs the default engine; on a Direct model it has no worker tools. Each worker's run has the same spending cap as any run.
+
 - **Terminal:** a shell in the project, up to three at once. Output keeps collecting while the panel is hidden, and Restart ends the shell and everything it started.
 - **Git:** branch, changes, commit, fetch, pull, push, checkout, history, and a pull request through GitHub's `gh` command.
 - **Preview:** loads a web address. In a project with a `dev`, `start` or `serve` script, **Run npm run dev** (or the pnpm, yarn or bun form its lockfile names) starts it in the project's terminal and opens the local address it prints. The Terminal tab shows its output, and Restart there stops it.
@@ -327,4 +329,4 @@ The command palette (**Ctrl+Shift+P**) lists the same actions as the `/` command
 
 ## License
 
-AgenticOps Desk is free software under the GNU AGPL-3.0 ([LICENSE](../LICENSE)). You may use, change and share it; if you distribute a changed version or offer it as a network service, you must publish your changes under the same license. Anthropic's agent SDK and engine keep Anthropic's own terms and are not in the installer ([NOTICE](../NOTICE)). A commercial license for use without the AGPL's terms is available from opensource@agenticop.io. Contributions need a signed contributor license agreement ([CONTRIBUTING.md](../CONTRIBUTING.md)).
+AgenticOps Desk is licensed under the Apache License 2.0 ([LICENSE](../LICENSE)). You may use, change and share it, including in closed products, as long as you keep the license and copyright notices. Anthropic's agent SDK and engine keep Anthropic's own terms and are not in the installer ([NOTICE](../NOTICE)).

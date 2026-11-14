@@ -26,7 +26,7 @@ import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, PANELS, type PanelKey, type UiPrefs } from "./prefs";
-import type { ApprovalRequest, BriefingItem, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
+import type { ApprovalRequest, BriefingItem, Team, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
 
 // host is the popped-out window's root when the menu was opened there.
 type CtxMenu = { x: number; y: number; projectKey?: string; chatId?: string; chatTitle?: string; host?: Element };
@@ -887,7 +887,8 @@ export function App() {
   };
 
   const send = async (
-    extra: { images: ImageAttachment[]; mentions: string[]; text?: string; chat?: CursorChat; model?: string } = {
+    // quiet: sent by a manager chat, so the user stays in the chat they are reading.
+    extra: { images: ImageAttachment[]; mentions: string[]; text?: string; chat?: CursorChat; model?: string; quiet?: boolean } = {
       images: [],
       mentions: [],
     },
@@ -913,7 +914,7 @@ export function App() {
       chat.title === "New agent" || chat.title === "Untitled chat"
         ? { ...chat, title: text.slice(0, 72), updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model: useModel }
         : { ...chat, updatedAt: Date.now(), lastUsedAt: Date.now(), mode, model: useModel };
-    setActiveChat(titled);
+    setActiveChat((cur) => (extra.quiet && cur?.id !== chat.id ? cur : titled));
     setChats((all) => all.map((c) => (c.id === chat.id ? titled : c)));
     void window.desk.upsertChat(titled);
     const shown = extra.images.length
@@ -951,6 +952,48 @@ export function App() {
       model: useModel || undefined,
       images: extra.images.length ? extra.images : undefined,
     });
+  };
+
+  const [team, setTeam] = useState<Team>({ managers: [], workers: {} });
+  const teamRef = useRef({ send, chats });
+  teamRef.current = { send, chats };
+  useEffect(() => {
+    void window.desk.getTeam().then(setTeam);
+    return window.desk.onTeam((kind, order) => {
+      const { send: sendNow, chats: all } = teamRef.current;
+      if (kind === "send") {
+        const chat = all.find((c) => c.id === order.id);
+        if (chat && order.text) void sendNow({ images: [], mentions: [], text: order.text, chat, quiet: true });
+        return;
+      }
+      const boss = all.find((c) => c.id === order.managerId);
+      if (!boss || !order.prompt) return;
+      const chat: CursorChat = {
+        ...boss,
+        id: order.id,
+        title: order.title || "Worker",
+        pinned: false,
+        parentId: undefined,
+        updatedAt: Date.now(),
+        lastUsedAt: Date.now(),
+        size: 0,
+      };
+      persistIds.current.add(chat.id);
+      setThreads((t) => ({ ...t, [chat.id]: [] }));
+      setChats((list) => [chat, ...list.filter((c) => c.id !== chat.id)]);
+      void window.desk.getTeam().then(setTeam);
+      void window.desk.upsertChat(chat).then(() =>
+        sendNow({ images: [], mentions: [], text: order.prompt, chat, model: order.model, quiet: true }),
+      );
+    });
+  }, []);
+  const toggleManager = async (chat: CursorChat) => {
+    const r = await window.desk.setManager(chat.id, !team.managers.includes(chat.id));
+    if (typeof r === "string") setStatus(r);
+    else {
+      setTeam(r);
+      setStatus(r.managers.includes(chat.id) ? `“${chat.title}” can now start and direct worker chats` : `“${chat.title}” is no longer a manager`);
+    }
   };
 
   const activeChanges = activeChat ? changesByChat[activeChat.id] ?? [] : [];
@@ -1936,6 +1979,16 @@ export function App() {
           <div className="chat">
             <div className="pane-head chat-head">
               <span className="chat-title">{activeChat?.title ?? "New agent"}</span>
+              {activeChat && team.managers.includes(activeChat.id) && (
+                <span className="team-chip" title="This chat can start and direct worker chats. Right-click it in the sidebar to turn that off.">
+                  Manager · {Object.entries(team.workers).filter(([w, m]) => m === activeChat.id && runningByChat[w]).length} running
+                </span>
+              )}
+              {activeChat && team.workers[activeChat.id] && (
+                <button className="team-chip" title="Open the manager chat that started this one" onClick={() => openChatById(team.workers[activeChat.id])}>
+                  Worker of {chats.find((c) => c.id === team.workers[activeChat.id])?.title ?? "a manager"}
+                </button>
+              )}
               {running && <span className="run-dot" title={runProgress?.status ?? "Starting"} />}
               {running && (
                 <span className={`phase phase-${runProgress?.phase ?? "starting"}`} title={runProgress?.status}>
@@ -2138,6 +2191,18 @@ export function App() {
               >
                 Branch
               </button>
+              {!team.workers[menu.chatId] && (
+                <button
+                  title="A manager can start worker chats in this project, message them and wait for their results"
+                  onClick={() => {
+                    const chat = chats.find((c) => c.id === menu.chatId);
+                    setMenu(null);
+                    if (chat) void toggleManager(chat);
+                  }}
+                >
+                  {team.managers.includes(menu.chatId) ? "Stop being a manager" : "Make manager"}
+                </button>
+              )}
               <button
                 onClick={() => {
                   const chat = chats.find((c) => c.id === menu.chatId);

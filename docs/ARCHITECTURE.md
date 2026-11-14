@@ -35,6 +35,7 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `worktrees.ts` | A chat's own git worktree and branch: create, merge back, remove |
 | `providers.ts` | Provider presets and encrypted keys |
 | `autoRoute.ts` | The Auto model. Watches events through `setSendFilter` in `claude.ts` |
+| `team.ts` | Manager chats. Gives a manager's Claude Code runs the in-process `desk` tools (`setToolServers` in `claude.ts`), watches workers through `onChatEvent`, and asks the window to start or message workers (`team:start`, `team:send`), so a worker is an ordinary chat. Saved in `team.json` |
 | `quickEdit.ts`, `review.ts`, `briefing.ts` | Quick edit and autocomplete, Second opinion, catch-up and morning briefings |
 | **Permissions and safety** | |
 | `gate.ts`, `allows.ts` | Folder trust and the commands that still ask |

@@ -1,4 +1,4 @@
-import type { ModelInfo, PermissionResult, PermissionUpdate, Query, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
+import type { McpServerConfig, ModelInfo, PermissionResult, PermissionUpdate, Query, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -302,7 +302,24 @@ export function setSendFilter(fn: typeof sendFilter) {
   sendFilter = fn;
 }
 
+// Main-process listeners (team.ts) see what the window sees, after the Auto model's filter.
+const chatListeners = new Set<(event: ClaudeEvent) => void>();
+export function onChatEvent(fn: (event: ClaudeEvent) => void) {
+  chatListeners.add(fn);
+  return () => chatListeners.delete(fn);
+}
+
+// Extra in-process tool servers for a chat's runs: a manager chat's desk tools (team.ts).
+type ToolServers = { servers: Record<string, McpServerConfig>; allowed: string[] };
+let toolServers: ((chatId: string, signal: AbortSignal) => Promise<ToolServers | null>) | null = null;
+export function setToolServers(fn: typeof toolServers) {
+  toolServers = fn;
+}
+
+export const lastAnswer = (chatId: string) => sessions.get(chatId)?.finalText ?? "";
+
 function deliver(win: BrowserWindow | null, event: ClaudeEvent) {
+  for (const fn of chatListeners) fn(event);
   if (win && !win.isDestroyed()) win.webContents.send("claude:event", event);
   if (!win || win.isDestroyed() || (win.isVisible() && win.isFocused())) return;
   if (event.kind !== "done" && event.kind !== "approval") return;
@@ -1656,6 +1673,7 @@ export function runClaude(opts: RunOptions) {
       }
       const { query } = await loadAgentSdk();
       const { runBudgetUsd } = await loadSettings();
+      const extra = await toolServers?.(chatId, abort.signal);
       if (session.abort !== abort) return;
       q = query({
     prompt: stream,
@@ -1673,6 +1691,7 @@ export function runClaude(opts: RunOptions) {
       ...(memory.directories.length ? { additionalDirectories: memory.directories } : {}),
       tools: { type: "preset", preset: "claude_code" },
       ...(skipStorePwsh ? { disallowedTools: ["PowerShell"] } : {}),
+      ...(extra ? { mcpServers: extra.servers, allowedTools: extra.allowed } : {}),
       hooks: {
         PreToolUse: [
           {

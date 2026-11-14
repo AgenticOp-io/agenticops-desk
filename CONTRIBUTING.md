@@ -4,9 +4,7 @@ Thanks for helping. Read [`AGENTS.md`](./AGENTS.md) for how the code is organize
 
 ## License of contributions
 
-AgenticOps Desk is offered under the AGPL-3.0 and, separately, under a commercial license (see [`NOTICE`](./NOTICE)). To keep both possible, a pull request is merged only after its author signs the contributor license agreement. It lets AgenticOp-io license your contribution under both. You keep the copyright to your work.
-
-The agreement is linked from the pull request the first time you open one.
+AgenticOps Desk is licensed under the Apache License 2.0 ([`LICENSE`](./LICENSE)). By opening a pull request you agree that your contribution is licensed under it too, as section 5 of the license says. You keep the copyright to your work.
 
 ## Before you open a pull request
 

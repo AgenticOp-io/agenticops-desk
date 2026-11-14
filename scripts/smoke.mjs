@@ -31,8 +31,8 @@ try {
   // Help opens in its own window; Settings (not ticked in popOut) stays inside the main one.
   const [help] = await Promise.all([app.waitForEvent("window"), page.keyboard.press("F1")]);
   await help.getByRole("heading", { name: "Start here" }).waitFor();
-  await help.keyboard.press("Escape");
-  await help.waitForEvent("close");
+  // Key down only: the window closes on it, so a key up would have nowhere to go.
+  await Promise.all([help.waitForEvent("close"), help.keyboard.down("Escape")]);
 
   await page.locator('button[title="Settings"]').click();
   await page.locator(".settings-entry", { hasText: "AI models" }).click();

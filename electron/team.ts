@@ -1,0 +1,196 @@
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { app, type BrowserWindow } from "electron";
+import { z } from "zod";
+import { capsulesBrief } from "./capsules";
+import { chatState, lastAnswer, onChatEvent, setToolServers } from "./claude";
+import { loadAgentSdk } from "./claudeBinary";
+import { writeJsonAtomicSync } from "./jsonStore";
+import { rememberedChats } from "./library";
+import { createWorktree } from "./worktrees";
+
+// A manager chat gets "desk" tools to start, message and wait on worker chats. The window creates each worker
+// as an ordinary chat, so it shows in the sidebar, Waiting on you and Chat status like any other, and its
+// approvals still come to the user. One level only: a worker never gets these tools.
+
+export type Team = { managers: string[]; workers: Record<string, string> };
+
+const MAX_RUNNING = 3;
+// Under the agent's tool-call limit; the manager calls wait_for again if workers are still going.
+const WAIT_MS = 20 * 60_000;
+const TEXT_KEEP = 3000;
+
+let team: Team | null = null;
+const file = () => path.join(app.getPath("userData"), "team.json");
+
+function load(): Team {
+  if (team) return team;
+  try {
+    const raw = JSON.parse(readFileSync(file(), "utf8")) as Partial<Team>;
+    team = {
+      managers: Array.isArray(raw.managers) ? raw.managers.filter((s): s is string => typeof s === "string") : [],
+      workers:
+        raw.workers && typeof raw.workers === "object"
+          ? Object.fromEntries(Object.entries(raw.workers).filter(([, v]) => typeof v === "string"))
+          : {},
+    };
+  } catch {
+    team = { managers: [], workers: {} };
+  }
+  return team;
+}
+const save = () => writeJsonAtomicSync(file(), load());
+
+export const teamView = () => load();
+
+export function setManager(chatId: string, on: boolean): Team | string {
+  const t = load();
+  if (on && t.workers[chatId]) return "A worker chat can't be a manager.";
+  t.managers = on ? [...new Set([...t.managers, chatId])] : t.managers.filter((id) => id !== chatId);
+  save();
+  return t;
+}
+
+// Each worker's run since the manager last started or messaged it.
+const runs = new Map<string, { done: boolean; text: string }>();
+const settled = new Set<() => void>();
+
+const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
+const fail = (text: string) => ({ ...ok(text), isError: true });
+
+export function initTeam(window: () => BrowserWindow | null) {
+  onChatEvent((event) => {
+    const run = event.chatId ? runs.get(event.chatId) : undefined;
+    if (!run) return;
+    if (event.kind === "line" || event.kind === "error") run.text = `${run.text}${event.kind === "error" ? "\nError: " : ""}${event.text ?? ""}`.slice(-TEXT_KEEP);
+    if (event.kind === "done") {
+      run.done = true;
+      for (const fn of settled) fn();
+    }
+  });
+
+  setToolServers(async (managerId, signal) => {
+    const t = load();
+    if (!t.managers.includes(managerId) || t.workers[managerId]) return null;
+    const { tool, createSdkMcpServer } = await loadAgentSdk();
+    const mine = (id: string) => t.workers[id] === managerId;
+    const busy = (id: string) => chatState(id).running || runs.get(id)?.done === false;
+    const manager = async () => (await rememberedChats()).find((c) => c.id === managerId);
+    const post = (channel: string, payload: unknown) => {
+      const w = window();
+      if (!w || w.isDestroyed()) return false;
+      w.webContents.send(channel, payload);
+      return true;
+    };
+
+    const tools = [
+      tool(
+        "list_chats",
+        "List the chats in this project: id, title, whether each is running, waiting on the user, or idle, and which are your workers.",
+        {},
+        async () => {
+          const me = await manager();
+          const chats = (await rememberedChats())
+            .filter((c) => c.id !== managerId && (me?.projectId ? c.projectId === me.projectId : c.projectPath === me?.projectPath))
+            .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
+            .slice(0, 40);
+          if (!chats.length) return ok("No other chats in this project.");
+          return ok(
+            chats
+              .map((c) => {
+                const s = chatState(c.id);
+                return `${c.id} · ${c.title} · ${s.waiting ? "waiting on the user" : s.running ? "running" : "idle"}${mine(c.id) ? " · your worker" : ""}`;
+              })
+              .join("\n"),
+          );
+        },
+      ),
+      tool(
+        "start_chat",
+        `Start a worker chat in this project with its own task. It runs in its own git worktree by default, so workers don't edit the same files. At most ${MAX_RUNNING} of your workers run at once. Returns the worker's id; then call wait_for.`,
+        {
+          title: z.string().min(1).max(80).describe("Short title shown in the sidebar"),
+          prompt: z.string().min(1).describe("The full task. The worker can't see your chat, so include everything it needs."),
+          model: z.string().optional().describe("Model id; leave out to use the same model as you"),
+          worktree: z.boolean().optional().describe("false to work in the project folder itself"),
+        },
+        async (args) => {
+          const running = Object.keys(t.workers).filter((id) => mine(id) && busy(id)).length;
+          if (running >= MAX_RUNNING) return fail(`${running} of your workers are still running. Call wait_for first.`);
+          const me = await manager();
+          if (!me?.projectPath) return fail("This chat's project folder is not on this computer.");
+          const id = randomUUID();
+          let where = "the project folder";
+          if (args.worktree !== false) {
+            const made = await createWorktree(id, me.projectPath);
+            where = typeof made === "string" ? `the project folder (no worktree: ${made})` : "its own worktree";
+          }
+          t.workers[id] = managerId;
+          save();
+          runs.set(id, { done: false, text: "" });
+          if (!post("team:start", { id, managerId, title: args.title, prompt: args.prompt, model: args.model ?? me.model ?? "" })) {
+            runs.delete(id);
+            return fail("The app window is closed, so no chat could start.");
+          }
+          return ok(`Started worker ${id} ("${args.title}") in ${where}. Call wait_for with its id to get the result.`);
+        },
+      ),
+      tool(
+        "send_to_chat",
+        "Send a follow-up message to one of your workers. If it is still running, the message steers the current run.",
+        { chat_id: z.string(), message: z.string().min(1) },
+        async (args) => {
+          if (!mine(args.chat_id)) return fail("You can only message workers you started.");
+          if (!chatState(args.chat_id).running) runs.set(args.chat_id, { done: false, text: "" });
+          if (!post("team:send", { id: args.chat_id, text: args.message })) return fail("The app window is closed.");
+          return ok("Sent. Call wait_for to get its answer.");
+        },
+      ),
+      tool(
+        "wait_for",
+        "Wait until the given workers finish, then get each one's result. Waits up to 20 minutes per call; call again for any still running. Approvals they need go to the user, not you.",
+        { chat_ids: z.array(z.string()).min(1).max(10) },
+        async (args) => {
+          const ids = args.chat_ids.filter(mine);
+          if (!ids.length) return fail("None of those are your workers.");
+          const finished = (id: string) => runs.get(id)?.done ?? !chatState(id).running;
+          await new Promise<void>((resolve) => {
+            const check = () => {
+              if (!ids.every(finished) && !signal.aborted) return;
+              finish();
+            };
+            const finish = () => {
+              clearTimeout(timer);
+              settled.delete(check);
+              signal.removeEventListener("abort", finish);
+              resolve();
+            };
+            const timer = setTimeout(finish, WAIT_MS);
+            settled.add(check);
+            signal.addEventListener("abort", finish);
+            check();
+          });
+          const titles = new Map((await rememberedChats()).map((c) => [c.id, c.title]));
+          return ok(
+            ids
+              .map((id) => {
+                const s = chatState(id);
+                const state = finished(id) ? "finished" : s.waiting ? "still running, waiting on the user's approval" : "still running";
+                const answer = (lastAnswer(id) || runs.get(id)?.text || "").slice(-TEXT_KEEP).trim();
+                const verified = capsulesBrief(id).slice(-1500).trim();
+                return [`## ${titles.get(id) ?? id} (${id}): ${state}`, answer || "(no answer yet)", verified && `Verified runs:\n${verified}`]
+                  .filter(Boolean)
+                  .join("\n");
+              })
+              .join("\n\n"),
+          );
+        },
+      ),
+    ];
+    return {
+      servers: { desk: createSdkMcpServer({ name: "desk", version: "1.0.0", tools }) },
+      allowed: tools.map((x) => `mcp__desk__${x.name}`),
+    };
+  });
+}
