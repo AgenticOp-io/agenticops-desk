@@ -1377,16 +1377,19 @@ export function App() {
     }
     for (const g of map.values()) {
       const ord = prefs.chatOrder[g.key];
+      // The manager chat stays pinned to the top of its project; its workers and every other chat stay dynamic.
+      const managerFirst = (a: CursorChat, b: CursorChat) => Number(team.managers.includes(b.id)) - Number(team.managers.includes(a.id));
       if (ord?.length) {
         const rank = new Map(ord.map((id, i) => [id, i]));
         g.chats.sort(
           (a, b) =>
+            managerFirst(a, b) ||
             Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
             (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999) ||
             b.updatedAt - a.updatedAt,
         );
       } else {
-        g.chats.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt);
+        g.chats.sort((a, b) => managerFirst(a, b) || Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt);
       }
     }
     // Two checkouts with the same folder name stay separate, and the parent folder tells them apart.
@@ -1427,7 +1430,7 @@ export function App() {
       list.sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.name.localeCompare(b.name));
     }
     return list;
-  }, [projects, chats, q, bodyHits, prefs.chatOrder, prefs.projectOrder]);
+  }, [projects, chats, q, bodyHits, prefs.chatOrder, prefs.projectOrder, team.managers]);
 
   const toggleGroup = (key: string) => {
     patchPrefs({ expanded: { ...prefs.expanded, [key]: !prefs.expanded[key] } });
@@ -1473,7 +1476,7 @@ export function App() {
       // and the rest fold under "older chats". A search shows every match.
       const older = q
         ? new Set<string>()
-        : olderChats(liveChats, prefs.chatArchiveDays, Date.now(), (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id);
+        : olderChats(liveChats, prefs.chatArchiveDays, Date.now(), (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id || team.managers.includes(c.id));
       rows.push({ kind: "project", id: `p:${g.key}`, group: g });
       if (opened) {
         for (const c of liveChats) if (!older.has(c.id)) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
@@ -1506,7 +1509,7 @@ export function App() {
       if (archiveOpen) for (const g of archived) pushGroup(g);
     }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, prefs.chatArchiveDays, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen, olderOpen]);
+  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, prefs.chatArchiveDays, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen, olderOpen, team.managers]);
 
   // A newly opened chat shows in the list, once: collapsing its project afterwards stays collapsed.
   const shownChat = useRef<string | null>(null);
