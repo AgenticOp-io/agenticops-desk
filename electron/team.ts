@@ -147,6 +147,8 @@ export function initTeam(window: () => BrowserWindow | null) {
           runs.set(id, { done: false, text: "" });
           if (!post("team:start", { id, managerId, title: args.title, prompt: args.prompt, model })) {
             runs.delete(id);
+            delete t.workers[id];
+            save();
             return fail("The app window is closed, so no chat could start.");
           }
           return ok(`Started worker ${id} ("${args.title}") on ${model || "the default model"} in ${where}. Call wait_for with its id to get the result.`);
@@ -170,7 +172,10 @@ export function initTeam(window: () => BrowserWindow | null) {
         async (args) => {
           const ids = args.chat_ids.filter(mine);
           if (!ids.length) return fail("None of those are your workers.");
-          const finished = (id: string) => runs.get(id)?.done ?? !chatState(id).running;
+          // Finished either when the run emitted "done" or when nothing is running anymore. The second
+          // case covers a worker that was stopped or failed without a "done" event, so wait_for does
+          // not sit on the full 20-minute timer for a worker that already ended.
+          const finished = (id: string) => Boolean(runs.get(id)?.done) || !chatState(id).running;
           await new Promise<void>((resolve) => {
             const check = () => {
               if (!ids.every(finished) && !signal.aborted) return;

@@ -507,8 +507,11 @@ function writeSaved(chatId: string, saved: Saved) {
 
 // ---------- pricing for the usage meter (USD per million tokens) ----------
 
-// From Anthropic's pricing page. `read` is the cache-hit price; cache writes are 1.25x input everywhere.
-// `long` is the rate for prompts over 100,000 tokens, where a model has one.
+// USD per million tokens. `read` is the cache-hit price; cache writes are 1.25x input everywhere.
+// `long` is the rate for prompts over 100,000 tokens, where a model has one. Claude prices are from
+// Anthropic's pricing page; the other providers use their listed rates so the spending cap and the
+// Usage page stay correct when a chat or a manager runs on a non-Anthropic model. Unknown models
+// fall back to a conservative estimate so the cap still stops runaway runs instead of silently $0.
 type Price = { input: number; output: number; read: number; long?: { input: number; output: number; read: number } };
 const PRICES: Record<string, Price> = {
   "claude-opus-5-5": { input: 4, output: 20, read: 0.2 },
@@ -526,7 +529,23 @@ const PRICES: Record<string, Price> = {
   "claude-sonnet-4-6": { input: 3, output: 15, read: 0.3 },
   "claude-sonnet-4-5": { input: 3, output: 15, read: 0.3 },
   "claude-haiku-4-5": { input: 1, output: 5, read: 0.1 },
+  // DeepSeek (peak rates, so the spending cap errs on the safe side). Cache-hit price is the
+  // "read" field; cache-miss is the full input price.
+  "deepseek-flash": { input: 0.3, output: 1.2, read: 0.006 },
+  "deepseek-v4-pro": { input: 1.32, output: 3.96, read: 0.044 },
+  // Fallbacks the OpenAI-compatible path can reach while a provider's model list is still loading.
+  "gpt-4.1-mini": { input: 0.4, output: 1.6, read: 0.1 },
+  "gpt-4.1": { input: 2, output: 8, read: 0.5 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5, read: 0.03 },
+  "gemini-2.5-pro": { input: 2.5, output: 15, read: 0.25 },
 };
+
+// A run never reports $0 just because its model is missing from the table; the cap and meter stay active.
+const UNKNOWN_PRICE: Price = { input: 1, output: 5, read: 0.1 };
+
+function priceFor(model: string): Price {
+  return PRICES[model] ?? UNKNOWN_PRICE;
+}
 
 // The effort setting is rejected by these two; every other model in the list supports it.
 const NO_EFFORT = new Set(["claude-sonnet-4-5", "claude-haiku-4-5"]);
@@ -556,7 +575,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     eager_input_streaming: true,
     input_schema: { type: "object", properties: t.properties, required: t.required },
   }));
-  const price = PRICES[model];
+  const price = priceFor(model);
   const { runBudgetUsd } = await loadSettings();
   let cost = 0;
   let lastWasText = false;
@@ -611,8 +630,8 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
     const fresh = u.input_tokens ?? 0;
     const read = u.cache_read_input_tokens ?? 0;
     const wrote = u.cache_creation_input_tokens ?? 0;
-    const rate = price?.long && fresh + read + wrote > 100_000 ? price.long : price;
-    const turnCost = rate ? (fresh * rate.input + wrote * rate.input * 1.25 + read * rate.read + (u.output_tokens ?? 0) * rate.output) / 1e6 : 0;
+    const rate = price.long && fresh + read + wrote > 100_000 ? price.long : price;
+    const turnCost = (fresh * rate.input + wrote * rate.input * 1.25 + read * rate.read + (u.output_tokens ?? 0) * rate.output) / 1e6;
     cost += turnCost;
     recordUsage("anthropic", message.model, { input: fresh, output: u.output_tokens ?? 0, cacheRead: read, cacheWrite: wrote, costUsd: turnCost });
     // The chat's meter adds each event's cost, so send this turn's share, not the run total.
@@ -678,8 +697,15 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
     type: "function",
     function: { name: t.name, description: t.description, parameters: { type: "object", properties: t.properties, required: t.required } },
   }));
+  const price = priceFor(model);
+  const { runBudgetUsd } = await loadSettings();
+  let cost = 0;
 
   for (let turn = 0; turn < 80 && !ctx.signal.aborted; turn++) {
+    if (runBudgetUsd > 0 && cost >= runBudgetUsd) {
+      send(ctx.win, { kind: "note", text: `Stopped at the spending cap after $${cost.toFixed(2)}. Send a message to continue, or change the cap in Settings.`, chatId: ctx.chatId, running: true });
+      return;
+    }
     const guide = ctx.session.guide;
     if (guide) {
       ctx.session.guide = undefined;
@@ -730,12 +756,17 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
         }
         if (chunk.usage) {
           const cached = (chunk.usage as { prompt_tokens_details?: { cached_tokens?: number } }).prompt_tokens_details?.cached_tokens ?? 0;
+          const fresh = Math.max(0, (chunk.usage.prompt_tokens ?? 0) - cached);
+          const out = chunk.usage.completion_tokens ?? 0;
+          const turnCost = (fresh * price.input + cached * price.read + out * price.output) / 1e6;
+          cost += turnCost;
           recordUsage(provider, model, {
-            input: Math.max(0, (chunk.usage.prompt_tokens ?? 0) - cached),
+            input: fresh,
             cacheRead: cached,
-            output: chunk.usage.completion_tokens ?? 0,
+            output: out,
+            costUsd: turnCost,
           });
-          sendUsage(ctx, { costUsd: 0, contextTokens: chunk.usage.prompt_tokens ?? 0, contextWindow: 0, model });
+          sendUsage(ctx, { costUsd: turnCost, contextTokens: chunk.usage.prompt_tokens ?? 0, contextWindow: 0, model });
         }
       }
     } catch (err) {
