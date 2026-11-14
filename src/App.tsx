@@ -6,6 +6,7 @@ import { appendStep, appendText, appendThinking, Conversation, type TranscriptMs
 import type { DiffView } from "./CodePane";
 import { Windowed } from "./Windowed";
 import { PopOut, type Look } from "./PopOut";
+import { WorkerWatch } from "./WorkerWatch";
 
 const CodePane = lazy(() => import("./CodePane").then((m) => ({ default: m.CodePane })));
 import { Composer, type ComposerHandle } from "./Composer";
@@ -997,6 +998,19 @@ export function App() {
       );
     });
   }, []);
+  const [workerList, setWorkerList] = useState(false);
+  const [watchWorker, setWatchWorker] = useState<string | null>(null);
+  const watchWorkerChat = (id: string) => {
+    setWorkerList(false);
+    const chat = chatsRef.current.find((c) => c.id === id);
+    if (chat && !threadsRef.current[id]) {
+      void window.desk.readCursorChat(chat.slug, id).catch(() => null).then((d) =>
+        setThreads((t) => (t[id] ? t : { ...t, [id]: d?.messages ?? [] })),
+      );
+    }
+    if (watchWorker === id) focusPopout(`worker-${id}`);
+    else setWatchWorker(id);
+  };
   const toggleManager = async (chat: CursorChat) => {
     const r = await window.desk.setManager(chat.id, !team.managers.includes(chat.id));
     if (typeof r === "string") setStatus(r);
@@ -2026,11 +2040,51 @@ export function App() {
           <div className="chat">
             <div className="pane-head chat-head">
               <span className="chat-title">{activeChat?.title ?? "New agent"}</span>
-              {activeChat && team.managers.includes(activeChat.id) && (
-                <span className="team-chip" title="This chat can start and direct worker chats. Right-click it in the sidebar to turn that off.">
-                  Manager · {Object.entries(team.workers).filter(([w, m]) => m === activeChat.id && runningByChat[w]).length} running
-                </span>
-              )}
+              {activeChat && team.managers.includes(activeChat.id) && (() => {
+                const mine = Object.entries(team.workers)
+                  .filter(([, m]) => m === activeChat.id)
+                  .map(([w]) => chats.find((c) => c.id === w))
+                  .filter((c): c is CursorChat => Boolean(c))
+                  .sort((a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt));
+                const live = mine.filter((c) => runningByChat[c.id]);
+                return (
+                  <>
+                    <span className="worker-pick">
+                      <button
+                        type="button"
+                        className="team-chip"
+                        title="This chat can start and direct worker chats. Click to watch one. Right-click it in the sidebar to turn that off."
+                        onClick={() => setWorkerList((v) => !v)}
+                      >
+                        Manager · {live.length} running
+                      </button>
+                      {workerList && (
+                        <div className="ctx-menu worker-list">
+                          {mine.length === 0 && <div className="ctx-empty">No workers yet</div>}
+                          {mine.map((c) => (
+                            <button type="button" key={c.id} onClick={() => watchWorkerChat(c.id)}>
+                              {runningByChat[c.id] ? "● " : ""}
+                              {c.title} · {runningByChat[c.id] ? phaseWord(progressByChat[c.id]) : relTime(c.lastUsedAt ?? c.updatedAt)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </span>
+                    {live.map((c) => (
+                      <button
+                        type="button"
+                        key={c.id}
+                        className="team-chip worker-bubble"
+                        title={`${phaseWord(progressByChat[c.id])}. Click to watch this worker live.`}
+                        onClick={() => watchWorkerChat(c.id)}
+                      >
+                        <span className="run-dot" />
+                        {c.title}
+                      </button>
+                    ))}
+                  </>
+                );
+              })()}
               {activeChat && team.workers[activeChat.id] && (
                 <button className="team-chip" title="Open the manager chat that started this one" onClick={() => openChatById(team.workers[activeChat.id])}>
                   Worker of {chats.find((c) => c.id === team.workers[activeChat.id])?.title ?? "a manager"}
@@ -2409,6 +2463,25 @@ export function App() {
               if (!popped("status")) setBriefing(null);
             }}
             onClose={() => setBriefing(null)}
+          />
+        </PopOut>
+      )}
+
+      {watchWorker && (
+        <PopOut
+          name={`worker-${watchWorker}`}
+          title={`${chats.find((c) => c.id === watchWorker)?.title ?? "Worker"} — AgenticOps Desk`}
+          width={760}
+          height={720}
+          look={look}
+          onClose={() => setWatchWorker(null)}
+        >
+          <WorkerWatch
+            title={chats.find((c) => c.id === watchWorker)?.title ?? "Worker"}
+            msgs={threads[watchWorker] ?? []}
+            live={Boolean(runningByChat[watchWorker])}
+            status={runningByChat[watchWorker] ? phaseWord(progressByChat[watchWorker]) : "Not running"}
+            onOpen={() => openChatById(watchWorker)}
           />
         </PopOut>
       )}

@@ -1235,6 +1235,11 @@ select.pill { appearance: auto; }
 .settings-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .team-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #60a5fa66; color: #60a5fa; background: transparent; white-space: nowrap; }
 button.team-chip { cursor: pointer; }
+.worker-pick { position: relative; }
+.worker-list { position: absolute; top: calc(100% + 4px); left: 0; }
+.worker-bubble { display: inline-flex; align-items: center; gap: 6px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.worker-watch { height: 100vh; }
+.worker-watch .msg-actions { display: none; }
 .settings-index { display: flex; flex-direction: column; gap: 6px; }
 .settings-entry {
   display: flex;
