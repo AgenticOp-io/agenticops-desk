@@ -37,6 +37,17 @@ async function installCursorPlugin() {
   const dest = path.join(cursorHome(), "plugins", "local", "cursor-sync");
   // A git checkout is the user's copy. The desk writes the preference file and leaves the checkout alone.
   if (existsSync(path.join(dest, ".git"))) return;
+  // Never clobber a plugin the user installed themselves. If something already lives at this path and its
+  // manifest is not ours, leave it untouched so a real cursor-sync plugin isn't overwritten on Windows.
+  const existingManifest = path.join(dest, ".cursor-plugin", "plugin.json");
+  if (existsSync(existingManifest)) {
+    try {
+      const raw = JSON.parse(await fs.readFile(existingManifest, "utf8")) as { author?: { name?: string } };
+      if (raw.author?.name !== "AgenticOp-io") return;
+    } catch {
+      return; // Unreadable manifest: don't risk replacing unknown content.
+    }
+  }
   const src = bundledPluginDir();
   if (!existsSync(path.join(src, "scripts", "export-chat.mjs"))) return;
   await fs.cp(src, dest, { recursive: true, force: true });
