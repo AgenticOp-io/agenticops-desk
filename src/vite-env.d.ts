@@ -325,6 +325,7 @@ declare global {
       restartShell: (cwd: string) => Promise<{ id: string; backlog: string }>;
       writeShell: (id: string, text: string) => Promise<boolean>;
       closeShell: (id: string) => Promise<boolean>;
+      focusPopout: (name: string) => Promise<boolean>;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
       checkForUpdate: () => Promise<{
         current: string;

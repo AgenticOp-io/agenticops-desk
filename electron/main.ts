@@ -221,10 +221,16 @@ function openOutside(url: string) {
   if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url);
 }
 
+// Pop-out windows, keyed by their frameName ("desk-popout-chats" and so on), so the main window
+// can focus an already-open panel when its menu item is clicked again.
+const popouts = new Map<string, BrowserWindow>();
+let pendingPopout: string | null = null;
+
 function guardNavigation(w: BrowserWindow) {
   w.webContents.setWindowOpenHandler(({ url, frameName }) => {
     // Panels pop out as blank windows the page draws into (src/PopOut.tsx).
     if (w === win && url === "about:blank" && frameName.startsWith("desk-popout-")) {
+      pendingPopout = frameName;
       return {
         action: "allow",
         overrideBrowserWindowOptions: { backgroundColor: "#181818", autoHideMenuBar: true, minWidth: 420, minHeight: 360 },
@@ -236,6 +242,13 @@ function guardNavigation(w: BrowserWindow) {
   w.webContents.on("did-create-window", (child) => {
     child.setMenuBarVisibility(false);
     guardNavigation(child);
+    if (pendingPopout) {
+      popouts.set(pendingPopout, child);
+      pendingPopout = null;
+      child.once("closed", () => {
+        for (const [name, wnd] of popouts) if (wnd === child) popouts.delete(name);
+      });
+    }
     w.once("closed", () => {
       if (!child.isDestroyed()) child.close();
     });
@@ -1363,6 +1376,16 @@ ipcMain.handle("shell:restart", (e, cwd: string) => {
 ipcMain.handle("shell:close", (_e, id: string) => {
   closeShell(id);
   return true;
+});
+ipcMain.handle("popout:focus", (_e, name: string) => {
+  const wnd = typeof name === "string" ? popouts.get(name) : undefined;
+  if (wnd && !wnd.isDestroyed()) {
+    if (wnd.isMinimized()) wnd.restore();
+    wnd.show();
+    wnd.focus();
+    return true;
+  }
+  return false;
 });
 let latestRelease: string | null = null;
 async function checkAndPatch() {

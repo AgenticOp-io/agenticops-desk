@@ -263,6 +263,7 @@ contextBridge.exposeInMainWorld("desk", {
   restartShell: (cwd: string) => ipcRenderer.invoke("shell:restart", cwd) as Promise<{ id: string; backlog: string }>,
   writeShell: (id: string, text: string) => ipcRenderer.invoke("shell:write", id, text) as Promise<boolean>,
   closeShell: (id: string) => ipcRenderer.invoke("shell:close", id) as Promise<boolean>,
+  focusPopout: (name: string) => ipcRenderer.invoke("popout:focus", name) as Promise<boolean>,
   onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => {
     const listener = (_: unknown, payload: { cwd: string; chunk: string }) => cb(payload);
     ipcRenderer.on("shell:data", listener);

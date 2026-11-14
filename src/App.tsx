@@ -410,6 +410,11 @@ export function App() {
   };
 
   const popped = (k: PanelKey) => prefs.popOut.includes(k);
+  // Brings an already-open pop-out window to the front. The main process tracks the child
+  // window by its name and restores/focuses it in place.
+  const focusPopout = (name: string) => {
+    void window.desk.focusPopout(name);
+  };
   const patchPrefs = (partial: Partial<UiPrefs>) => {
     if (!prefsReady.current) return;
     setPrefs((p) => ({ ...p, ...partial }));
@@ -1592,8 +1597,12 @@ export function App() {
   // The sidebar shows whichever of Chats/Files isn't in its own window; neither if both are.
   const inSide = !popped(sideView) ? sideView : !popped(otherView) ? otherView : null;
   const showSide = (view: "chats" | "files") => {
-    if (popped(view)) setWinClosed((c) => ({ ...c, [view]: !c[view] }));
-    else setSideView(view);
+    if (popped(view)) {
+      // A click on the item when the window is already open brings it to the foreground;
+      // when it is closed it reopens it. window.open with the same name focuses the existing window.
+      if (winClosed[view]) setWinClosed((c) => ({ ...c, [view]: false }));
+      else focusPopout(view);
+    } else setSideView(view);
   };
   const sideOn = (view: "chats" | "files") => (popped(view) ? winShown(view) : inSide === view);
 
@@ -1634,21 +1643,21 @@ export function App() {
             type="button"
             className={inboxOpen ? "on" : ""}
             title={pendingApprovals.length ? `Everything waiting on you (${pendingApprovals.length})` : "Everything waiting on you, across all chats"}
-            onClick={() => setInboxOpen((v) => !v)}
+            onClick={() => (popped("inbox") && inboxOpen ? focusPopout("inbox") : setInboxOpen((v) => !v))}
           >
             <Glyph name="inbox" />
             <span>Waiting on you</span>
             {pendingApprovals.length > 0 && <span className="topbar-badge">{pendingApprovals.length}</span>}
           </button>
-          <button type="button" title="Where every recent chat stands" onClick={showBriefing}>
+          <button type="button" title="Where every recent chat stands" onClick={() => (popped("status") && briefing ? focusPopout("status") : showBriefing())}>
             <Glyph name="briefing" />
             <span>Chat status</span>
           </button>
-          <button type="button" title="Help (F1)" onClick={() => setShowHelp(true)}>
+          <button type="button" title="Help (F1)" onClick={() => (popped("help") && showHelp ? focusPopout("help") : setShowHelp(true))}>
             <Glyph name="help" />
             <span>Help</span>
           </button>
-          <button type="button" title="Settings" onClick={() => { setSettingsSection(""); setShowSettings(true); }}>
+          <button type="button" title="Settings" onClick={() => (popped("settings") && showSettings ? focusPopout("settings") : (setSettingsSection(""), setShowSettings(true)))}>
             <Glyph name="settings" />
             <span>Settings</span>
           </button>
