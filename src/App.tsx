@@ -2873,6 +2873,26 @@ export function App() {
                   </>
                 )}
 
+                {settingsSection === "agentGuidance" && (
+                  <>
+                    <div className="settings-label">Instructions & rules</div>
+                    <p className="settings-hint">
+                      Both shape how an agent works in a project, but they work very differently. Open them from the dock under the chat:
+                      <strong>Instructions</strong> (CLAUDE.md, AGENTS.md, MCP servers) are advisory text the agent reads for context, and{" "}
+                      <strong>Rules</strong> (protected paths, must-pass checks) are hard constraints the Desk enforces on every run.
+                    </p>
+                    <div className="settings-row">
+                      <span><strong>Instructions</strong> — <code>AGENTS.md</code> and <code>CLAUDE.md</code> are project guidance the agent reads (conventions, build/test commands, gotchas). <code>AGENTS.md</code> is the cross-tool standard, so it reaches Claude Code, Cursor, Codex and more. <code>.mcp.json</code> declares MCP servers the agent can call. These are advisory — the model may follow them, but nothing enforces them.</span>
+                    </div>
+                    <div className="settings-row">
+                      <span><strong>Rules</strong> — "Standing orders" in the dock. Protected paths are refused outright (gitignore-style globs), and must-pass checks run after any file change, with failures fed back to the agent until fixed. These are enforced by the Desk, so they hold regardless of which model runs.</span>
+                    </div>
+                    <p className="settings-hint">
+                      Rule of thumb: put conventions and intent in <code>AGENTS.md</code>; put things that must never happen (do-not-edit paths, required tests) in Rules.
+                    </p>
+                  </>
+                )}
+
                 {settingsSection === "plugins" && (
                   <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
                 )}
@@ -2949,6 +2969,10 @@ export function App() {
                 <button className="settings-entry" onClick={() => setSettingsSection("models")}>
                   <strong>AI models</strong>
                   <span>Providers, second opinion, autocomplete, Auto</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("agentGuidance")}>
+                  <strong>Instructions & rules</strong>
+                  <span>What the agent reads, and what the app enforces</span>
                 </button>
                 <button className="settings-entry" onClick={() => setSettingsSection("usage")}>
                   <strong>Usage</strong>
