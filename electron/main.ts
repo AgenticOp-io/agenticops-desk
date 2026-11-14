@@ -234,7 +234,14 @@ function guardNavigation(w: BrowserWindow) {
       pendingPopout = frameName;
       return {
         action: "allow",
-        overrideBrowserWindowOptions: { backgroundColor: "#181818", autoHideMenuBar: true, minWidth: 420, minHeight: 360 },
+        overrideBrowserWindowOptions: {
+          parent: win ?? undefined,
+          modal: false,
+          backgroundColor: "#181818",
+          autoHideMenuBar: true,
+          minWidth: 420,
+          minHeight: 360,
+        },
       };
     }
     openOutside(url);
@@ -246,6 +253,13 @@ function guardNavigation(w: BrowserWindow) {
     if (pendingPopout) {
       popouts.set(pendingPopout, child);
       pendingPopout = null;
+      // A pop-out must come to the front even when the main window is maximized; a freshly created
+      // child window otherwise opens behind it on Windows.
+      child.show();
+      child.focus();
+      child.setAlwaysOnTop(true);
+      child.setAlwaysOnTop(false);
+      child.moveTop();
       child.once("closed", () => {
         for (const [name, wnd] of popouts) if (wnd === child) popouts.delete(name);
       });
@@ -1390,6 +1404,10 @@ ipcMain.handle("popout:focus", (_e, name: string) => {
     if (wnd.isMinimized()) wnd.restore();
     wnd.show();
     wnd.focus();
+    // A transient raise forces the pop-out above a maximized main window on Windows.
+    wnd.setAlwaysOnTop(true);
+    wnd.setAlwaysOnTop(false);
+    wnd.moveTop();
     return true;
   }
   return false;
