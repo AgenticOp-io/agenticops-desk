@@ -478,6 +478,25 @@ async function applyInstallChoices(): Promise<number> {
 // Windows names notifications after this ID: the installer's shortcut carries the appId; a dev run has no shortcut, so Windows shows the ID itself.
 if (process.platform === "win32") app.setAppUserModelId(app.isPackaged ? "io.agenticop.desk" : "AgenticOps Desk");
 
+// Right-click in a text box: spelling fixes first, then the usual edit commands. Every window, pop-outs too.
+// Places with their own menu call preventDefault, which suppresses this event.
+app.on("web-contents-created", (_e, contents) => {
+  contents.on("context-menu", (_ev, p) => {
+    if (!p.isEditable) return;
+    const items: Electron.MenuItemConstructorOptions[] = p.dictionarySuggestions.map((s) => ({
+      label: s,
+      click: () => contents.replaceMisspelling(s),
+    }));
+    if (p.misspelledWord) {
+      if (!items.length) items.push({ label: "No suggestions", enabled: false });
+      items.push({ label: "Add to dictionary", click: () => contents.session.addWordToSpellCheckerDictionary(p.misspelledWord) });
+      items.push({ type: "separator" });
+    }
+    items.push({ role: "cut" }, { role: "copy" }, { role: "paste" }, { type: "separator" }, { role: "selectAll" });
+    Menu.buildFromTemplate(items).popup();
+  });
+});
+
 app.whenReady().then(async () => {
   // The installer runs this and waits, so the choice is on disk before the first window.
   if (process.argv.includes("--apply-install")) {

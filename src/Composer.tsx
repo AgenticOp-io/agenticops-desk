@@ -1,6 +1,21 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker";
 import type { ImageAttachment, ModelOption, PluginCommand, UsageInfo } from "./vite-env";
+import { acceptCorrection, finishedWord } from "./autocorrect";
+
+// Fixes the word a space or punctuation just finished. insertText keeps it on the undo stack, so Ctrl+Z takes it back.
+function autocorrect(area: HTMLTextAreaElement) {
+  const caret = area.selectionStart;
+  if (caret !== area.selectionEnd) return;
+  const hit = finishedWord(area.value, caret);
+  if (!hit) return;
+  const fixed = acceptCorrection(hit.word, window.desk.spellGuess?.(hit.word));
+  if (!fixed) return;
+  area.setSelectionRange(hit.start, hit.end);
+  document.execCommand("insertText", false, fixed);
+  const after = caret + fixed.length - hit.word.length;
+  area.setSelectionRange(after, after);
+}
 
 export const MODES = [
   { value: "default", label: "Agent", hint: "Edits and runs commands; risky actions still ask" },
@@ -343,6 +358,8 @@ export const Composer = forwardRef<
           onChange={(e) => {
             onChange(e.target.value);
             trackMention(e.target.value, e.target.selectionStart);
+            const native = e.nativeEvent as InputEvent;
+            if (native.inputType === "insertText" && !native.isComposing) autocorrect(e.target);
           }}
           onClick={(e) => trackMention(e.currentTarget.value, e.currentTarget.selectionStart)}
           onBlur={() => setTimeout(() => setQuery(null), 150)}

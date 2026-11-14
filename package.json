@@ -1,6 +1,6 @@
 {
   "name": "agenticops-desk",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "private": true,
   "author": "AgenticOp-io",
   "license": "Apache-2.0",
@@ -11,7 +11,7 @@
     "dev": "node scripts/patch-vite-electron.mjs && vite",
     "build": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --publish never",
     "pack": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --publish never",
-    "test": "node --experimental-strip-types --test electron/gate.test.ts electron/memoryPath.test.ts electron/tarMember.test.ts electron/redact.test.ts electron/pureFeatures.test.ts src/transcript.test.ts src/helpText.test.ts boot/choice.test.mjs",
+    "test": "node --experimental-strip-types --test electron/gate.test.ts electron/memoryPath.test.ts electron/tarMember.test.ts electron/redact.test.ts electron/pureFeatures.test.ts src/transcript.test.ts src/autocorrect.test.ts src/helpText.test.ts boot/choice.test.mjs",
     "preview": "vite preview",
     "postinstall": "node scripts/patch-vite-electron.mjs",
     "smoke": "node scripts/smoke.mjs"

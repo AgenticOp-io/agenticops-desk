@@ -339,6 +339,7 @@ declare global {
       writeShell: (id: string, text: string) => Promise<boolean>;
       closeShell: (id: string) => Promise<boolean>;
       focusPopout: (name: string) => Promise<boolean>;
+      spellGuess: (word: string) => string | null;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
       checkForUpdate: () => Promise<{
         current: string;

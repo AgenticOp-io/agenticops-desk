@@ -116,6 +116,7 @@ The list has three sections, top to bottom:
 
 - **Enter** sends, **Shift+Enter** starts a new line. Sending while a chat is working guides that run.
 - The box grows to fit your text, up to 40% of the window, and then scrolls.
+- **Spelling:** misspelled words are underlined. Right-click one for suggestions or **Add to dictionary**; right-click in any text box also gives Cut, Copy, Paste and Select all. In the message box, an obvious typo is fixed as you finish the word, such as *recieve* to *receive*. Ctrl+Z takes the fix back. Autocorrect leaves alone words under four letters, words with capitals, digits or symbols, and anything inside backticks.
 - **Drafts stay with their chat.** Switch away and come back, and your text is there with the cursor at the end.
 - `@` attaches a file, or a function, class or type by name (`@handleLogin` points the agent at its file and line; this needs a git repository).
 - Paste or drop images: up to 10, each under 5 MB.

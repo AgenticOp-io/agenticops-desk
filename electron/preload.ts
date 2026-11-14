@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 type PrivacyStatus = ReturnType<typeof import("./privacy").privacyStatus>;
 type TeamOrder = { id: string; managerId?: string; title?: string; prompt?: string; model?: string; text?: string };
@@ -60,6 +60,8 @@ export type CursorChatDetail = CursorChat & {
 };
 
 contextBridge.exposeInMainWorld("desk", {
+  // The spell checker's best guess for a misspelled word, or null when it is spelled right.
+  spellGuess: (word: string) => (webFrame.isWordMisspelled(word) ? webFrame.getWordSuggestions(word)[0] ?? null : null),
   getWorkspace: () => ipcRenderer.invoke("workspace:get") as Promise<string>,
   openFolder: () => ipcRenderer.invoke("workspace:open") as Promise<string>,
   setWorkspace: (dir: string) => ipcRenderer.invoke("workspace:set", dir) as Promise<string>,
