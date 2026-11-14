@@ -552,6 +552,13 @@ test("old chats fold away, but never the main, pinned, open or running one", asy
   const keep = (c: { id: string }) => c.id === "open";
   assert.deepEqual([...olderChats(chats, 14, now, keep)], ["old"]);
   assert.equal(olderChats(chats, 0, now, keep).size, 0);
+
+  // "Used" means last used (lastUsedAt), not last edited: a chat reopened recently stays out even if updatedAt is old.
+  const used = [
+    { id: "main", updatedAt: now - 30 * day, lastUsedAt: now - 1 * day },
+    { id: "stale", updatedAt: now - 30 * day, lastUsedAt: now - 20 * day },
+  ];
+  assert.deepEqual([...olderChats(used, 14, now, () => false)], ["stale"]);
 });
 
 test("rows keep their place, and new ones go on top", async () => {

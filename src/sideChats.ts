@@ -32,7 +32,8 @@ export function isStale(lastUsedAt: number, now: number): boolean {
 
 // Chats in one project that fold into its "older chats" row: unused for `days`, never the first (main) chat, a
 // pinned one, or one `keep` holds out (open now, running). `chats` is in sidebar order. 0 days is off.
-export function olderChats<T extends { id: string; updatedAt: number; pinned?: boolean }>(
+// "Unused" is the last time the chat was opened (`lastUsedAt`); a chat that was never opened falls back to `updatedAt`.
+export function olderChats<T extends { id: string; updatedAt: number; lastUsedAt?: number; pinned?: boolean }>(
   chats: T[],
   days: number,
   now: number,
@@ -41,7 +42,8 @@ export function olderChats<T extends { id: string; updatedAt: number; pinned?: b
   const old = new Set<string>();
   if (days <= 0) return old;
   chats.forEach((c, i) => {
-    if (i > 0 && !c.pinned && !keep(c) && now - c.updatedAt > days * 86_400_000) old.add(c.id);
+    const seen = c.lastUsedAt ?? c.updatedAt;
+    if (i > 0 && !c.pinned && !keep(c) && now - seen > days * 86_400_000) old.add(c.id);
   });
   return old;
 }

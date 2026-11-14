@@ -1588,6 +1588,7 @@ button.team-chip { cursor: pointer; }
   font-size: calc(var(--window-font) * 0.86);
   line-height: 1.55;
   color: var(--muted);
+  font-style: italic;
 }
 .app[data-theme="light"] .thought { background: #f4f4f5; border-color: #e4e4e7; }
 
