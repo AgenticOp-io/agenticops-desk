@@ -7,7 +7,7 @@ import { chatModelIds } from "./pureFeatures";
 // AI providers the Direct engine can call without Claude Code. Keys are encrypted with Windows'
 // credential protection (safeStorage) and never leave the main process.
 
-export type ProviderId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "ollama";
+export type ProviderId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "ollama" | "gpu";
 
 type Preset = {
   label: string;
@@ -84,6 +84,14 @@ export const PRESETS: Record<ProviderId, Preset> = {
     baseUrl: "http://localhost:11434/v1",
     needsKey: false,
     keyHint: "No key needed. Run Ollama locally and list the models you have pulled.",
+  },
+  // Its own id, not "ollama": the tunnel is on localhost but the data leaves this computer, so privacy must still scrub it.
+  gpu: {
+    label: "Cloud GPU (Ollama over SSH tunnel)",
+    kind: "openai-compatible",
+    baseUrl: "http://localhost:11435/v1",
+    needsKey: false,
+    keyHint: "Your own cloud GPU running Ollama, reached through an SSH tunnel on port 11435. Start it and the tunnel first; it powers itself off when idle.",
   },
 };
 
