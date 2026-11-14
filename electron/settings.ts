@@ -40,6 +40,8 @@ export type UiPrefs = {
   chatArchiveDays: number;
   /** Panels that open in their own window instead of inside the main one. */
   popOut: PanelKey[];
+  /** How Preview shows a running app: inline in the panel, or in the default browser. */
+  previewMode?: "inline" | "browser";
 };
 
 const PANEL_KEYS = ["chats", "files", "inbox", "status", "help", "settings"] as const;
@@ -71,6 +73,7 @@ const defaults = (): UiPrefs => ({
   projectArchive: {},
   chatArchiveDays: 14,
   popOut: ["help", "settings"],
+  previewMode: "inline",
 });
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -126,6 +129,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     popOut: Array.isArray(r.popOut)
       ? r.popOut.filter((k): k is PanelKey => (PANEL_KEYS as readonly unknown[]).includes(k))
       : base.popOut,
+    previewMode: r.previewMode === "browser" ? "browser" : "inline",
   };
 }
 

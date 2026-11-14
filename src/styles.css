@@ -610,7 +610,7 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  max-width: min(68ch, 100%);
+  max-width: 100%;
 }
 .turn + .turn {
   margin-top: 0.85rem;
@@ -683,7 +683,7 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
   padding: 2px 0;
   overflow-wrap: anywhere;
   word-break: break-word;
-  max-width: min(68ch, 100%);
+  max-width: 100%;
 }
 .bubble.system,
 .bubble.error {
@@ -1642,3 +1642,21 @@ button.team-chip { cursor: pointer; }
 .send-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); padding: 2px 2px 0; }
 .send-preview .link { border: 0; background: transparent; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }
 .replay .palette-list { max-height: 50vh; }
+
+/* Activity log: a compact, one-line-per-event timeline. */
+.activity-log { display: flex; flex-direction: column; gap: 4px; }
+.activity-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  padding: 5px 8px; border-radius: 6px; font-size: 12px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.activity-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.activity-kind { font-weight: 650; color: #93c5fd; }
+.activity-action { color: var(--text); }
+.activity-outcome { font-weight: 600; }
+.activity-row.outcome-ok .activity-outcome { color: #4ade80; }
+.activity-row.outcome-failed .activity-outcome, .activity-row.outcome-denied .activity-outcome { color: var(--danger); }
+.activity-row.outcome-started .activity-outcome, .activity-row.outcome-info .activity-outcome { color: var(--muted); }
+.activity-title, .activity-model, .activity-note { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-note { max-width: 40ch; }
+

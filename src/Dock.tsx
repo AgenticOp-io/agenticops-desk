@@ -10,16 +10,18 @@ export function Dock({
   previewUrl,
   onPreviewUrl,
   onStatus,
+  previewMode = "inline",
 }: {
   tab: DockTab;
   workspace: string;
   previewUrl: string;
   onPreviewUrl: (url: string) => void;
   onStatus: (text: string) => void;
+  previewMode?: "inline" | "browser";
 }) {
   if (tab === "terminal") return <Terminal workspace={workspace} />;
   if (tab === "git") return <GitPanel workspace={workspace} onStatus={onStatus} />;
-  if (tab === "preview") return <Preview url={previewUrl} onUrl={onPreviewUrl} workspace={workspace} />;
+  if (tab === "preview") return <Preview url={previewUrl} onUrl={onPreviewUrl} workspace={workspace} mode={previewMode} onStatus={onStatus} />;
   if (tab === "rules") return <Rules workspace={workspace} onStatus={onStatus} />;
   return <Notes workspace={workspace} onStatus={onStatus} />;
 }
@@ -194,7 +196,7 @@ function previewable(url: string) {
   }
 }
 
-function Preview({ url, onUrl, workspace }: { url: string; onUrl: (url: string) => void; workspace: string }) {
+function Preview({ url, onUrl, workspace, mode, onStatus }: { url: string; onUrl: (url: string) => void; workspace: string; mode: "inline" | "browser"; onStatus: (text: string) => void }) {
   const [draft, setDraft] = useState(url);
   const [error, setError] = useState("");
   const [command, setCommand] = useState<string | null>(null);
@@ -240,6 +242,23 @@ function Preview({ url, onUrl, workspace }: { url: string; onUrl: (url: string) 
     await window.desk.writeShell(id, `${command}\n`);
   };
 
+  const openAddress = (next: string) => {
+    const full = /^https?:\/\//i.test(next) ? next : `http://${next}`;
+    if (!previewable(full)) {
+      setError("That address can't be previewed here. AgenticOps Desk's own page is blocked.");
+      return;
+    }
+    setError("");
+    onUrl(full);
+    if (mode === "browser") {
+      // The user chose to preview in their real browser, not the embedded frame.
+      void window.desk.openExternal(full).then((ok) => {
+        if (!ok) setError("Could not open the browser.");
+        else onStatus(`Opened ${full} in the browser`);
+      });
+    }
+  };
+
   return (
     <div className="dock-body preview-pane">
       <form
@@ -247,19 +266,12 @@ function Preview({ url, onUrl, workspace }: { url: string; onUrl: (url: string) 
         onSubmit={(e) => {
           e.preventDefault();
           const next = draft.trim();
-          if (!next) return;
-          const full = /^https?:\/\//i.test(next) ? next : `http://${next}`;
-          if (!previewable(full)) {
-            setError("That address can't be previewed here. AgenticOps Desk's own page is blocked.");
-            return;
-          }
-          setError("");
-          onUrl(full);
+          if (next) openAddress(next);
         }}
       >
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="http://localhost:5173" spellCheck={false} />
         <button className="btn" type="submit">
-          Open
+          {mode === "browser" ? "Open in browser" : "Open"}
         </button>
         {command && (
           <button className="btn" type="button" disabled={Boolean(shellId)} title={`Runs ${command} in this project's terminal`} onClick={() => void startServer()}>
@@ -267,8 +279,9 @@ function Preview({ url, onUrl, workspace }: { url: string; onUrl: (url: string) 
           </button>
         )}
       </form>
+      {mode === "browser" && <p className="settings-hint">Preview opens in your default browser. Switch back to "Preview here" in Settings to use the embedded frame.</p>}
       {error && <p className="settings-hint">{error}</p>}
-      {url && previewable(url) ? (
+      {mode === "inline" && url && previewable(url) ? (
         <iframe
           className="preview-frame"
           title="Preview"
@@ -276,9 +289,9 @@ function Preview({ url, onUrl, workspace }: { url: string; onUrl: (url: string) 
           sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
           referrerPolicy="no-referrer"
         />
-      ) : (
+      ) : mode === "inline" ? (
         <p className="settings-hint">Enter a page address to preview it here.</p>
-      )}
+      ) : null}
     </div>
   );
 }

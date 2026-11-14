@@ -24,6 +24,7 @@ import { isStale, olderChats, projectForChat } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
+import { ActivityLog } from "./ActivityLog";
 import { extractCodeBlocks } from "./codeBlocks";
 import { clamp, defaultPrefs, moveKey, PANELS, type PanelKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, BriefingItem, Team, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
@@ -281,6 +282,7 @@ export function App() {
     };
   }, []);
   const [dock, setDock] = useState<DockTab | null>(null);
+  const [dockPopout, setDockPopout] = useState<DockTab | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [todosByChat, setTodosByChat] = useState<Record<string, Array<{ content: string; status: string }>>>({});
   const [planByChat, setPlanByChat] = useState<Record<string, string>>({});
@@ -2048,8 +2050,12 @@ export function App() {
                 <button
                   key={tab}
                   type="button"
-                  className={`ghost ${dock === tab ? "on" : ""}`}
-                  onClick={() => setDock((cur) => (cur === tab ? null : tab))}
+                  className={`ghost ${dock === tab || dockPopout === tab ? "on" : ""}`}
+                  onClick={() => {
+                    // Terminal and Git open as movable windows; Preview/Rules/Notes stay inline at the bottom.
+                    if (tab === "terminal" || tab === "git") setDockPopout((cur) => (cur === tab ? null : tab));
+                    else setDock((cur) => (cur === tab ? null : tab));
+                  }}
                 >
                   {tab === "notes" ? "Instructions" : tab[0].toUpperCase() + tab.slice(1)}
                 </button>
@@ -2143,7 +2149,7 @@ export function App() {
               onOpenChat={openChatById}
             />
             {dock && workspace && (
-              <Dock tab={dock} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} />
+              <Dock tab={dock} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} previewMode={prefs.previewMode ?? "inline"} />
             )}
           </div>
         </section>
@@ -2407,6 +2413,21 @@ export function App() {
         </PopOut>
       )}
 
+      {dockPopout && workspace && (
+        <PopOut
+          name={`dock-${dockPopout}`}
+          title={`${dockPopout === "terminal" ? "Terminal" : "Git"} — AgenticOps Desk`}
+          width={720}
+          height={640}
+          look={look}
+          windowed={true}
+          modal={false}
+          onClose={() => setDockPopout(null)}
+        >
+          <Dock tab={dockPopout} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} />
+        </PopOut>
+      )}
+
       {keyAsk && (
         <div className="modal" onClick={() => !keyAsk.busy && setKeyAsk(null)}>
           <div className="palette" onClick={(e) => e.stopPropagation()}>
@@ -2588,6 +2609,27 @@ export function App() {
                         {p.label}
                       </label>
                     ))}
+
+                    <div className="settings-label">Preview</div>
+                    <p className="settings-hint">Where a running app opens when you use Preview.</p>
+                    <label className="settings-check">
+                      <input
+                        type="radio"
+                        name="previewMode"
+                        checked={(prefs.previewMode ?? "inline") === "inline"}
+                        onChange={() => patchPrefs({ previewMode: "inline" })}
+                      />
+                      Preview here (embedded in the app)
+                    </label>
+                    <label className="settings-check">
+                      <input
+                        type="radio"
+                        name="previewMode"
+                        checked={prefs.previewMode === "browser"}
+                        onChange={() => patchPrefs({ previewMode: "browser" })}
+                      />
+                      Open in my default browser
+                    </label>
                   </>
                 )}
 
@@ -2820,6 +2862,17 @@ export function App() {
 
                 {settingsSection === "usage" && <UsageSettings />}
 
+                {settingsSection === "logs" && (
+                  <>
+                    <div className="settings-label">Activity log</div>
+                    <p className="settings-hint">
+                      A timeline of what AgenticOps Desk has done: agent runs and their outcomes, git operations, approvals and errors.
+                      It stores labels and outcomes only — never prompts, replies, or secrets.
+                    </p>
+                    <ActivityLog />
+                  </>
+                )}
+
                 {settingsSection === "plugins" && (
                   <PluginsSettings onChanged={() => void window.desk.pluginCommands().then(setPluginCmds)} />
                 )}
@@ -2900,6 +2953,10 @@ export function App() {
                 <button className="settings-entry" onClick={() => setSettingsSection("usage")}>
                   <strong>Usage</strong>
                   <span>Plan limits, and tokens per engine, provider and model</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("logs")}>
+                  <strong>Activity log</strong>
+                  <span>Recent runs, git operations, approvals and errors</span>
                 </button>
                 <button className="settings-entry" onClick={() => setSettingsSection("plugins")}>
                   <strong>Plugins</strong>

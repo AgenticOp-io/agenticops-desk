@@ -26,6 +26,16 @@ export type UsageRow = { source: string; model: string; today: UsageTally; week:
 export type PlanWindow = { id: string; label: string; percent: number | null; resetsAt: number | null };
 export type PlanLimits = { updatedAt: number; subscription: string | null; windows: PlanWindow[]; note?: string };
 export type UsageReport = { rows: UsageRow[]; plan: PlanLimits | null };
+export type ActivityEvent = {
+  at: number;
+  kind: "run" | "tool" | "git" | "approval" | "error" | "system";
+  chatId?: string;
+  title?: string;
+  model?: string;
+  action?: string;
+  outcome: "started" | "ok" | "failed" | "denied" | "info";
+  note?: string;
+};
 export type ModelOption = {
   value: string;
   displayName: string;
@@ -200,6 +210,7 @@ declare global {
       autoStatus: () => Promise<AutoStatus>;
       wakeAuto: (model?: string) => Promise<AutoStatus>;
       usageReport: () => Promise<UsageReport>;
+      activityReport: () => Promise<ActivityEvent[]>;
       refreshPlanLimits: () => Promise<PlanLimits | null>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
@@ -337,6 +348,7 @@ declare global {
       }>;
       installUpdate: () => Promise<string | null>;
       previewCommand: (cwd: string) => Promise<string | null>;
+      openExternal: (url: string) => Promise<boolean>;
       importOtherTools: () => Promise<{ claudeCode: number; vscode: number }>;
       worktreeGet: (chatId: string, folder: string) => Promise<{ path: string; branch: string } | null>;
       worktreeCreate: (chatId: string, folder: string) => Promise<{ path: string; branch: string } | string>;

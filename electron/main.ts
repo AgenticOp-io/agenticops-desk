@@ -24,6 +24,7 @@ import {
 } from "./plugins";
 import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
+import { recentActivity } from "./activityLog";
 import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
@@ -1007,6 +1008,7 @@ ipcMain.handle("claude:login", async () => {
 });
 
 ipcMain.handle("usage:get", () => usageReport());
+ipcMain.handle("activity:get", () => recentActivity());
 ipcMain.handle("usage:plan", () => refreshPlanLimits());
 ipcMain.handle("providers:list", () => providerStatus());
 ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
@@ -1214,6 +1216,11 @@ ipcMain.handle("preview:command", async (_e, cwd: string) => {
   if (!cwd || !existsSync(cwd)) return null;
   const pkg = await fs.readFile(path.join(cwd, "package.json"), "utf8").then(JSON.parse).catch(() => null);
   return devServerCommand(pkg, await fs.readdir(cwd).catch(() => []));
+});
+ipcMain.handle("shell:open-external", async (_e, url: string) => {
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return false;
+  await shell.openExternal(url);
+  return true;
 });
 ipcMain.handle("worktree:get", (_e, chatId: string, folder: string) => worktreeFor(String(chatId ?? ""), String(folder ?? "")));
 ipcMain.handle("worktree:create", async (_e, chatId: string, folder: string) => {

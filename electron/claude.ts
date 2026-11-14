@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, Notification, shell } from "electron";
+import { recordActivity } from "./activityLog";
 import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials } from "./credentials";
 import type { PermissionGate } from "./gate";
@@ -475,6 +476,13 @@ export function answerApproval(
     : { behavior: "deny", message: decision.message || "The user denied this in AgenticOps Desk." };
   if (!settleApproval(session, requestId, result)) return false;
   send(win, { kind: "approval_done", id: requestId, chatId, running: true });
+  recordActivity({
+    kind: "approval",
+    chatId,
+    action: pending.toolName || "tool",
+    outcome: decision.allow ? "ok" : "denied",
+    note: (decision.allow ? "allowed" : "denied") + (pending.gate ? ` (${pending.gate})` : ""),
+  });
   if (win && !win.isDestroyed() && ![...sessions.values()].some((s) => s.approvals.size)) win.flashFrame(false);
   if (session.abort) sendPhase(win, chatId, session, "thinking", "Thinking…");
   return true;
@@ -1635,6 +1643,8 @@ export function runClaude(opts: RunOptions) {
     chatId,
   });
 
+  recordActivity({ kind: "run", chatId, title: opts.prompt.slice(0, 80), model: opts.model, action: "started", outcome: "started" });
+
   const abort = new AbortController();
   session.abort = abort;
   const env: NodeJS.ProcessEnv = {
@@ -1947,6 +1957,15 @@ export function runClaude(opts: RunOptions) {
         sessionId: session.claudeSession,
         chatId,
         text: failed ? "Stopped." : "Done.",
+      });
+      recordActivity({
+        kind: "run",
+        chatId,
+        title: opts.prompt.slice(0, 80),
+        model: opts.model,
+        action: failed ? "failed" : "done",
+        outcome: failed ? "failed" : "ok",
+        note: failed ? failed.slice(0, 240) : undefined,
       });
       if (!failed && !session.stopping) void reviewRun(opts, session, cwd);
     }

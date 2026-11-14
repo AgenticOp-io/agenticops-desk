@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
+import { recordActivity } from "./activityLog";
 import { realStorePwsh } from "./claude";
 import { isNewerVersion, isReleaseTag, newestTag } from "./pureFeatures";
 
@@ -57,20 +58,25 @@ export async function gitCommit(cwd: string, message: string) {
   if (!text) return { ok: false, output: "Write a commit message first." };
   // Include new files too (-A); .gitignore still keeps build output and secrets out.
   const added = await run("git", ["add", "-A"], cwd);
-  if (!added.ok) return added;
-  return run("git", ["commit", "-m", text], cwd);
+  if (!added.ok) return gitActivity("commit", added);
+  return gitActivity("commit", await run("git", ["commit", "-m", text], cwd));
+}
+
+function gitActivity(action: string, result: { ok: boolean; output: string }) {
+  recordActivity({ kind: "git", action, outcome: result.ok ? "ok" : "failed", note: result.output.split("\n").slice(-2).join(" ").slice(-240) || undefined });
+  return result;
 }
 
 export function gitFetch(cwd: string) {
-  return runGit(cwd, ["fetch", "--prune"], 120_000);
+  return runGit(cwd, ["fetch", "--prune"], 120_000).then((r) => gitActivity("fetch", r));
 }
 
 export function gitPull(cwd: string) {
-  return runGit(cwd, ["pull", "--ff-only"], 120_000);
+  return runGit(cwd, ["pull", "--ff-only"], 120_000).then((r) => gitActivity("pull", r));
 }
 
 export function gitPush(cwd: string) {
-  return runGit(cwd, ["push"], 120_000);
+  return runGit(cwd, ["push"], 120_000).then((r) => gitActivity("push", r));
 }
 
 export async function gitHistory(cwd: string) {
@@ -84,13 +90,13 @@ export async function gitHistory(cwd: string) {
 export function gitCheckout(cwd: string, branch: string) {
   const name = branchName(branch);
   if (!name) return Promise.resolve({ ok: false, output: "Branch name is not valid." });
-  return runGit(cwd, ["checkout", name]);
+  return runGit(cwd, ["checkout", name]).then((r) => gitActivity("checkout", r));
 }
 
 export function gitPullRequest(cwd: string, title: string, body: string) {
   const heading = title.trim();
   if (!heading) return Promise.resolve({ ok: false, output: "Write a pull request title first." });
-  return run("gh", ["pr", "create", "--title", heading, "--body", body.trim() || heading], cwd);
+  return run("gh", ["pr", "create", "--title", heading, "--body", body.trim() || heading], cwd).then((r) => gitActivity("pull-request", r));
 }
 
 export async function readProjectDoc(cwd: string, name: string) {

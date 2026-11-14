@@ -30,6 +30,8 @@ export type UiPrefs = {
   chatArchiveDays: number;
   // Panels that open in their own window instead of inside the main one.
   popOut: PanelKey[];
+  // How the Preview panel shows a running app: inline iframe, or launched in the default browser. Persistent.
+  previewMode: "inline" | "browser";
 };
 
 export type PanelKey = "chats" | "files" | "inbox" | "status" | "help" | "settings";
@@ -68,6 +70,7 @@ export const defaultPrefs = (): UiPrefs => ({
   projectArchive: {},
   chatArchiveDays: 14,
   popOut: ["help", "settings"],
+  previewMode: "inline",
 });
 
 export function clamp(n: number, min: number, max: number) {

@@ -124,6 +124,7 @@ contextBridge.exposeInMainWorld("desk", {
   autoStatus: () => ipcRenderer.invoke("auto:status"),
   wakeAuto: (model?: string) => ipcRenderer.invoke("auto:wake", model),
   usageReport: () => ipcRenderer.invoke("usage:get"),
+  activityReport: () => ipcRenderer.invoke("activity:get"),
   refreshPlanLimits: () => ipcRenderer.invoke("usage:plan"),
   listProviders: () => ipcRenderer.invoke("providers:list"),
   setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
@@ -281,6 +282,7 @@ contextBridge.exposeInMainWorld("desk", {
   restartForUpdate: () => ipcRenderer.invoke("updates:restart") as Promise<void>,
   installUpdate: () => ipcRenderer.invoke("updates:install") as Promise<string | null>,
   previewCommand: (cwd: string) => ipcRenderer.invoke("preview:command", cwd) as Promise<string | null>,
+  openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url) as Promise<boolean>,
   importOtherTools: () => ipcRenderer.invoke("tools:import") as Promise<{ claudeCode: number; vscode: number }>,
   worktreeGet: (chatId: string, folder: string) => ipcRenderer.invoke("worktree:get", chatId, folder),
   worktreeCreate: (chatId: string, folder: string) => ipcRenderer.invoke("worktree:create", chatId, folder),
