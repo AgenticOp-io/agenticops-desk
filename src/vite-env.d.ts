@@ -212,6 +212,7 @@ declare global {
       usageReport: () => Promise<UsageReport>;
       activityReport: () => Promise<ActivityEvent[]>;
       opsTriage: (command: string) => Promise<{ ok: boolean; command: string; summary: string | null; raw: string }>;
+      describeImage: (img: { mediaType: string; data: string; name?: string }) => Promise<string | null>;
       refreshPlanLimits: () => Promise<PlanLimits | null>;
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { loadAgentSdk } from "./claudeBinary";
 import { setToolServers } from "./claude";
 import { opsTriage } from "./opsTriage";
+import { describeImage } from "./imageVision";
 
 // The ops desk tool, available to every chat. It runs ONE read-only git or gh status command and hands the
 // output to the local Ollama model for a short triage summary, so busywork (build status, repo state) is
@@ -33,9 +34,22 @@ export function initOpsTools() {
         };
       },
     );
+    const img = tool(
+      "describe_image",
+      "Describe an attached image (screenshot, diagram, photo) as text, so you can act on it even on a text-only model. Local vision first, cloud fallback.",
+      {
+        mediaType: z.string().describe("Image MIME type, e.g. image/png"),
+        data: z.string().describe("Base64 image data"),
+      },
+      async (args) => {
+        const text = await describeImage({ mediaType: args.mediaType, data: args.data });
+        if (!text) return { content: [{ type: "text", text: "The image could not be described (no local vision model and no Claude key)." }], isError: true };
+        return { content: [{ type: "text", text: `Image description:\n${text}` }] };
+      },
+    );
     return {
-      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op] }) },
-      allowed: ["mcp__ops__ops_triage"],
+      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img] }) },
+      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image"],
     };
   });
 }

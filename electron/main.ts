@@ -27,6 +27,7 @@ import { parseDirectModel, providerStatus, pullProviderModels, setProvider } fro
 import { usageReport } from "./usageLog";
 import { recentActivity } from "./activityLog";
 import { opsTriage } from "./opsTriage";
+import { describeImage } from "./imageVision";
 import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
@@ -1026,6 +1027,9 @@ ipcMain.handle("claude:login", async () => {
 ipcMain.handle("usage:get", () => usageReport());
 ipcMain.handle("activity:get", () => recentActivity());
 ipcMain.handle("ops:triage", (_e, command: string) => opsTriage(String(command ?? "")));
+ipcMain.handle("image:describe", (_e, img: { mediaType?: string; data?: string; name?: string }) =>
+  describeImage({ mediaType: String(img?.mediaType ?? "image/png"), data: String(img?.data ?? ""), name: typeof img?.name === "string" ? img.name : undefined }),
+);
 ipcMain.handle("usage:plan", () => refreshPlanLimits());
 ipcMain.handle("providers:list", () => providerStatus());
 ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
