@@ -49,7 +49,7 @@ async function fetchPatch(tag: string): Promise<string | null> {
   if (process.env.AGENTICOPS_DESK_PATCH_FROM) return process.env.AGENTICOPS_DESK_PATCH_FROM;
   if (!isReleaseTag(tag)) return null;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-patch-"));
-  if (await downloadReleaseAssets(tag, dir, PATCH_FILES)) return dir;
+  if (!(await downloadReleaseAssets(tag, dir, PATCH_FILES))) return dir;
   const args = ["release", "download", tag, "--repo", REPO, "--dir", dir, ...PATCH_FILES.flatMap((name) => ["-p", name])];
   const got = await run("gh", args, app.getPath("home"), 300_000);
   if (got.ok) return dir;
@@ -130,6 +130,31 @@ export async function updateCode(latest: string | null): Promise<PatchResult> {
 
 export const canInstallUpdate = () => canPatch();
 
+// Maps a downloadReleaseAssets failure back to what the user should do about it.
+function downloadMessage(reason: string | null): string {
+  switch (reason) {
+    case "sign-in":
+      return "The update could not be downloaded because the GitHub CLI is not signed in. Run `gh auth login`.";
+    case "not-ready":
+      return "The release is not published yet. It is marked as a draft, so its files are not available. Try again in a minute.";
+    case "missing":
+      return "The release is out but its files have not finished uploading. Try again in a minute.";
+    default:
+      return "The update could not be downloaded. Check your network connection and try again.";
+  }
+}
+
+// The GitHub release may still be uploading or a draft when the tag first appears. Wait a little and retry once.
+async function downloadWithRetry(tag: string, dir: string, names: string[], tries = 2): Promise<string | null> {
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const reason = await downloadReleaseAssets(tag, dir, names);
+    if (!reason) return null;
+    if (attempt + 1 < tries) await new Promise((r) => setTimeout(r, 1_500));
+    else return reason;
+  }
+  return "network";
+}
+
 // Downloads the full setup for tag, checks it against the signed manifest, and runs it silently once the app has
 // saved and quit. --force-run starts the new version after the install. The caller refuses while chats run.
 export async function installFullUpdate(tag: string): Promise<string | null> {
@@ -138,13 +163,15 @@ export async function installFullUpdate(tag: string): Promise<string | null> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-setup-"));
   let started = false;
   try {
-    if (!(await downloadReleaseAssets(tag, dir, PATCH_FILES.slice(0, 2)))) return "The update could not be downloaded. Check the GitHub CLI sign-in.";
+    const manifestReason = await downloadWithRetry(tag, dir, PATCH_FILES.slice(0, 2));
+    if (manifestReason) return downloadMessage(manifestReason);
     const bytes = await fs.readFile(path.join(dir, "patch-manifest.json"));
     const signature = Buffer.from(await fs.readFile(path.join(dir, "patch-manifest.sig"), "utf8"), "base64");
     if (!verify(null, bytes, PUBLIC_KEY, signature)) return "The update's signature is not valid.";
     const setup = installerFor(JSON.parse(bytes.toString("utf8")) as PatchManifest, tag, process.arch);
     if (typeof setup === "string") return setup;
-    if (!(await downloadReleaseAssets(tag, dir, [setup.name]))) return "The installer could not be downloaded.";
+    const installerReason = await downloadWithRetry(tag, dir, [setup.name]);
+    if (installerReason) return downloadMessage(installerReason);
     const exe = path.join(dir, setup.name);
     if (sha256(await fs.readFile(exe)) !== setup.sha256) return "The installer download is damaged.";
     app.once("will-quit", () => spawn(exe, ["/S", "--force-run"], { detached: true, stdio: "ignore" }).unref());

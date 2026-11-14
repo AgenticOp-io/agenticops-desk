@@ -253,24 +253,25 @@ async function githubBytes(url: string, token: string): Promise<Buffer | null> {
   return null;
 }
 
-// Downloads named release files with the GitHub CLI sign-in.
-export async function downloadReleaseAssets(tag: string, dir: string, names: string[]): Promise<boolean> {
+// Downloads named release files with the GitHub CLI sign-in. Returns null on success, or the reason it failed.
+export async function downloadReleaseAssets(tag: string, dir: string, names: string[]): Promise<string | null> {
   const token = await githubToken();
-  if (!token || !isReleaseTag(tag)) return false;
+  if (!token) return "sign-in";
+  if (!isReleaseTag(tag)) return "tag";
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`, { headers: authHeaders(token) });
-    if (!res.ok) return false;
+    if (!res.ok) return res.status === 404 ? "not-ready" : "network";
     const data = (await res.json()) as { assets?: Array<{ name?: string; url?: string }> };
     for (const name of names) {
       const asset = data.assets?.find((item) => item.name === name && item.url);
-      if (!asset?.url) return false;
+      if (!asset?.url) return "missing";
       const bytes = await githubBytes(asset.url, token);
-      if (!bytes) return false;
+      if (!bytes) return "network";
       await fs.writeFile(path.join(dir, name), bytes);
     }
-    return true;
+    return null;
   } catch {
-    return false;
+    return "network";
   }
 }
 
