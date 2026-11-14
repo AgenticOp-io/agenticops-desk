@@ -475,6 +475,9 @@ async function applyInstallChoices(): Promise<number> {
   return result.ok ? 0 : 1;
 }
 
+// Windows names notifications after this ID: the installer's shortcut carries the appId; a dev run has no shortcut, so Windows shows the ID itself.
+if (process.platform === "win32") app.setAppUserModelId(app.isPackaged ? "io.agenticop.desk" : "AgenticOps Desk");
+
 app.whenReady().then(async () => {
   // The installer runs this and waits, so the choice is on disk before the first window.
   if (process.argv.includes("--apply-install")) {
