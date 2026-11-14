@@ -81,20 +81,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease
-      - name: Remove strictly older releases
+      - name: Remove strictly older, published releases
         env:
           GH_TOKEN: ${{ github.token }}
         # One installation updates from the newest release; older ones only take up space. Git tags stay.
-        # Only delete releases OLDER than this one by semver: never a newer tag, and never a release
-        # that is still being built (which a faster concurrent run would otherwise clobber via "release not found").
+        # Only delete releases that are PUBLISHED (not draft) AND strictly older than this one by semver, so a
+        # release still being built is never clobbered by a faster concurrent run ("release not found").
         run: |
           current="${GITHUB_REF_NAME#v}"
-          gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName --jq '.[].tagName' |
+          gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft --jq '.[] | select(.isDraft | not) | .tagName' |
             while read -r tag; do
               [ "$tag" = "${GITHUB_REF_NAME}" ] && continue
               other="${tag#v}"
               if printf '%s\n' "$other" "$current" | sort -V | head -1 | grep -qx "$other"; then
-                # other is strictly older (or equal-but-different); equal is excluded above.
+                # other is strictly older and published; equal is excluded above.
                 gh release delete "$tag" --repo "${GITHUB_REPOSITORY}" --yes
               fi
             done
