@@ -26,6 +26,8 @@ export type UiPrefs = {
   cursorIntegration: "off" | "partial" | "full";
   chatStorage: "github" | "hybrid" | "local" | "";
   projectArchive: Record<string, "in" | number>;
+  // Chats unused this many days fold under their project's "older chats" row; 0 is off.
+  chatArchiveDays: number;
   // Panels that open in their own window instead of inside the main one.
   popOut: PanelKey[];
 };
@@ -64,6 +66,7 @@ export const defaultPrefs = (): UiPrefs => ({
   cursorIntegration: "off",
   chatStorage: "",
   projectArchive: {},
+  chatArchiveDays: 14,
   popOut: ["help", "settings"],
 });
 

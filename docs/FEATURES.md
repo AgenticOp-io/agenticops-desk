@@ -79,6 +79,8 @@ The list has three sections, top to bottom:
 - A project with a running chat never counts as archived. A project that is open stays out of the automatic archive, but one you archived by hand stays there until you open it.
 - Archive placement is saved per computer and is not synced.
 
+**Older chats:** inside a project, chats not used for 14 days fold under a **Show N older chats** row at the end of its list. Open the row to see and read them. Search still finds them. The top chat, pinned chats, the open chat and running chats always stay in view. Change the number of days, or turn it off, in **Settings > Chats & projects > Older chats**.
+
 **Other sidebar actions**
 
 - **Add** puts a folder on the list. **New chat** starts one in the open project.

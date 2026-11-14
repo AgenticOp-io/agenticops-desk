@@ -20,7 +20,7 @@ import { ChatStorage } from "./ChatStorage";
 import { SavedLogins } from "./SavedLogins";
 import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
-import { isStale, projectForChat } from "./sideChats";
+import { isStale, olderChats, projectForChat } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
@@ -293,6 +293,8 @@ export function App() {
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [otherOpen, setOtherOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  // Projects whose "older chats" row is open, for this session.
+  const [olderOpen, setOlderOpen] = useState<Set<string>>(() => new Set());
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
@@ -1461,10 +1463,20 @@ export function App() {
       const current = samePath(g.path, workspace);
       const opened = Boolean(q) || Boolean(prefs.expanded[g.key]);
       const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
-      // A closed project is one row, so a long list of folders is easy to scan. An open one keeps every chat.
-      const visibleChats = opened ? liveChats : [];
+      // A closed project is one row, so a long list of folders is easy to scan. An open one shows its recent chats,
+      // and the rest fold under "older chats". A search shows every match.
+      const older = q
+        ? new Set<string>()
+        : olderChats(liveChats, prefs.chatArchiveDays, Date.now(), (c) => Boolean(runningByChat[c.id]) || c.id === activeChat?.id);
       rows.push({ kind: "project", id: `p:${g.key}`, group: g });
-      for (const c of visibleChats) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
+      if (opened) {
+        for (const c of liveChats) if (!older.has(c.id)) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
+        if (older.size) {
+          const open = olderOpen.has(g.key);
+          rows.push({ kind: "other", id: `older:${g.key}`, count: older.size, open });
+          if (open) for (const c of liveChats) if (older.has(c.id)) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
+        }
+      }
       if (liveChats.length === 0 && (opened || current)) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
     };
     // A search shows every match. Otherwise GitHub projects and any project that still has chats stay in the list.
@@ -1488,7 +1500,7 @@ export function App() {
       if (archiveOpen) for (const g of archived) pushGroup(g);
     }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen]);
+  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, prefs.chatArchiveDays, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen, olderOpen]);
 
   // A newly opened chat shows in the list, once: collapsing its project afterwards stays collapsed.
   const shownChat = useRef<string | null>(null);
@@ -1707,6 +1719,26 @@ export function App() {
           >
             {(row) => {
               if (row.kind === "note") return <div className="tree-note">{row.text}</div>;
+              if (row.kind === "other" && row.id.startsWith("older:")) {
+                const key = row.id.slice("older:".length);
+                return (
+                  <button
+                    type="button"
+                    className="more-link other-folders"
+                    aria-expanded={row.open}
+                    title={`Chats not used for ${prefs.chatArchiveDays} days. Search finds them too. Change the days in Settings > Chats.`}
+                    onClick={() =>
+                      setOlderOpen((cur) => {
+                        const next = new Set(cur);
+                        if (!next.delete(key)) next.add(key);
+                        return next;
+                      })
+                    }
+                  >
+                    {row.open ? "Hide" : "Show"} {row.count} older chat{row.count === 1 ? "" : "s"}
+                  </button>
+                );
+              }
               if (row.kind === "other") {
                 return (
                   <button
@@ -2600,6 +2632,21 @@ export function App() {
                       }
                     />
                     <p className="settings-hint">Drag a project or chat to reorder it. Drag a project onto the archive row, or back out of it.</p>
+                    <div className="settings-label">Older chats</div>
+                    <label className="settings-row">
+                      <span>
+                        In each project, chats not used for this long fold under a "Show older chats" row. The top chat, pinned chats,
+                        the open chat and running chats always stay. Search still finds every chat.
+                      </span>
+                      <select value={String(prefs.chatArchiveDays)} onChange={(e) => patchPrefs({ chatArchiveDays: Number(e.target.value) })}>
+                        <option value="0">Never</option>
+                        {[1, 3, 7, 14, 30, 60, 90].map((n) => (
+                          <option key={n} value={String(n)}>
+                            After {n} day{n === 1 ? "" : "s"}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <div className="settings-label">Where chats live</div>
                     <ChatStorage current={prefs.chatStorage} onChosen={(mode) => setPrefs((p) => ({ ...p, chatStorage: mode }))} />
                     {prefs.chatStorage === "github" && <CursorFolders />}

@@ -30,6 +30,22 @@ export function isStale(lastUsedAt: number, now: number): boolean {
   return now - lastUsedAt > 90 * 86_400_000;
 }
 
+// Chats in one project that fold into its "older chats" row: unused for `days`, never the first (main) chat, a
+// pinned one, or one `keep` holds out (open now, running). `chats` is in sidebar order. 0 days is off.
+export function olderChats<T extends { id: string; updatedAt: number; pinned?: boolean }>(
+  chats: T[],
+  days: number,
+  now: number,
+  keep: (chat: T) => boolean,
+): Set<string> {
+  const old = new Set<string>();
+  if (days <= 0) return old;
+  chats.forEach((c, i) => {
+    if (i > 0 && !c.pinned && !keep(c) && now - c.updatedAt > days * 86_400_000) old.add(c.id);
+  });
+  return old;
+}
+
 // How many rounds of a chat to show. A new round stays in view once everything is showing, and an empty chat
 // never lowers the count below a page: at 0, every chat opened after it would show nothing.
 export function roundsToShow(count: number, rounds: number, page: number): number {

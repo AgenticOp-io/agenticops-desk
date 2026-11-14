@@ -538,6 +538,22 @@ test("a project moves to the archive after three months unopened", async () => {
   assert.equal(isStale(0, now), true);
 });
 
+test("old chats fold away, but never the main, pinned, open or running one", async () => {
+  const { olderChats } = await import("../src/sideChats.ts");
+  const day = 86_400_000;
+  const now = 1000 * day;
+  const chats = [
+    { id: "main", updatedAt: now - 50 * day },
+    { id: "fresh", updatedAt: now - 2 * day },
+    { id: "old", updatedAt: now - 20 * day },
+    { id: "pinned", updatedAt: now - 20 * day, pinned: true },
+    { id: "open", updatedAt: now - 20 * day },
+  ];
+  const keep = (c: { id: string }) => c.id === "open";
+  assert.deepEqual([...olderChats(chats, 14, now, keep)], ["old"]);
+  assert.equal(olderChats(chats, 0, now, keep).size, 0);
+});
+
 test("rows keep their place, and new ones go on top", async () => {
   const { stableOrder } = await import("../src/sideChats.ts");
   const places = new Map<string, number>();
