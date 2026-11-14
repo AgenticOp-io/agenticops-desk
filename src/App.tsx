@@ -974,6 +974,7 @@ export function App() {
         ...boss,
         id: order.id,
         title: order.title || "Worker",
+        model: order.model || boss.model,
         pinned: false,
         parentId: undefined,
         updatedAt: Date.now(),

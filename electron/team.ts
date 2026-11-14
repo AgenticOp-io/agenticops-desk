@@ -4,7 +4,7 @@ import path from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { z } from "zod";
 import { capsulesBrief } from "./capsules";
-import { chatState, lastAnswer, onChatEvent, setToolServers } from "./claude";
+import { chatState, lastAnswer, listModels, onChatEvent, setToolServers } from "./claude";
 import { loadAgentSdk } from "./claudeBinary";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
@@ -84,6 +84,11 @@ export function initTeam(window: () => BrowserWindow | null) {
       return true;
     };
 
+    // The same menu the user picks from, minus providers still waiting on a key or model list: every AI that's
+    // ready on this computer (Claude Code, and each Direct provider with a key, such as DeepSeek), nothing it can't run.
+    const models = listModels().filter((m) => !("needsSetup" in m && m.needsSetup) && !m.value.startsWith("setup:"));
+    const menu = models.map((m) => `${m.value} (${m.displayName}${m.group ? `, ${m.group}` : ""})`).join("; ");
+
     const tools = [
       tool(
         "list_chats",
@@ -112,14 +117,25 @@ export function initTeam(window: () => BrowserWindow | null) {
         {
           title: z.string().min(1).max(80).describe("Short title shown in the sidebar"),
           prompt: z.string().min(1).describe("The full task. The worker can't see your chat, so include everything it needs."),
-          model: z.string().optional().describe("Model id; leave out to use the same model as you"),
+          model: z
+            .string()
+            .optional()
+            .describe(
+              "Pick the model that fits this task, from any provider listed. Cheap, fast models (Haiku, DeepSeek Flash, Gemini Flash, " +
+                "GPT mini and the like) for simple, mechanical work: renames, formatting, docs, small tests, lookups. Mid models (Sonnet, " +
+                "DeepSeek V4 Pro, GPT, Gemini Pro) for ordinary coding and bug fixes. The strongest (Opus, Fable) for hard design, tricky " +
+                "debugging, security, or changes across many files. Spreading work across providers keeps any one allowance from running out. " +
+                `"direct:" models run on the user's API key for that provider. Leave out to use your own model. Choose one of: ${menu}`,
+            ),
           worktree: z.boolean().optional().describe("false to work in the project folder itself"),
         },
         async (args) => {
           const running = Object.keys(t.workers).filter((id) => mine(id) && busy(id)).length;
           if (running >= MAX_RUNNING) return fail(`${running} of your workers are still running. Call wait_for first.`);
+          if (args.model && !models.some((m) => m.value === args.model)) return fail(`Unknown model "${args.model}". Choose one of: ${menu}`);
           const me = await manager();
           if (!me?.projectPath) return fail("This chat's project folder is not on this computer.");
+          const model = args.model ?? me.model ?? "";
           const id = randomUUID();
           let where = "the project folder";
           if (args.worktree !== false) {
@@ -129,11 +145,11 @@ export function initTeam(window: () => BrowserWindow | null) {
           t.workers[id] = managerId;
           save();
           runs.set(id, { done: false, text: "" });
-          if (!post("team:start", { id, managerId, title: args.title, prompt: args.prompt, model: args.model ?? me.model ?? "" })) {
+          if (!post("team:start", { id, managerId, title: args.title, prompt: args.prompt, model })) {
             runs.delete(id);
             return fail("The app window is closed, so no chat could start.");
           }
-          return ok(`Started worker ${id} ("${args.title}") in ${where}. Call wait_for with its id to get the result.`);
+          return ok(`Started worker ${id} ("${args.title}") on ${model || "the default model"} in ${where}. Call wait_for with its id to get the result.`);
         },
       ),
       tool(
