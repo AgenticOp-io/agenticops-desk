@@ -206,6 +206,8 @@ To fake a git remote that looks like GitHub, use an `ssh://git@github.com/...` a
 
 Runtime packages that Vite bundles (`openai`, React, Monaco, KaTeX) stay in `devDependencies`. Only `dependencies` are copied into the installer, and there are none: the agent SDK is a dev dependency that a packaged app downloads (`loadAgentSdk`). The main build keeps it and `node:sqlite` external.
 
-An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. `make-patch.mjs` also puts each `-win-<arch>-setup.exe` and its SHA-256 in `installers`, so **Download and install** (`installFullUpdate`) can check the unsigned setup against the signed manifest before running it with `/S --force-run`. The signing key exists only as the `PATCH_SIGNING_KEY` secret. If it is lost, make a new pair and ship one full install.
+An installed app takes the patch only if `shell` in its manifest matches: the Electron version and `dependencies`. Changing either means that release needs the full installer. `make-patch.mjs` also puts each `-win-<arch>-setup.exe` and its SHA-256 in `installers`, so **Download and install** (`installFullUpdate`) can check the unsigned setup against the signed manifest before running it with `/S --force-run`. The signing key is the `PATCH_SIGNING_KEY` secret and the release computer's `~/.agenticops-patch-key`. If it is lost, make a new pair and ship one full install (last done for 0.1.44).
+
+`scripts/release-local.ps1` releases without GitHub Actions: it builds a clean clone of the tag, Windows on this computer and the Linux AppImages in WSL (`scripts/build-linux-wsl.sh`, needs Node in `~/.local/node`), then uploads, publishes and keeps the three newest releases. It cannot build macOS.
 
 CI (`.github/workflows/ci.yml`) runs types, tests, build and smoke on Windows for every push to `main`.

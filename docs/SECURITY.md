@@ -79,7 +79,7 @@ Removing a login leaves it on the Always hide list, because it may already appea
 - **Plugins:** a plugin runs with the agent's permissions. Install ones you trust.
 - **MCP servers on Direct:** a server runs as a program with your permissions. One listed in a project's `.mcp.json` arrived with the repository, so it starts only after you approve it, and an edited entry asks again. Folder trust can't give that approval. Servers from your own user settings start without asking, as they do on the default engine.
 - **Own worktree:** a chat's worktree sits in the app's data folder, and the editor and change bar may write there as they do in the project.
-- **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. **Download and install** checks the full setup's SHA-256 against the same signed manifest before running it. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret. The private repository is read with the GitHub CLI sign-in on this computer. The app does not carry a token.
+- **Updates:** patches are verified against an Ed25519 public key built into the app, with a SHA-256 check for every file. **Download and install** checks the full setup's SHA-256 against the same signed manifest before running it. The private key exists only as the `PATCH_SIGNING_KEY` GitHub secret and `~/.agenticops-patch-key` on the release computer. The private repository is read with the GitHub CLI sign-in on this computer. The app does not carry a token.
 - **Binary download:** the Claude Code binary is checked against npm's SHA-512 fingerprint.
 - **Installers are not code-signed**, so Windows and macOS can't vouch for who built them.
 

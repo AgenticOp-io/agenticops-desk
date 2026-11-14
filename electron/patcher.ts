@@ -15,7 +15,7 @@ import { extractTarGzMember } from "./tarMember";
 // A patch never touches the folder the running code came from.
 // shortcut: Windows setup installs only; a portable copy is unpacked afresh each run, and macOS and Linux installs are not writable by the user.
 
-const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAi09l5MtKjPKBp8nezRTjG5TDWlJdLDUuQ5thtKYsUqE=\n-----END PUBLIC KEY-----\n";
+const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAFow7AxOi6CK1cDWxmPJs+t9F32f516/SceN/mzs4wdE=\n-----END PUBLIC KEY-----\n";
 const REPO = "AgenticOp-io/agenticops-desk";
 
 type PatchState = { version: string | null; previous?: string | null; trial?: boolean; tried?: boolean; bad?: string[] };
