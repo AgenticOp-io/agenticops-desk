@@ -20,7 +20,14 @@ export type ApprovalRequest = {
   remember?: boolean;
 };
 
-export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type UsageInfo = {
+  costUsd: number;
+  contextTokens: number;
+  contextWindow: number;
+  model?: string;
+  sessionPercent?: number | null;
+  sessionResetsAt?: number | null;
+};
 export type UsageTally = { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number; calls: number };
 export type UsageRow = { source: string; model: string; today: UsageTally; week: UsageTally; month: UsageTally; daily: number[] };
 export type PlanWindow = { id: string; label: string; percent: number | null; resetsAt: number | null };

@@ -81,19 +81,34 @@ export function autoStep(
 // lower budgets hand off so often that rewriting the transcript eats the saving.
 export const HANDOFF_TOKENS = 150_000;
 
+// A long thread fills the 5-hour allowance by re-reading itself on every tool step, well before 150k.
+// Once that allowance is this full, hand off at the lower budget instead.
+export const HOT_WINDOW_PERCENT = 80;
+export const HOT_HANDOFF_TOKENS = 60_000;
+
+// Cache-read tokens one resumed session may accumulate. About two heavy turns of a ~70k thread;
+// the next message then continues from a brief so the same history is not re-read for hours.
+export const REREAD_TOKENS = 3_000_000;
+
+export function handoffBudget(sessionPercent: number | null | undefined): number {
+  return sessionPercent != null && sessionPercent >= HOT_WINDOW_PERCENT ? HOT_HANDOFF_TOKENS : HANDOFF_TOKENS;
+}
+
 // Claude Code's prompt cache for these sessions lasts an hour. Resuming after that rewrites the whole history.
 export const RESUME_TTL_MS = 45 * 60_000;
 
-// Start fresh instead of resuming when the last turn filled the context, or the cache would be cold.
+// Start fresh instead of resuming when the last turn filled the context, the cache would be cold,
+// or this session has already re-read its history enough to drain the allowance.
 // Only when the user sent the message, so a review round with no transcript keeps its session.
 export function shouldHandOff(
   lastContext: number | undefined,
   historyMessages: number,
   budget = HANDOFF_TOKENS,
   idleMs = 0,
+  reread = 0,
 ): boolean {
   if (historyMessages <= 0) return false;
-  return (lastContext ?? 0) > budget || idleMs > RESUME_TTL_MS;
+  return (lastContext ?? 0) > budget || idleMs > RESUME_TTL_MS || reread > REREAD_TOKENS;
 }
 
 const BRIEF_LIMIT = 8_000;

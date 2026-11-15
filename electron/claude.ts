@@ -15,15 +15,17 @@ import {
   contextTokens,
   gateCommand,
   gatePassed,
-  HANDOFF_TOKENS,
+  handoffBudget,
+  HOT_WINDOW_PERCENT,
   latestContextTokens,
   percentUsed,
+  REREAD_TOKENS,
   RESUME_TTL_MS,
   sessionBrief,
   shouldHandOff,
   turnIsOver,
 } from "./pureFeatures";
-import { recordPlan, recordUsage, type PlanLimits, type PlanWindow } from "./usageLog";
+import { fiveHourWindow, recordPlan, recordUsage, type PlanLimits, type PlanWindow } from "./usageLog";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
@@ -93,7 +95,14 @@ export type ClaudeEvent = {
   chatId?: string;
 };
 
-export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type UsageInfo = {
+  costUsd: number;
+  contextTokens: number;
+  contextWindow: number;
+  model?: string;
+  sessionPercent?: number | null;
+  sessionResetsAt?: number | null;
+};
 export type ModelOption = {
   value: string;
   displayName: string;
@@ -160,6 +169,11 @@ type Session = {
   lastContext?: number;
   // When that turn happened, so a later message can tell a warm session from a cold one.
   lastTurnAt?: number;
+  // Cache-read tokens this CLI session has already re-sent. The next message hands off past the budget.
+  reread?: number;
+  // Last context window and model, so a plan-limit event can refresh the meter without a new run total.
+  contextWindow?: number;
+  modelName?: string;
   // Per-model totals this run has already written to the usage log.
   loggedUsage?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number }>;
   // The user's instruction for the current run (kept local), for the "why" trail on changed files.
@@ -180,6 +194,7 @@ type StoredSession = {
   // hands off a full or cold session instead of resuming it.
   lastContext?: number;
   lastTurnAt?: number;
+  reread?: number;
   pending?: { prompt: string; permissionMode?: string; startedAt: number; started: boolean };
 };
 
@@ -243,6 +258,7 @@ export function sessionFor(chatId: string): Session {
       workspace: stored?.workspace,
       lastContext: typeof stored?.lastContext === "number" ? stored.lastContext : undefined,
       lastTurnAt: typeof stored?.lastTurnAt === "number" ? stored.lastTurnAt : undefined,
+      reread: typeof stored?.reread === "number" ? stored.reread : undefined,
       approvals: new Map(),
       decisions: new Map(),
       changes: new Map(),
@@ -643,10 +659,12 @@ export function clearClaudeSession(chatId: string, session: Session) {
   session.claudeSession = undefined;
   session.lastContext = undefined;
   session.lastTurnAt = undefined;
+  session.reread = undefined;
   patchStored(chatId, (s) => {
     delete s.claudeSession;
     delete s.lastContext;
     delete s.lastTurnAt;
+    delete s.reread;
     delete s.pending;
   });
 }
@@ -890,11 +908,31 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       }
       const usage = runUsage(msg, session);
       if (usage) send(win, { kind: "usage", usage, chatId, running: true });
-      logRunUsage(msg, session);
+      logRunUsage(msg, session, chatId);
       return;
     }
     if (type === "rate_limit_event") {
-      notePlanLimit(msg.rate_limit_info as Record<string, unknown> | undefined);
+      const info = msg.rate_limit_info as Record<string, unknown> | undefined;
+      notePlanLimit(info);
+      const id = typeof info?.rateLimitType === "string" ? info.rateLimitType : "";
+      if (id === "five_hour") {
+        const rejected = info?.status === "rejected";
+        const percent = rejected ? 100 : percentUsed(info?.utilization as number | undefined, "fraction");
+        const resetsAt = typeof info?.resetsAt === "number" ? info.resetsAt * 1000 : null;
+        send(win, {
+          kind: "usage",
+          chatId,
+          running: true,
+          usage: {
+            costUsd: 0,
+            contextTokens: session.lastContext ?? 0,
+            contextWindow: session.contextWindow ?? 0,
+            ...(session.modelName ? { model: session.modelName } : {}),
+            sessionPercent: percent,
+            sessionResetsAt: resetsAt,
+          },
+        });
+      }
       return;
     }
   } catch {
@@ -912,7 +950,7 @@ type ModelUsageRow = {
 };
 
 // A run's result repeats the totals so far, and a guided run can report more than once. Log only what is new.
-function logRunUsage(msg: Record<string, unknown>, session: Session) {
+function logRunUsage(msg: Record<string, unknown>, session: Session, chatId: string) {
   const seen = (session.loggedUsage ??= {});
   for (const [model, row] of Object.entries((msg.modelUsage ?? {}) as Record<string, ModelUsageRow>)) {
     const now = {
@@ -931,8 +969,12 @@ function logRunUsage(msg: Record<string, unknown>, session: Session) {
       costUsd: Math.max(0, now.costUsd - before.costUsd),
     };
     seen[model] = now;
+    if (add.cacheRead) session.reread = (session.reread ?? 0) + add.cacheRead;
     if (add.input + add.output + add.cacheRead + add.cacheWrite > 0) recordUsage("claude-code", model, add);
   }
+  if (session.reread) patchStored(chatId, (s) => {
+    s.reread = session.reread;
+  });
 }
 
 const PLAN_LABELS: Record<string, string> = {
@@ -1064,11 +1106,17 @@ function runUsage(msg: Record<string, unknown>, session: Session): UsageInfo | n
   const main = [...rows].sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0))[0];
   const usage = (msg.usage ?? {}) as Record<string, number>;
   const fallback = contextTokens(usage);
+  const contextWindow = main?.[1].contextWindow ?? Math.max(0, ...rows.map(([, r]) => r.contextWindow ?? 0));
+  const allowance = fiveHourWindow();
+  if (contextWindow) session.contextWindow = contextWindow;
+  if (main?.[0]) session.modelName = main[0];
   return {
     costUsd: cost,
     contextTokens: session.lastContext ?? fallback,
-    contextWindow: main?.[1].contextWindow ?? Math.max(0, ...rows.map(([, r]) => r.contextWindow ?? 0)),
+    contextWindow,
     model: main?.[0],
+    sessionPercent: allowance?.percent ?? null,
+    sessionResetsAt: allowance?.resetsAt ?? null,
   };
 }
 
@@ -1526,6 +1574,21 @@ function storePwshAliasOnly(): boolean {
   return existsSync(path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe"));
 }
 
+function handoffNote(lastContext: number | undefined, budget: number, reread: number, sessionPercent: number | null): string {
+  const again = "Earlier file contents and command output are left out; the agent reads again what it needs.";
+  if (reread > REREAD_TOKENS) {
+    return `This chat has re-read its history enough to use up the 5-hour allowance, so this message continues from a short brief instead of resuming the session. ${again}`;
+  }
+  if ((lastContext ?? 0) > budget) {
+    const k = Math.round((lastContext ?? 0) / 1000);
+    if (sessionPercent != null && sessionPercent >= HOT_WINDOW_PERCENT) {
+      return `The 5-hour allowance is ${Math.round(sessionPercent)}% used and this chat is at ${k}k tokens, so this message continues from a short brief instead of resuming the session. ${again}`;
+    }
+    return `The context reached ${k}k tokens, so this message continues from a short brief of the chat instead of resuming the session. ${again}`;
+  }
+  return `This session has been idle long enough that resuming it would resend its history, so this message continues from a short brief of the chat. ${again}`;
+}
+
 type RunOptions = {
   win: BrowserWindow | null;
   chatId: string;
@@ -1574,6 +1637,7 @@ export function runClaude(opts: RunOptions) {
     session.claudeSession = undefined;
     session.lastContext = undefined;
     session.lastTurnAt = undefined;
+    session.reread = undefined;
   }
   let idleMs = session.lastTurnAt ? Date.now() - session.lastTurnAt : undefined;
   // Sessions saved before this was recorded have the size and the time in the local transcript.
@@ -1589,21 +1653,22 @@ export function runClaude(opts: RunOptions) {
       if (idleMs === undefined) idleMs = remembered.idleMs;
     }
   }
-  // A full or cold context makes this turn re-read old tool output. Carry a short brief instead.
-  const handOff = Boolean(session.claudeSession && shouldHandOff(session.lastContext, opts.history?.length ?? 0, HANDOFF_TOKENS, idleMs ?? 0));
+  // A full, cold, or already re-read context makes this turn re-send old tool output. Carry a short brief instead.
+  const allowance = fiveHourWindow();
+  const budget = handoffBudget(allowance?.percent);
+  const reread = session.reread ?? 0;
+  const handOff = Boolean(session.claudeSession && shouldHandOff(session.lastContext, opts.history?.length ?? 0, budget, idleMs ?? 0, reread));
   if (handOff) {
-    const full = (session.lastContext ?? 0) > HANDOFF_TOKENS;
     send(opts.win, {
       kind: "note",
       chatId,
       running: false,
-      text: full
-        ? `The context reached ${Math.round((session.lastContext ?? 0) / 1000)}k tokens, so this message continues from a short brief of the chat instead of resuming the session. Earlier file contents and command output are left out; the agent reads again what it needs.`
-        : "This session has been idle long enough that resuming it would resend its history, so this message continues from a short brief of the chat. Earlier file contents and command output are left out; the agent reads again what it needs.",
+      text: handoffNote(session.lastContext, budget, reread, allowance?.percent ?? null),
     });
     session.claudeSession = undefined;
     session.lastContext = undefined;
     session.lastTurnAt = undefined;
+    session.reread = undefined;
   }
   // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
   const resuming = Boolean(session.claudeSession);
@@ -1628,7 +1693,10 @@ export function runClaude(opts: RunOptions) {
   session.finalText = "";
 
   const mode = chosenPermissionMode(opts.permissionMode);
-  if (!resuming) session.claudeSession = undefined;
+  if (!resuming) {
+    session.claudeSession = undefined;
+    session.reread = 0;
+  }
   const bash = gitBashPath();
   const pwsh = realStorePwsh();
   const skipStorePwsh = !pwsh && storePwshAliasOnly() && Boolean(bash);
@@ -1639,6 +1707,7 @@ export function runClaude(opts: RunOptions) {
       delete s.claudeSession;
       delete s.lastContext;
       delete s.lastTurnAt;
+      delete s.reread;
     }
     s.pending = { prompt: opts.prompt, permissionMode: mode, startedAt: Date.now(), started: false };
   });
@@ -1912,10 +1981,12 @@ export function runClaude(opts: RunOptions) {
         session.claudeSession = undefined;
         session.lastContext = undefined;
         session.lastTurnAt = undefined;
+        session.reread = undefined;
         patchStored(chatId, (s) => {
           delete s.claudeSession;
           delete s.lastContext;
           delete s.lastTurnAt;
+          delete s.reread;
         });
         failed = "The previous agent session no longer exists. Send again to start a new one.";
       } else if (!session.stopping && !shuttingDown) {

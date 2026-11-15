@@ -49,6 +49,18 @@ test("handoff only past the budget and only with a transcript to carry", async (
   assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, RESUME_TTL_MS + 1), false);
 });
 
+test("a session that has re-read its history, or a hot 5-hour window, hands off early", async () => {
+  const { shouldHandOff, handoffBudget, HANDOFF_TOKENS, HOT_HANDOFF_TOKENS, REREAD_TOKENS } = await import("./pureFeatures.ts");
+  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, 0, REREAD_TOKENS), false);
+  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, 0, REREAD_TOKENS + 1), true);
+  assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, 0, REREAD_TOKENS + 1), false);
+  assert.equal(handoffBudget(79), HANDOFF_TOKENS);
+  assert.equal(handoffBudget(80), HOT_HANDOFF_TOKENS);
+  assert.equal(handoffBudget(null), HANDOFF_TOKENS);
+  assert.equal(shouldHandOff(HOT_HANDOFF_TOKENS + 1, 2, handoffBudget(100)), true);
+  assert.equal(shouldHandOff(HOT_HANDOFF_TOKENS, 2, handoffBudget(100)), false);
+});
+
 test("usage adds up per model, by day, and old days drop out", async () => {
   const { addUsage, summarizeUsage, percentUsed, USAGE_DAYS } = await import("./pureFeatures.ts");
   const now = new Date(2026, 10, 11, 22).getTime();
@@ -560,6 +572,14 @@ test("old chats fold away, but never the main, pinned, open or running one", asy
     { id: "stale", updatedAt: now - 30 * day, lastUsedAt: now - 20 * day },
   ];
   assert.deepEqual([...olderChats(used, 14, now, () => false)], ["stale"]);
+});
+
+test("hidden chats stay out of the main list and search still shows them", async () => {
+  const { sidebarHidesChat } = await import("../src/sideChats.ts");
+  assert.equal(sidebarHidesChat(true, false, false), true);
+  assert.equal(sidebarHidesChat(false, true, false), true);
+  assert.equal(sidebarHidesChat(false, false, false), false);
+  assert.equal(sidebarHidesChat(true, true, true), false);
 });
 
 test("rows keep their place, and new ones go on top", async () => {

@@ -25,6 +25,12 @@ export function projectForChat<T extends { id?: string; path: string; slug: stri
   return hits.length === 1 ? hits[0] : undefined;
 }
 
+// Hidden chats, and every chat in a hidden project, leave the main list. Search still shows them.
+export function sidebarHidesChat(chatHidden: boolean, projectHidden: boolean, searching: boolean): boolean {
+  if (searching) return false;
+  return chatHidden || projectHidden;
+}
+
 // Unopened for about three months: its project moves to the archive row in the sidebar.
 export function isStale(lastUsedAt: number, now: number): boolean {
   return now - lastUsedAt > 90 * 86_400_000;
