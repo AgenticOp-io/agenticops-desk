@@ -611,6 +611,17 @@ export function App() {
       }
       if (ev.kind === "route" && ev.text) {
         setRouteByChat((cur) => ({ ...cur, [chatId]: ev.text ?? "" }));
+        if (ev.learned && ev.model) {
+          const value = ev.model;
+          if (activeChatRef.current?.id === chatId) setModel(value);
+          const chat = chatsRef.current.find((c) => c.id === chatId);
+          if (chat && chat.model !== value) {
+            const next = { ...chat, model: value };
+            setChats((all) => all.map((c) => (c.id === chatId ? next : c)));
+            setActiveChat((cur) => (cur?.id === chatId ? next : cur));
+            void window.desk.patchChat(chatId, next);
+          }
+        }
       }
       if (ev.kind === "note" && ev.text) {
         patchThread(chatId, (m) => [...m, { role: "system", text: ev.text ?? "" }]);

@@ -87,6 +87,55 @@ export function shouldHandOff(historyMessages: number): boolean {
   return historyMessages > 0;
 }
 
+// 0 local, 1 Sonnet-class, 2 Opus-class. A new chat starts at 0.
+export type ModelTier = 0 | 1 | 2;
+
+export type ModelLesson = {
+  kept: number;
+  retried: number;
+  raised: number;
+  lowered: number;
+  lastTier: ModelTier;
+  lastPrompt: string;
+  assigned: string;
+};
+
+export function modelTier(model: string): ModelTier {
+  const m = model.toLowerCase();
+  if (m.includes("opus") || m.includes("fable")) return 2;
+  if (m.includes("ollama") || m.includes("haiku") || m === "local") return 0;
+  return 1;
+}
+
+export function tierFromWord(text: string): ModelTier | null {
+  const word = text.trim().toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, "") ?? "";
+  if (word === "local" || word === "cheap") return 0;
+  if (word === "sonnet" || word === "mid" || word === "medium") return 1;
+  if (word === "opus" || word === "expensive") return 2;
+  return null;
+}
+
+export function lessonVerdict(row: ModelLesson, prompt: string, model: string): "kept" | "retried" | "raised" | "lowered" {
+  if (row.lastPrompt && prompt.trim().slice(0, 180) === row.lastPrompt) return "retried";
+  const tier = modelTier(model);
+  if (row.assigned && tier > row.lastTier) return "raised";
+  if (row.assigned && tier < row.lastTier) return "lowered";
+  return "kept";
+}
+
+export function applyVerdict(row: ModelLesson, verdict: "kept" | "retried" | "raised" | "lowered"): ModelLesson {
+  return { ...row, [verdict]: row[verdict] + 1 };
+}
+
+// Step up after repeated raises or retries. Step down after several accepted cheaper runs.
+export function nextTier(row: ModelLesson | undefined): ModelTier {
+  if (!row?.assigned) return 0;
+  const up = row.raised + row.retried;
+  if (up >= 2 && up > row.kept) return Math.min(2, row.lastTier + 1) as ModelTier;
+  if (row.kept >= 3 && row.kept > up && row.lastTier > 0) return (row.lastTier - 1) as ModelTier;
+  return row.lastTier;
+}
+
 // Cache-read tokens one run may accumulate before its tool log is dropped and the work continues
 // from a short packet. About one heavy pass over a long thread.
 export const COMPACT_REREAD = 1_500_000;

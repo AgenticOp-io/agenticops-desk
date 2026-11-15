@@ -14,9 +14,11 @@ import { capsulesBrief, chatSummary, ensureSummary, forgetCapsules, recordCapsul
 import { paidPacket } from "./gather";
 import { imagesToText } from "./imageVision";
 import { LOCAL_MODEL, generateLocally } from "./localModel";
+import { noteLearned } from "./modelLearn";
 import {
   COMPACT_REREAD,
   contextTokens,
+  modelTier,
   gateCommand,
   gatePassed,
   latestContextTokens,
@@ -82,6 +84,8 @@ export type ClaudeEvent = {
     // Auto picked an AI for this chat's run; text is its name, model its value.
     | "route";
   model?: string;
+  // The chat's learned model pick. The menu follows it. Auto's route events leave the menu alone.
+  learned?: boolean;
   files?: string[];
   todos?: Array<{ content: string; status: string }>;
   usage?: UsageInfo;
@@ -175,6 +179,8 @@ type Session = {
   reread?: number;
   // Last context window and model, so a plan-limit event can refresh the meter without a new run total.
   contextWindow?: number;
+  // Dollars this run has reported, for the per-chat model lesson.
+  spentUsd?: number;
   modelName?: string;
   // Per-model totals this run has already written to the usage log.
   loggedUsage?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number }>;
@@ -270,6 +276,14 @@ export function sessionFor(chatId: string): Session {
     sessions.set(chatId, session);
   }
   return session;
+}
+
+// A message during a run joins that run. It is not a new lesson about which model to use.
+export function guidingRun(chatId: string): boolean {
+  const s = sessions.get(chatId);
+  if (!s || s.stopping) return false;
+  if (s.engine === "claude" && s.inbox) return true;
+  return s.engine === "direct" && Boolean(s.abort) && !s.query && !s.child;
 }
 
 let notificationClick: (() => void) | null = null;
@@ -977,6 +991,7 @@ function logRunUsage(msg: Record<string, unknown>, session: Session, chatId: str
     };
     seen[model] = now;
     if (add.cacheRead) session.reread = (session.reread ?? 0) + add.cacheRead;
+    if (add.costUsd) session.spentUsd = (session.spentUsd ?? 0) + add.costUsd;
     if (add.input + add.output + add.cacheRead + add.cacheWrite > 0) recordUsage("claude-code", model, add);
   }
   if (session.reread) patchStored(chatId, (s) => {
@@ -1689,6 +1704,7 @@ export function runClaude(opts: RunOptions) {
   session.gateCalls = new Map();
   session.passedGates = [];
   session.finalText = "";
+  session.spentUsd = 0;
 
   const mode = chosenPermissionMode(opts.permissionMode);
   if (!resuming) {
@@ -1806,7 +1822,7 @@ export function runClaude(opts: RunOptions) {
     prompt: turnStream,
     options: {
       cwd,
-      ...(opts.model ? { model: opts.model } : { model: "sonnet", effort: "low" }),
+      ...(opts.model ? { model: opts.model, ...(modelTier(opts.model) < 2 ? { effort: "low" as const } : {}) } : { model: "sonnet", effort: "low" as const }),
       ...(runBudgetUsd > 0 ? { maxBudgetUsd: runBudgetUsd } : {}),
       pathToClaudeCodeExecutable: exe,
       abortController: abort,
@@ -2126,6 +2142,7 @@ export function runClaude(opts: RunOptions) {
         outcome: failed ? "failed" : "ok",
         note: failed ? failed.slice(0, 240) : undefined,
       });
+      if (!opts.reviewRound && !opts.resume) noteLearned(chatId, opts.prompt, opts.model || session.modelName || "", session.spentUsd ?? 0);
       if (!failed && !session.stopping) void reviewRun(opts, session, cwd);
     }
   })();

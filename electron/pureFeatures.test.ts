@@ -94,6 +94,23 @@ test("a session brief keeps the ask and the latest reply, and stays short", asyn
   assert.equal(coded.includes("const x = 1"), false);
 });
 
+test("a chat starts cheap and moves up or down from what the user does", async () => {
+  const { applyVerdict, lessonVerdict, modelTier, nextTier, tierFromWord } = await import("./pureFeatures.ts");
+  assert.equal(modelTier("direct:ollama:qwen2.5-coder:7b"), 0);
+  assert.equal(modelTier("claude-opus-5-5"), 2);
+  assert.equal(modelTier("sonnet"), 1);
+  assert.equal(tierFromWord("opus, because this is a proof"), 2);
+  assert.equal(tierFromWord("no idea"), null);
+  assert.equal(nextTier(undefined), 0);
+  const fresh = { kept: 0, retried: 0, raised: 0, lowered: 0, lastTier: 0 as const, lastPrompt: "fix the typo", assigned: "direct:ollama:qwen" };
+  const raised = applyVerdict(applyVerdict(fresh, "raised"), "raised");
+  assert.equal(nextTier({ ...raised, lastTier: 0 }), 1);
+  const settled = { ...fresh, kept: 3, lastTier: 2 as const, assigned: "opus" };
+  assert.equal(nextTier(settled), 1);
+  assert.equal(lessonVerdict(fresh, "fix the typo", "opus"), "retried");
+  assert.equal(lessonVerdict({ ...fresh, lastPrompt: "other" }, "new work", "opus"), "raised");
+});
+
 test("a long file read is shortened and a short one is kept", async () => {
   const { shrinkGatherResult } = await import("./pureFeatures.ts");
   assert.equal(shrinkGatherResult("Read", "short"), null);

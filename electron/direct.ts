@@ -36,6 +36,7 @@ import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { paidPacket } from "./gather";
 import { imagesToText } from "./imageVision";
 import { generateLocally } from "./localModel";
+import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
@@ -849,6 +850,7 @@ function reasoningText(delta: object): string {
 }
 
 function sendUsage(ctx: Ctx, usage: UsageInfo) {
+  if (usage.costUsd) ctx.session.spentUsd = (ctx.session.spentUsd ?? 0) + usage.costUsd;
   send(ctx.win, { kind: "usage", usage, chatId: ctx.chatId, running: true });
 }
 
@@ -890,6 +892,7 @@ export function runDirect(opts: {
   session.workspace = cwd;
   session.engine = "direct";
   session.stopping = false;
+  session.spentUsd = 0;
   // The next Claude Code message must not resume a session that missed this chat's direct turns.
   clearClaudeSession(chatId, session);
   const abort = new AbortController();
@@ -984,6 +987,7 @@ export function runDirect(opts: {
       pruneChanges(session);
       sendChanges(win, chatId, session);
       if (failed) send(win, { kind: "error", text: failed, chatId, running: false });
+      noteLearned(chatId, opts.prompt, `direct:${opts.provider}:${opts.model}`, session.spentUsd ?? 0);
       send(win, { kind: "done", running: false, chatId, text: stopped || failed ? "Stopped." : "Done." });
     }
   })();
