@@ -61,6 +61,32 @@ async function describeViaClaude(img: ImageAttachment): Promise<string | null> {
   }
 }
 
+// A description from the local vision model only. Null when that model is not installed.
+export async function describeImageLocally(img: ImageAttachment): Promise<string | null> {
+  if (!img || typeof img.data !== "string" || img.data.length > MAX_IMAGE_BYTES) return null;
+  return describeViaOllama(img);
+}
+
+// Replaces images the local model could see with text, so the paid model is not billed for the bytes.
+export async function imagesToText(
+  prompt: string,
+  images?: ImageAttachment[],
+): Promise<{ prompt: string; images?: ImageAttachment[] }> {
+  if (!images?.length) return { prompt, images };
+  const notes: string[] = [];
+  const left: ImageAttachment[] = [];
+  for (const img of images) {
+    const text = await describeImageLocally(img);
+    if (text) notes.push(img.name ? `${img.name}: ${text}` : text);
+    else left.push(img);
+  }
+  if (!notes.length) return { prompt, images };
+  return {
+    prompt: `${prompt}\n\nWhat the attached image shows (described on this computer; the image itself was not sent):\n${notes.join("\n\n")}`,
+    images: left.length ? left : undefined,
+  };
+}
+
 // The only callers use: a single image description. Local first, cloud fallback.
 export async function describeImage(img: ImageAttachment): Promise<string | null> {
   if (!img || typeof img.data !== "string" || img.data.length > MAX_IMAGE_BYTES) return null;

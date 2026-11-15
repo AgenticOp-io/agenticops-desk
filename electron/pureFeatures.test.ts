@@ -37,28 +37,11 @@ test("deepseek drops stored reasoning before the next command", async () => {
   assert.equal(messages[1].content, "hi");
 });
 
-test("handoff only past the budget and only with a transcript to carry", async () => {
-  const { shouldHandOff, HANDOFF_TOKENS, RESUME_TTL_MS } = await import("./pureFeatures.ts");
-  assert.equal(shouldHandOff(HANDOFF_TOKENS + 1, 4), true);
-  assert.equal(shouldHandOff(HANDOFF_TOKENS, 4), false);
-  assert.equal(shouldHandOff(undefined, 4), false);
-  // Review rounds and resumed runs pass no history: never drop their session.
-  assert.equal(shouldHandOff(900_000, 0), false);
-  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, RESUME_TTL_MS + 1), true);
-  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, RESUME_TTL_MS), false);
-  assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, RESUME_TTL_MS + 1), false);
-});
-
-test("a session that has re-read its history, or a hot 5-hour window, hands off early", async () => {
-  const { shouldHandOff, handoffBudget, HANDOFF_TOKENS, HOT_HANDOFF_TOKENS, REREAD_TOKENS } = await import("./pureFeatures.ts");
-  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, 0, REREAD_TOKENS), false);
-  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, 0, REREAD_TOKENS + 1), true);
-  assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, 0, REREAD_TOKENS + 1), false);
-  assert.equal(handoffBudget(79), HANDOFF_TOKENS);
-  assert.equal(handoffBudget(80), HOT_HANDOFF_TOKENS);
-  assert.equal(handoffBudget(null), HANDOFF_TOKENS);
-  assert.equal(shouldHandOff(HOT_HANDOFF_TOKENS + 1, 2, handoffBudget(100)), true);
-  assert.equal(shouldHandOff(HOT_HANDOFF_TOKENS, 2, handoffBudget(100)), false);
+test("a follow-up hands off and a run with no history keeps its session", async () => {
+  const { shouldHandOff } = await import("./pureFeatures.ts");
+  assert.equal(shouldHandOff(0), false);
+  assert.equal(shouldHandOff(1), true);
+  assert.equal(shouldHandOff(4), true);
 });
 
 test("usage adds up per model, by day, and old days drop out", async () => {
@@ -100,6 +83,27 @@ test("a session brief keeps the ask and the latest reply, and stays short", asyn
   assert.match(brief, /did we fix all of this\?/);
   assert.ok(brief.length <= 2_000);
   assert.equal(sessionBrief([]), "");
+  const coded = sessionBrief(
+    [
+      { role: "user", text: "Fix src/app.ts" },
+      { role: "assistant", text: "Done.\n```ts\n" + "const x = 1;\n".repeat(40) + "```\nLeft src/app.ts green." },
+    ],
+    4_000,
+  );
+  assert.match(coded, /src\/app\.ts/);
+  assert.equal(coded.includes("const x = 1"), false);
+});
+
+test("a long file read is shortened and a short one is kept", async () => {
+  const { shrinkGatherResult } = await import("./pureFeatures.ts");
+  assert.equal(shrinkGatherResult("Read", "short"), null);
+  const read = shrinkGatherResult("Read", "a".repeat(3_000), 100);
+  assert.ok(read?.startsWith("a".repeat(100)));
+  assert.match(read ?? "", /left on disk/);
+  const shell = shrinkGatherResult("Bash", `head\n${"x".repeat(500)}\nFAIL at the end`, 80);
+  assert.match(shell ?? "", /head/);
+  assert.match(shell ?? "", /FAIL at the end/);
+  assert.equal(shrinkGatherResult("Edit", "z".repeat(5_000)), null);
 });
 
 test("a transcript's last real context survives a trailing empty usage", async () => {

@@ -5,7 +5,9 @@ import { app } from "electron";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { scrubOutgoing } from "./privacy";
 import { capsuleBrief, makeCapsule, type Capsule } from "./pureFeatures";
+import { LOCAL_MODEL } from "./localModel";
 import { askDirect } from "./review";
+import { loadSettings } from "./settings";
 
 // Verified run capsules per chat, in app data (never in the project). See Capsule in pureFeatures.ts.
 const KEEP = 12;
@@ -104,8 +106,42 @@ const OUTCOME_SYSTEM =
   "Restate what this finished AI coding run did, in at most 2 sentences. Keep file names and the checks that passed. Plain text, no preamble.";
 const NEW_TURNS_LIMIT = 10_000; // small local models often have a 4k-token window; keep the call inside it
 
-// After a run: update the chat's rolling summary and tighten the new capsule's result. Failures leave the plain brief.
-export async function summarizeRun(chatId: string, model: string, history: { role: string; text: string }[], capsule: Capsule | null) {
+// The model the user picked, or the local one. An empty Summaries setting still stays on this computer.
+async function summaryModel(): Promise<string> {
+  try {
+    const chosen = (await loadSettings()).summarizer?.trim();
+    if (chosen) return chosen;
+  } catch {
+    /* the local model is the default */
+  }
+  return `direct:ollama:${LOCAL_MODEL}`;
+}
+
+// The summary for this history, writing it locally when the saved one does not cover these turns.
+export async function ensureSummary(
+  chatId: string,
+  history: { role: string; text: string }[] | undefined,
+  signal?: AbortSignal,
+): Promise<string> {
+  const ready = chatSummary(chatId, history);
+  if (ready) return ready;
+  await summarizeRun(chatId, await summaryModel(), history ?? [], null, signal);
+  return chatSummary(chatId, history);
+}
+
+// After a run, so the next message usually already has its summary.
+export async function refreshSummary(chatId: string, history: { role: string; text: string }[], capsule: Capsule | null) {
+  await summarizeRun(chatId, await summaryModel(), history, capsule);
+}
+
+// Update the chat's rolling summary and tighten the new capsule's result. Failures leave the plain brief.
+export async function summarizeRun(
+  chatId: string,
+  model: string,
+  history: { role: string; text: string }[],
+  capsule: Capsule | null,
+  signal?: AbortSignal,
+) {
   const turns = said(history);
   const prev = summaries()[chatId];
   const base = prev && prev.turns <= turns.length ? prev : undefined;
@@ -114,23 +150,26 @@ export async function summarizeRun(chatId: string, model: string, history: { rol
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text.trim()}`)
     .join("\n\n");
   const clean = (s: string) => scrubOutgoing(s).text;
+  const timeout = AbortSignal.timeout(30_000);
+  const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
-    if (turns.length >= 4 && fresh) {
+    if (turns.length >= 2 && fresh) {
       const user = `Earlier summary:\n${base ? base.text : "(none)"}\n\nNew turns:\n${clean(fresh.length > NEW_TURNS_LIMIT ? `…${fresh.slice(-NEW_TURNS_LIMIT)}` : fresh)}`;
-      const r = await askDirect(model, SUMMARY_SYSTEM, user);
+      const r = await askDirect(model, SUMMARY_SYSTEM, user, stop);
       if (r?.text && !r.refused) {
         summaries()[chatId] = { text: r.text.slice(0, 3_000), turns: turns.length };
         saveSummaries();
       }
     }
     if (capsule && capsule.outcome.length > 300) {
-      const r = await askDirect(model, OUTCOME_SYSTEM, `Asked: ${clean(capsule.request)}\n\nThe agent's final reply:\n${clean(capsule.outcome)}`);
+      const r = await askDirect(model, OUTCOME_SYSTEM, `Asked: ${clean(capsule.request)}\n\nThe agent's final reply:\n${clean(capsule.outcome)}`, stop);
       if (r?.text && !r.refused && r.text.length < capsule.outcome.length) {
         capsule.outcome = r.text.replace(/\s+/g, " ").slice(0, 700);
         save();
       }
     }
   } catch (err) {
+    if (stop.aborted) return;
     console.error("AgenticOps Desk could not summarize the run", err);
   }
 }

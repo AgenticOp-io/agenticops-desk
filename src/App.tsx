@@ -2898,11 +2898,11 @@ export function App() {
                     <div className="settings-label">Second opinion</div>
                     <label className="settings-row">
                       <span>
-                        After a run changes files, this model checks the change against your request. Its concerns go back to the agent
-                        to fix, up to two rounds.
+                        After a run changes files, a local model checks the change against your request. Its concerns go back to the agent
+                        to fix, up to two rounds. Pick a model here only if you want a different one.
                       </span>
                       <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
-                        <option value="">Off</option>
+                        <option value="">Local model</option>
                         {models
                           .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
                           .map((m) => (
@@ -2935,11 +2935,11 @@ export function App() {
                     <div className="settings-label">Summaries</div>
                     <label className="settings-row">
                       <span>
-                        After each run, this model updates a short summary of the chat and of what the run proved. When a long or idle chat
-                        starts a fresh session, it gets that summary instead of clipped turns. A local Ollama model costs nothing.
+                        After each run, a local model updates a short summary of the chat. Every follow-up sends that summary, not the earlier
+                        transcript. Pick a model here only if you want a different one. The local model costs nothing.
                       </span>
                       <select value={prefs.summarizer} onChange={(e) => patchPrefs({ summarizer: e.target.value })}>
-                        <option value="">Off</option>
+                        <option value="">Local model</option>
                         {models
                           .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
                           .map((m) => (

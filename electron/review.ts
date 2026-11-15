@@ -10,14 +10,14 @@ import { recordUsage } from "./usageLog";
 export type ChangedFile = { path: string; before: string | null; after: string | null };
 
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]);
-const DIFF_LIMIT = 40_000;
+const DIFF_LIMIT = 8_000;
 
 function describe(files: ChangedFile[], cwd: string) {
   let text = "";
   for (const f of files) {
     const rel = path.relative(cwd, f.path) || f.path;
     const body =
-      f.before === null ? `(new file)\n${(f.after ?? "").slice(0, 8000)}` : f.after === null ? "(deleted)" : lineDiff(f.before, f.after);
+      f.before === null ? `(new file)\n${(f.after ?? "").slice(0, 2_000)}` : f.after === null ? "(deleted)" : lineDiff(f.before, f.after);
     text += `\n### ${rel}\n${body}\n`;
     if (text.length > DIFF_LIMIT) {
       text = `${text.slice(0, DIFF_LIMIT)}\n… (diff cut for length)`;

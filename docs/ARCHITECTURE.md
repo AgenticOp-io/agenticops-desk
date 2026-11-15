@@ -138,11 +138,12 @@ A message sent while a Direct run is going sets `session.guide`. For DeepSeek it
 
 ### Handoff brief, capsules and summaries
 
-When a chat starts a fresh session instead of resuming (idle about 45 minutes, or past 150,000 tokens), `withBrief` in `claude.ts` builds the opening message:
+A follow-up (`shouldHandOff` in `pureFeatures.ts`, true whenever the message has earlier turns) does not resume the session and does not send the transcript. `withBrief` in `claude.ts` builds the opening message. A review round and an interrupted run pass no history, so they keep the session. An interrupted run idle longer than `RESUME_TTL_MS` asks the user to send again.
 
 1. `capsulesBrief` (`capsules.ts`) lists the chat's verified runs: a run whose checks (type check, tests, lint, build, commit) passed after its last edit leaves a capsule with the request, the outcome and the changed files' hashes. A capsule whose files have changed since is left out.
-2. `chatSummary` returns the chat's running summary if it covers every turn so far; otherwise `sessionBrief` clips the first request and the latest turns.
-3. After each run, with `settings.summarizer` set, `summarizeRun` asks that Direct model (`askDirect`) to merge the new turns into the summary and to shorten a long capsule outcome. Text goes through `scrubOutgoing` first. A failure keeps the plain brief.
+2. `ensureSummary` returns the chat's running summary when it covers every turn so far. Otherwise `summarizeRun` asks the Summaries model, or `direct:ollama:` plus `LOCAL_MODEL` when that setting is empty, to write one. The call gives up after 30 seconds. `sessionBrief` then clips the first request and the latest turns.
+3. After each run, `refreshSummary` merges the new turns into the summary and shortens a long capsule outcome. Text goes through `scrubOutgoing` first. A failure keeps the plain brief. The Direct engine drops its saved message list on a follow-up and uses the same brief.
+4. `paidPacket` (`gather.ts`) adds git status and a local summary to the prompt. A PostToolUse hook replaces a long read, search, or command result with `shrinkGatherResult`. Past `COMPACT_REREAD` cache-read tokens the run starts a fresh session from `continuationPacket`. Images go through `imagesToText` first. An empty reviewer setting uses the local model. The default engine model, when the chat has not picked one, is `sonnet` at effort `low`.
 
 ### Local model setup
 
