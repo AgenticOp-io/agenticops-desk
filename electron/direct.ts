@@ -911,7 +911,7 @@ export function runDirect(opts: {
     send(win, {
       kind: "note",
       chatId,
-      running: false,
+      running: true,
       text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
     });
   }

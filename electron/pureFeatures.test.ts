@@ -95,13 +95,15 @@ test("a session brief keeps the ask and the latest reply, and stays short", asyn
 });
 
 test("a chat starts cheap and moves up or down from what the user does", async () => {
-  const { applyVerdict, lessonVerdict, modelTier, nextTier, tierFromWord } = await import("./pureFeatures.ts");
+  const { applyVerdict, lessonVerdict, modelTier, nextTier, tierForAgent, tierFromWord } = await import("./pureFeatures.ts");
   assert.equal(modelTier("direct:ollama:qwen2.5-coder:7b"), 0);
   assert.equal(modelTier("claude-opus-5-5"), 2);
   assert.equal(modelTier("sonnet"), 1);
   assert.equal(tierFromWord("opus, because this is a proof"), 2);
   assert.equal(tierFromWord("no idea"), null);
   assert.equal(nextTier(undefined), 0);
+  assert.equal(tierForAgent(0), 1);
+  assert.equal(tierForAgent(2), 2);
   const fresh = { kept: 0, retried: 0, raised: 0, lowered: 0, lastTier: 0 as const, lastPrompt: "fix the typo", assigned: "direct:ollama:qwen" };
   const raised = applyVerdict(applyVerdict(fresh, "raised"), "raised");
   assert.equal(nextTier({ ...raised, lastTier: 0 }), 1);

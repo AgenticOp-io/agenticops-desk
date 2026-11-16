@@ -1677,7 +1677,7 @@ export function runClaude(opts: RunOptions) {
     send(opts.win, {
       kind: "note",
       chatId,
-      running: false,
+      running: true,
       text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
     });
     session.claudeSession = undefined;

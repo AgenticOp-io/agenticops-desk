@@ -8,6 +8,7 @@ import {
   lessonVerdict,
   modelTier,
   nextTier,
+  tierForAgent,
   tierFromWord,
   type ModelLesson,
   type ModelTier,
@@ -75,9 +76,9 @@ export async function chooseLearned(chatId: string, prompt: string, requested: s
   let tier = nextTier(lesson);
   if (!override) {
     const heard = await askTier(lesson, prompt);
-    // A dead local model cannot take the chat. Sonnet is the cheap paid step.
     if (heard !== null) tier = heard;
-    else if (tier === 0) tier = 1;
+    // A local pick, or no answer, still runs on Sonnet. The small model only writes the summary.
+    tier = tierForAgent(tier);
   }
   const model = override ? asked : modelForTier(tier);
   all[chatId] = { ...lesson, assigned: model, lastCost: row?.lastCost };

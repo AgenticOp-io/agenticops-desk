@@ -127,6 +127,11 @@ export function applyVerdict(row: ModelLesson, verdict: "kept" | "retried" | "ra
   return { ...row, [verdict]: row[verdict] + 1 };
 }
 
+// The local model writes the summary. It does not run the chat, unless the user picked it in the menu.
+export function tierForAgent(tier: ModelTier): ModelTier {
+  return tier === 0 ? 1 : tier;
+}
+
 // Step up after repeated raises or retries. Step down after several accepted cheaper runs.
 export function nextTier(row: ModelLesson | undefined): ModelTier {
   if (!row?.assigned) return 0;
