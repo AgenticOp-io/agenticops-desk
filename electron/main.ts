@@ -26,6 +26,7 @@ import {
 import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
 import { recentActivity } from "./activityLog";
+import { chooseLearned } from "./modelLearn";
 import { opsTriage } from "./opsTriage";
 import { describeImage } from "./imageVision";
 import { clearCredentialFiles, listCredentials, removeCredential, saveCredential } from "./credentials";
@@ -37,6 +38,7 @@ import {
   chatState,
   findClaudeCli,
   forgetSession,
+  guidingRun,
   keepChanges,
   liveRunCount,
   runningChats,
@@ -48,6 +50,7 @@ import {
   resumePendingRun,
   revertChanges,
   runClaude,
+  send,
   shutdownClaude,
   stopClaude,
 } from "./claude";
@@ -1156,7 +1159,19 @@ ipcMain.handle(
       images,
     };
     if (payload.model === AUTO) await runAuto(win, run);
-    else startRun(typeof payload.model === "string" ? payload.model : "", run);
+    else if (guidingRun(payload.chatId)) startRun(typeof payload.model === "string" ? payload.model : "", run);
+    else {
+      const requested = typeof payload.model === "string" ? payload.model : "";
+      let model = requested;
+      try {
+        const picked = await chooseLearned(payload.chatId, payload.prompt, requested);
+        model = picked.model;
+        send(win, { kind: "route", chatId: payload.chatId, model: picked.model, text: picked.label, learned: true, running: true });
+      } catch (err) {
+        console.error("AgenticOps Desk could not choose a model", err);
+      }
+      startRun(model, run);
+    }
     return true;
   },
 );

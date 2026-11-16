@@ -10,20 +10,26 @@ import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials }
 import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { prepareMemory } from "./memory";
-import { capsulesBrief, chatSummary, forgetCapsules, recordCapsule, summarizeRun } from "./capsules";
+import { capsulesBrief, chatSummary, ensureSummary, forgetCapsules, recordCapsule, refreshSummary } from "./capsules";
+import { paidPacket } from "./gather";
+import { imagesToText } from "./imageVision";
+import { LOCAL_MODEL, generateLocally } from "./localModel";
+import { noteLearned } from "./modelLearn";
 import {
+  COMPACT_REREAD,
   contextTokens,
+  modelTier,
   gateCommand,
   gatePassed,
-  HANDOFF_TOKENS,
   latestContextTokens,
   percentUsed,
   RESUME_TTL_MS,
   sessionBrief,
   shouldHandOff,
+  shrinkGatherResult,
   turnIsOver,
 } from "./pureFeatures";
-import { recordPlan, recordUsage, type PlanLimits, type PlanWindow } from "./usageLog";
+import { fiveHourWindow, recordPlan, recordUsage, type PlanLimits, type PlanWindow } from "./usageLog";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { recordOrigin } from "./provenance";
 import { secondOpinion } from "./review";
@@ -78,6 +84,8 @@ export type ClaudeEvent = {
     // Auto picked an AI for this chat's run; text is its name, model its value.
     | "route";
   model?: string;
+  // The chat's learned model pick. The menu follows it. Auto's route events leave the menu alone.
+  learned?: boolean;
   files?: string[];
   todos?: Array<{ content: string; status: string }>;
   usage?: UsageInfo;
@@ -93,7 +101,14 @@ export type ClaudeEvent = {
   chatId?: string;
 };
 
-export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type UsageInfo = {
+  costUsd: number;
+  contextTokens: number;
+  contextWindow: number;
+  model?: string;
+  sessionPercent?: number | null;
+  sessionResetsAt?: number | null;
+};
 export type ModelOption = {
   value: string;
   displayName: string;
@@ -160,6 +175,13 @@ type Session = {
   lastContext?: number;
   // When that turn happened, so a later message can tell a warm session from a cold one.
   lastTurnAt?: number;
+  // Cache-read tokens this CLI session has already re-sent. The next message hands off past the budget.
+  reread?: number;
+  // Last context window and model, so a plan-limit event can refresh the meter without a new run total.
+  contextWindow?: number;
+  // Dollars this run has reported, for the per-chat model lesson.
+  spentUsd?: number;
+  modelName?: string;
   // Per-model totals this run has already written to the usage log.
   loggedUsage?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number }>;
   // The user's instruction for the current run (kept local), for the "why" trail on changed files.
@@ -170,6 +192,8 @@ type Session = {
   gateCalls?: Map<string, string>;
   passedGates?: string[];
   finalText?: string;
+  // Short names of tools this run already used, so a compact can continue without the tool log.
+  trace?: string[];
 };
 
 // What survives a restart: the CLI session to resume, and any run that was cut off mid-flight.
@@ -180,6 +204,7 @@ type StoredSession = {
   // hands off a full or cold session instead of resuming it.
   lastContext?: number;
   lastTurnAt?: number;
+  reread?: number;
   pending?: { prompt: string; permissionMode?: string; startedAt: number; started: boolean };
 };
 
@@ -243,6 +268,7 @@ export function sessionFor(chatId: string): Session {
       workspace: stored?.workspace,
       lastContext: typeof stored?.lastContext === "number" ? stored.lastContext : undefined,
       lastTurnAt: typeof stored?.lastTurnAt === "number" ? stored.lastTurnAt : undefined,
+      reread: typeof stored?.reread === "number" ? stored.reread : undefined,
       approvals: new Map(),
       decisions: new Map(),
       changes: new Map(),
@@ -250,6 +276,14 @@ export function sessionFor(chatId: string): Session {
     sessions.set(chatId, session);
   }
   return session;
+}
+
+// A message during a run joins that run. It is not a new lesson about which model to use.
+export function guidingRun(chatId: string): boolean {
+  const s = sessions.get(chatId);
+  if (!s || s.stopping) return false;
+  if (s.engine === "claude" && s.inbox) return true;
+  return s.engine === "direct" && Boolean(s.abort) && !s.query && !s.child;
 }
 
 let notificationClick: (() => void) | null = null;
@@ -660,10 +694,12 @@ export function clearClaudeSession(chatId: string, session: Session) {
   session.claudeSession = undefined;
   session.lastContext = undefined;
   session.lastTurnAt = undefined;
+  session.reread = undefined;
   patchStored(chatId, (s) => {
     delete s.claudeSession;
     delete s.lastContext;
     delete s.lastTurnAt;
+    delete s.reread;
     delete s.pending;
   });
 }
@@ -719,6 +755,9 @@ function announceTool(
     session.announcedTools.add(id);
   }
   const activity = describeTool(name, input);
+  const trace = (session.trace ??= []);
+  trace.push(activity.text);
+  if (trace.length > 40) trace.shift();
   if (session.block) session.block.label = activity.text;
   session.lastWasText = false;
   sendPhase(win, chatId, session, activity.phase, activity.text, true);
@@ -907,11 +946,31 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
       }
       const usage = runUsage(msg, session);
       if (usage) send(win, { kind: "usage", usage, chatId, running: true });
-      logRunUsage(msg, session);
+      logRunUsage(msg, session, chatId);
       return;
     }
     if (type === "rate_limit_event") {
-      notePlanLimit(msg.rate_limit_info as Record<string, unknown> | undefined);
+      const info = msg.rate_limit_info as Record<string, unknown> | undefined;
+      notePlanLimit(info);
+      const id = typeof info?.rateLimitType === "string" ? info.rateLimitType : "";
+      if (id === "five_hour") {
+        const rejected = info?.status === "rejected";
+        const percent = rejected ? 100 : percentUsed(info?.utilization as number | undefined, "fraction");
+        const resetsAt = typeof info?.resetsAt === "number" ? info.resetsAt * 1000 : null;
+        send(win, {
+          kind: "usage",
+          chatId,
+          running: true,
+          usage: {
+            costUsd: 0,
+            contextTokens: session.lastContext ?? 0,
+            contextWindow: session.contextWindow ?? 0,
+            ...(session.modelName ? { model: session.modelName } : {}),
+            sessionPercent: percent,
+            sessionResetsAt: resetsAt,
+          },
+        });
+      }
       return;
     }
   } catch {
@@ -929,7 +988,7 @@ type ModelUsageRow = {
 };
 
 // A run's result repeats the totals so far, and a guided run can report more than once. Log only what is new.
-function logRunUsage(msg: Record<string, unknown>, session: Session) {
+function logRunUsage(msg: Record<string, unknown>, session: Session, chatId: string) {
   const seen = (session.loggedUsage ??= {});
   for (const [model, row] of Object.entries((msg.modelUsage ?? {}) as Record<string, ModelUsageRow>)) {
     const now = {
@@ -948,8 +1007,13 @@ function logRunUsage(msg: Record<string, unknown>, session: Session) {
       costUsd: Math.max(0, now.costUsd - before.costUsd),
     };
     seen[model] = now;
+    if (add.cacheRead) session.reread = (session.reread ?? 0) + add.cacheRead;
+    if (add.costUsd) session.spentUsd = (session.spentUsd ?? 0) + add.costUsd;
     if (add.input + add.output + add.cacheRead + add.cacheWrite > 0) recordUsage("claude-code", model, add);
   }
+  if (session.reread) patchStored(chatId, (s) => {
+    s.reread = session.reread;
+  });
 }
 
 const PLAN_LABELS: Record<string, string> = {
@@ -1081,11 +1145,17 @@ function runUsage(msg: Record<string, unknown>, session: Session): UsageInfo | n
   const main = [...rows].sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0))[0];
   const usage = (msg.usage ?? {}) as Record<string, number>;
   const fallback = contextTokens(usage);
+  const contextWindow = main?.[1].contextWindow ?? Math.max(0, ...rows.map(([, r]) => r.contextWindow ?? 0));
+  const allowance = fiveHourWindow();
+  if (contextWindow) session.contextWindow = contextWindow;
+  if (main?.[0]) session.modelName = main[0];
   return {
     costUsd: cost,
     contextTokens: session.lastContext ?? fallback,
-    contextWindow: main?.[1].contextWindow ?? Math.max(0, ...rows.map(([, r]) => r.contextWindow ?? 0)),
+    contextWindow,
     model: main?.[0],
+    sessionPercent: allowance?.percent ?? null,
+    sessionResetsAt: allowance?.resetsAt ?? null,
   };
 }
 
@@ -1486,7 +1556,7 @@ export function withBrief(prompt: string, history?: HistoryMsg[], verified = "",
         ]
       : []),
     ...(brief ? ["What was said:", "<session>", brief, "</session>"] : []),
-    "Treat that as where the work stands. Read a file again only if this message needs it. Reply to the user's new message:",
+    "Treat that as where the work stands. Open a file only to change it, or if the findings above are incomplete. Reply to the user's new message:",
     prompt,
   ].join("\n\n");
 }
@@ -1543,6 +1613,26 @@ function storePwshAliasOnly(): boolean {
   return existsSync(path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe"));
 }
 
+async function continuationPacket(session: Session, request: string): Promise<string> {
+  const files = [...session.changes.values()].map((c) => c.path).slice(0, 40);
+  const steps = (session.trace ?? []).slice(-20).join("\n");
+  const said = (session.finalText ?? "").replace(/\s+/g, " ").slice(0, 1_200);
+  const local = await generateLocally(
+    `Summarize this coding run so a fresh agent can continue it without the tool log. Under 150 words. Keep file paths, decisions, errors, and what is left.\n\nRequest:\n${request.slice(0, 1_200)}\n\nSteps:\n${steps || "(none)"}\n\nFiles changed:\n${files.join("\n") || "(none)"}\n\nReply so far:\n${said || "(none)"}`,
+    250,
+    12_000,
+  );
+  return [
+    "This run was compacted so the earlier tool output is not sent again. Continue the same task. Open a file only to change it.",
+    `Request:\n${request.slice(0, 1_500)}`,
+    files.length ? `Files already changed:\n${files.join("\n")}` : "",
+    steps ? `Steps already taken:\n${steps}` : "",
+    local ? `Where the work stands:\n${local}` : said ? `Reply so far:\n${said}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 type RunOptions = {
   win: BrowserWindow | null;
   chatId: string;
@@ -1568,64 +1658,52 @@ export function runClaude(opts: RunOptions) {
     return;
   }
   if (session.engine === "claude" && session.inbox && !session.stopping) {
-    const steered = session.inbox.push(userTurn(guidePrompt(scrubOutgoing(opts.prompt).text), opts.images, "now"));
-    if (steered) {
-      send(opts.win, {
-        kind: "status",
-        running: true,
-        phase: "thinking",
-        text: "Following your instruction…",
-        sessionId: session.claudeSession,
-        chatId,
-      });
-      return;
-    }
+    const inbox = session.inbox;
+    void (async () => {
+      const seen = await imagesToText(scrubOutgoing(opts.prompt).text, opts.images);
+      if (session.inbox === inbox && !session.stopping && inbox.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
+        send(opts.win, {
+          kind: "status",
+          running: true,
+          phase: "thinking",
+          text: "Following your instruction…",
+          sessionId: session.claudeSession,
+          chatId,
+        });
+        return;
+      }
+      runClaude({ ...opts, prompt: seen.prompt, images: seen.images });
+    })();
+    return;
   }
   if (session.child || session.query || session.abort) stopClaude(opts.win, chatId);
   session.lastPrompt = opts.prompt;
   session.fixAttempts = 0;
 
-  // A CLI session lives under the folder it started in. A chat since moved to another folder starts a new
-  // session there with its transcript.
+  // A CLI session lives under the folder it started in. A chat moved to another folder drops that session.
+  // The follow-up still carries the summary, not the old transcript.
   if (session.claudeSession && session.workspace && path.resolve(session.workspace).toLowerCase() !== path.resolve(opts.workspace).toLowerCase()) {
     session.claudeSession = undefined;
     session.lastContext = undefined;
     session.lastTurnAt = undefined;
+    session.reread = undefined;
   }
-  let idleMs = session.lastTurnAt ? Date.now() - session.lastTurnAt : undefined;
-  // Sessions saved before this was recorded have the size and the time in the local transcript.
-  if (session.claudeSession && (opts.history?.length ?? 0) > 0 && (session.lastContext === undefined || idleMs === undefined)) {
-    const remembered = rememberedSession(session.claudeSession);
-    if (remembered) {
-      if (session.lastContext === undefined && remembered.tokens) {
-        session.lastContext = remembered.tokens;
-        patchStored(chatId, (s) => {
-          s.lastContext = remembered.tokens;
-        });
-      }
-      if (idleMs === undefined) idleMs = remembered.idleMs;
-    }
-  }
-  // A full or cold context makes this turn re-read old tool output. Carry a short brief instead.
-  const handOff = Boolean(session.claudeSession && shouldHandOff(session.lastContext, opts.history?.length ?? 0, HANDOFF_TOKENS, idleMs ?? 0));
-  if (handOff) {
-    const full = (session.lastContext ?? 0) > HANDOFF_TOKENS;
+  // A follow-up carries a short summary. Resuming would send the earlier tokens again.
+  const handOff = shouldHandOff(opts.history?.length ?? 0);
+  if (handOff && session.claudeSession) {
     send(opts.win, {
       kind: "note",
       chatId,
-      running: false,
-      text: full
-        ? `The context reached ${Math.round((session.lastContext ?? 0) / 1000)}k tokens, so this message continues from a short brief of the chat instead of resuming the session. Earlier file contents and command output are left out; the agent reads again what it needs.`
-        : "This session has been idle long enough that resuming it would resend its history, so this message continues from a short brief of the chat. Earlier file contents and command output are left out; the agent reads again what it needs.",
+      running: true,
+      text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
     });
     session.claudeSession = undefined;
     session.lastContext = undefined;
     session.lastTurnAt = undefined;
+    session.reread = undefined;
   }
-  // A later message in this chat continues the same Claude session, so "yes" still refers to the last turn.
+  // A message with no earlier turns, or a review round, continues the session it already has.
   const resuming = Boolean(session.claudeSession);
-  const scrubbed = scrubOutgoing(resuming ? opts.prompt : handOff ? withBrief(opts.prompt, opts.history, capsulesBrief(chatId), chatSummary(chatId, opts.history)) : withHistory(opts.prompt, opts.history));
-  const prompt = scrubbed.text;
   const cwd = opts.workspace;
   session.workspace = cwd;
   session.engine = "claude";
@@ -1643,9 +1721,13 @@ export function runClaude(opts: RunOptions) {
   session.gateCalls = new Map();
   session.passedGates = [];
   session.finalText = "";
+  session.spentUsd = 0;
 
   const mode = chosenPermissionMode(opts.permissionMode);
-  if (!resuming) session.claudeSession = undefined;
+  if (!resuming) {
+    session.claudeSession = undefined;
+    session.reread = 0;
+  }
   const bash = gitBashPath();
   const pwsh = realStorePwsh();
   const skipStorePwsh = !pwsh && storePwshAliasOnly() && Boolean(bash);
@@ -1656,22 +1738,24 @@ export function runClaude(opts: RunOptions) {
       delete s.claudeSession;
       delete s.lastContext;
       delete s.lastTurnAt;
+      delete s.reread;
     }
     s.pending = { prompt: opts.prompt, permissionMode: mode, startedAt: Date.now(), started: false };
   });
 
   const { inbox, stream } = openInbox();
-  session.inbox = inbox;
-  inbox.push(userTurn(prompt, opts.images));
-
-  send(opts.win, {
-    kind: "status",
-    running: true,
-    phase: "starting",
-    text: scrubbed.hidden ? `Hid ${scrubbed.hidden} secret${scrubbed.hidden > 1 ? "s" : ""} before sending. Starting…` : "Starting…",
-    sessionId: session.claudeSession,
-    chatId,
-  });
+  const begin = (text: string, hidden: number, images?: ImageAttachment[]) => {
+    session.inbox = inbox;
+    inbox.push(userTurn(text, images));
+    send(opts.win, {
+      kind: "status",
+      running: true,
+      phase: "starting",
+      text: hidden ? `Hid ${hidden} secret${hidden > 1 ? "s" : ""} before sending. Starting…` : "Starting…",
+      sessionId: session.claudeSession,
+      chatId,
+    });
+  };
 
   recordActivity({ kind: "run", chatId, title: opts.prompt.slice(0, 80), model: opts.model, action: "started", outcome: "started" });
 
@@ -1693,6 +1777,39 @@ export function runClaude(opts: RunOptions) {
     let failed = "";
     let q: Query | undefined;
     try {
+      if (handOff && !chatSummary(chatId, opts.history)) {
+        send(opts.win, {
+          kind: "status",
+          running: true,
+          phase: "starting",
+          text: "Summarizing this chat locally…",
+          sessionId: session.claudeSession,
+          chatId,
+        });
+      } else {
+        send(opts.win, {
+          kind: "status",
+          running: true,
+          phase: "starting",
+          text: "Reading the project locally…",
+          sessionId: session.claudeSession,
+          chatId,
+        });
+      }
+      const [seen, packet, summary] = await Promise.all([
+        imagesToText(opts.prompt, opts.images),
+        paidPacket(cwd, opts.prompt),
+        handOff ? ensureSummary(chatId, opts.history, abort.signal).catch(() => "") : Promise.resolve(""),
+      ]);
+      if (session.abort !== abort) {
+        inbox.close();
+        return;
+      }
+      const shaped = packet ? `${packet}\n\n${seen.prompt}` : seen.prompt;
+      const scrubbed = scrubOutgoing(
+        resuming ? shaped : handOff ? withBrief(shaped, opts.history, capsulesBrief(chatId), summary) : withHistory(shaped, opts.history),
+      );
+      begin(scrubbed.text, scrubbed.hidden, seen.images);
       let exe: string;
       try {
         exe = await ensureClaudeBinary((text) => {
@@ -1715,15 +1832,18 @@ export function runClaude(opts: RunOptions) {
       const { runBudgetUsd } = await loadSettings();
       const extra = await mergedToolServers(chatId, abort.signal);
       if (session.abort !== abort) return;
+      let turnStream = stream;
+      let resumeId = resuming ? session.claudeSession : undefined;
+      for (let compact = 0; compact < 2 && session.abort === abort; compact++) {
       q = query({
-    prompt: stream,
+    prompt: turnStream,
     options: {
       cwd,
-      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.model ? { model: opts.model, ...(modelTier(opts.model) < 2 ? { effort: "low" as const } : {}) } : { model: "sonnet", effort: "low" as const }),
       ...(runBudgetUsd > 0 ? { maxBudgetUsd: runBudgetUsd } : {}),
       pathToClaudeCodeExecutable: exe,
       abortController: abort,
-      resume: resuming ? session.claudeSession : undefined,
+      resume: resumeId,
       permissionMode: mode,
       permissionPrompts: "host",
       includePartialMessages: true,
@@ -1872,16 +1992,22 @@ export function runClaude(opts: RunOptions) {
           {
             hooks: [
               async (input) => {
-                if (input.hook_event_name !== "PostToolUse" || !protecting()) return {};
-                const vault = privacyVault();
-                let changed = false;
-                const scrubbed = mapStrings(input.tool_response, (s) => {
-                  const r = vault.scrub(s);
-                  if (r.text !== s) changed = true;
-                  return r.text;
-                });
-                if (!changed) return {};
-                return { hookSpecificOutput: { hookEventName: "PostToolUse" as const, updatedToolOutput: scrubbed } };
+                if (input.hook_event_name !== "PostToolUse") return {};
+                let output = input.tool_response;
+                if (protecting()) {
+                  const vault = privacyVault();
+                  let changed = false;
+                  const scrubbed = mapStrings(output, (s) => {
+                    const r = vault.scrub(s);
+                    if (r.text !== s) changed = true;
+                    return r.text;
+                  });
+                  if (changed) output = scrubbed;
+                }
+                const text = typeof output === "string" ? output : JSON.stringify(output ?? "");
+                const shrunk = shrinkGatherResult(input.tool_name, text);
+                if (!shrunk && output === input.tool_response) return {};
+                return { hookSpecificOutput: { hookEventName: "PostToolUse" as const, updatedToolOutput: shrunk ?? output } };
               },
             ],
           },
@@ -1916,11 +2042,46 @@ export function runClaude(opts: RunOptions) {
           })
           .catch(() => {});
       }
-      for await (const msg of q) {
-        if (session.query !== q) return;
-        parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
-        // Keep the inbox open while background agents run, so a message then guides this run instead of stopping them.
-        if (turnIsOver(msg, session.backgroundTasks ?? 0)) session.inbox?.close();
+      let grew = false;
+      try {
+        for await (const msg of q) {
+          if (session.query !== q) return;
+          parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
+          if ((session.reread ?? 0) >= COMPACT_REREAD && compact === 0 && !session.stopping) {
+            grew = true;
+            try {
+              q.close();
+            } catch {
+              /* already closed */
+            }
+            if (session.child) killTree(session.child);
+            session.child = null;
+            break;
+          }
+          // Keep the inbox open while background agents run, so a message then guides this run instead of stopping them.
+          if (turnIsOver(msg, session.backgroundTasks ?? 0)) session.inbox?.close();
+        }
+      } catch (err) {
+        if (!grew) throw err;
+      }
+      if (!grew) break;
+      send(opts.win, {
+        kind: "note",
+        chatId,
+        running: true,
+        text: "This run was getting large, so it continues from a short packet. The earlier tool output is not sent again.",
+      });
+      session.inbox = undefined;
+      const packet = await continuationPacket(session, opts.prompt);
+      if (session.abort !== abort) return;
+      session.reread = 0;
+      session.loggedUsage = {};
+      session.claudeSession = undefined;
+      resumeId = undefined;
+      const next = openInbox();
+      turnStream = next.stream;
+      session.inbox = next.inbox;
+      next.inbox.push(userTurn(packet));
       }
     } catch (err) {
       if (session.query !== q) return;
@@ -1929,10 +2090,12 @@ export function runClaude(opts: RunOptions) {
         session.claudeSession = undefined;
         session.lastContext = undefined;
         session.lastTurnAt = undefined;
+        session.reread = undefined;
         patchStored(chatId, (s) => {
           delete s.claudeSession;
           delete s.lastContext;
           delete s.lastTurnAt;
+          delete s.reread;
         });
         failed = "The previous agent session no longer exists. Send again to start a new one.";
       } else if (!session.stopping && !shuttingDown) {
@@ -1944,10 +2107,9 @@ export function runClaude(opts: RunOptions) {
     } finally {
       // A run that threw never got its result message, so its inbox is still open; the next message
       // must start a new run, not be "steered" into this dead one.
-      if (session.inbox === inbox) {
-        inbox.close();
-        session.inbox = undefined;
-      }
+      if (session.inbox && session.inbox !== inbox) session.inbox.close();
+      inbox.close();
+      session.inbox = undefined;
       if (!q || session.query !== q) {
         if (session.stopping && !session.query) {
           session.stopping = false;
@@ -1979,7 +2141,7 @@ export function runClaude(opts: RunOptions) {
           files: [...session.changes.values()].map((c) => c.path),
         });
         const turns = [...(opts.history ?? []), { role: "user", text: opts.prompt }, { role: "assistant", text: session.finalText ?? "" }];
-        void loadSettings().then((s) => (s.summarizer ? summarizeRun(chatId, s.summarizer, turns, capsule) : undefined));
+        void refreshSummary(chatId, turns, capsule);
       }
       send(opts.win, {
         kind: "done",
@@ -1997,6 +2159,7 @@ export function runClaude(opts: RunOptions) {
         outcome: failed ? "failed" : "ok",
         note: failed ? failed.slice(0, 240) : undefined,
       });
+      if (!opts.reviewRound && !opts.resume) noteLearned(chatId, opts.prompt, opts.model || session.modelName || "", session.spentUsd ?? 0);
       if (!failed && !session.stopping) void reviewRun(opts, session, cwd);
     }
   })();
@@ -2011,8 +2174,8 @@ async function reviewRun(opts: RunOptions, session: Session, cwd: string) {
   const request = opts.reviewRequest ?? opts.prompt;
   const round = opts.reviewRound ?? 0;
   if (privacyMode() === "local") return;
-  const reviewer = (await loadSettings()).reviewer;
-  if (!reviewer || !session.changes.size) return;
+  const reviewer = (await loadSettings()).reviewer || `direct:ollama:${LOCAL_MODEL}`;
+  if (!session.changes.size) return;
   const clean = (s: string | null) => (s === null || !protecting() ? s : scrubOutgoing(s).text);
   const files = [...session.changes.values()].map((c) => {
     let after: string | null = null;
@@ -2032,6 +2195,8 @@ async function reviewRun(opts: RunOptions, session: Session, cwd: string) {
     const idle = !session.query && !session.abort && !session.child;
     if (r && /^concerns:/i.test(r.text) && round < REVIEW_ROUNDS && idle) {
       send(win, { kind: "note", chatId, running: false, text: `Sending the concerns back to the agent (round ${round + 1} of ${REVIEW_ROUNDS})…` });
+      const files = [...session.changes.values()].map((c) => c.path);
+      clearClaudeSession(chatId, session);
       runClaude({
         ...opts,
         history: undefined,
@@ -2040,7 +2205,8 @@ async function reviewRun(opts: RunOptions, session: Session, cwd: string) {
         reviewRound: round + 1,
         prompt:
           `Another AI (${r.label}) reviewed your change against my request and raised these concerns. ` +
-          `Fix the ones that are real problems. If one is wrong, say why in one line and leave it.\n\n${r.text}`,
+          `Fix the ones that are real problems. If one is wrong, say why in one line and leave it.\n\n${r.text}\n\n` +
+          `Files already changed:\n${files.map((p) => `- ${p}`).join("\n")}`,
       });
     }
   } catch (err) {

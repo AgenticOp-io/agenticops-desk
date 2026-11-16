@@ -77,23 +77,101 @@ export function autoStep(
   return run.failed ? "handover" : "finish";
 }
 
-// Past this, every turn re-reads all earlier tool output. Replaying 65 real sessions, 150k saved the most (~29%):
-// lower budgets hand off so often that rewriting the transcript eats the saving.
-export const HANDOFF_TOKENS = 150_000;
-
-// Claude Code's prompt cache for these sessions lasts an hour. Resuming after that rewrites the whole history.
+// Claude Code's prompt cache lasts about an hour. Resuming an interrupted run after that resends its history.
 export const RESUME_TTL_MS = 45 * 60_000;
 
-// Start fresh instead of resuming when the last turn filled the context, or the cache would be cold.
-// Only when the user sent the message, so a review round with no transcript keeps its session.
-export function shouldHandOff(
-  lastContext: number | undefined,
-  historyMessages: number,
-  budget = HANDOFF_TOKENS,
-  idleMs = 0,
-): boolean {
-  if (historyMessages <= 0) return false;
-  return (lastContext ?? 0) > budget || idleMs > RESUME_TTL_MS;
+// A follow-up never resumes the paid session and never resends the transcript. The local model
+// carries a short summary, or the short brief when it cannot. A run with no history — a review
+// round, or resuming an interrupted run — keeps its session.
+export function shouldHandOff(historyMessages: number): boolean {
+  return historyMessages > 0;
+}
+
+// 0 local, 1 Sonnet-class, 2 Opus-class. A new chat starts at 0.
+export type ModelTier = 0 | 1 | 2;
+
+export type ModelLesson = {
+  kept: number;
+  retried: number;
+  raised: number;
+  lowered: number;
+  lastTier: ModelTier;
+  lastPrompt: string;
+  assigned: string;
+};
+
+export function modelTier(model: string): ModelTier {
+  const m = model.toLowerCase();
+  if (m.includes("opus") || m.includes("fable")) return 2;
+  if (m.includes("ollama") || m.includes("haiku") || m === "local") return 0;
+  return 1;
+}
+
+export function tierFromWord(text: string): ModelTier | null {
+  const word = text.trim().toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, "") ?? "";
+  if (word === "local" || word === "cheap") return 0;
+  if (word === "sonnet" || word === "mid" || word === "medium") return 1;
+  if (word === "opus" || word === "expensive") return 2;
+  return null;
+}
+
+export function lessonVerdict(row: ModelLesson, prompt: string, model: string): "kept" | "retried" | "raised" | "lowered" {
+  if (row.lastPrompt && prompt.trim().slice(0, 180) === row.lastPrompt) return "retried";
+  const tier = modelTier(model);
+  if (row.assigned && tier > row.lastTier) return "raised";
+  if (row.assigned && tier < row.lastTier) return "lowered";
+  return "kept";
+}
+
+export function applyVerdict(row: ModelLesson, verdict: "kept" | "retried" | "raised" | "lowered"): ModelLesson {
+  return { ...row, [verdict]: row[verdict] + 1 };
+}
+
+// The local model writes the summary. It does not run the chat, unless the user picked it in the menu.
+export function tierForAgent(tier: ModelTier): ModelTier {
+  return tier === 0 ? 1 : tier;
+}
+
+// Step up after repeated raises or retries. Step down after several accepted cheaper runs.
+export function nextTier(row: ModelLesson | undefined): ModelTier {
+  if (!row?.assigned) return 0;
+  const up = row.raised + row.retried;
+  if (up >= 2 && up > row.kept) return Math.min(2, row.lastTier + 1) as ModelTier;
+  if (row.kept >= 3 && row.kept > up && row.lastTier > 0) return (row.lastTier - 1) as ModelTier;
+  return row.lastTier;
+}
+
+// Cache-read tokens one run may accumulate before its tool log is dropped and the work continues
+// from a short packet. About one heavy pass over a long thread.
+export const COMPACT_REREAD = 1_500_000;
+
+const GATHER_TOOLS = new Set([
+  "read",
+  "readfile",
+  "notebookread",
+  "grep",
+  "search",
+  "glob",
+  "ls",
+  "listfiles",
+  "webfetch",
+  "websearch",
+  "bash",
+  "powershell",
+  "runcommand",
+]);
+const SHELL_TOOLS = new Set(["bash", "powershell", "runcommand"]);
+
+// A long read, search, or command result. Short enough that the next step does not re-read a file body.
+// Null means the result is already small enough to keep.
+export function shrinkGatherResult(toolName: string, text: string, limit = 1_800): string | null {
+  const key = toolName.toLowerCase().replace(/[^a-z]/g, "");
+  if (!GATHER_TOOLS.has(key) || text.length <= limit) return null;
+  if (SHELL_TOOLS.has(key)) {
+    const head = Math.floor(limit * 0.4);
+    return `${text.slice(0, head)}\n…\n${text.slice(-(limit - head))}`;
+  }
+  return `${text.slice(0, limit)}\n… (${text.length - limit} more characters left on disk. Open only the lines you will change.)`;
 }
 
 const BRIEF_LIMIT = 8_000;
@@ -103,7 +181,15 @@ export function sessionBrief(history: { role: string; text: string }[] | undefin
   const turns = (history ?? []).filter((m) => (m.role === "user" || m.role === "assistant") && m.text.trim());
   if (!turns.length) return "";
   const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)}…` : text);
-  const line = (m: { role: string; text: string }, n: number) => `${m.role === "user" ? "User" : "Assistant"}: ${clip(m.text.trim(), n)}`;
+  // File bodies in a reply are on disk. The fallback packet keeps the words, the paths, and the errors.
+  const words = (text: string) =>
+    text
+      .replace(/```[\w-]*\r?\n[\s\S]*?```/g, "[code omitted]")
+      .split(/\r?\n/)
+      .filter((line) => line.length <= 240)
+      .join("\n")
+      .trim();
+  const line = (m: { role: string; text: string }, n: number) => `${m.role === "user" ? "User" : "Assistant"}: ${clip(words(m.text), n)}`;
   const first = turns[0];
   const recent = turns.slice(-4);
   const lines = recent.includes(first) ? recent.map((m) => line(m, 1600)) : [line(first, 800), ...recent.map((m) => line(m, 1600))];

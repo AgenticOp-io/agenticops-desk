@@ -37,16 +37,11 @@ test("deepseek drops stored reasoning before the next command", async () => {
   assert.equal(messages[1].content, "hi");
 });
 
-test("handoff only past the budget and only with a transcript to carry", async () => {
-  const { shouldHandOff, HANDOFF_TOKENS, RESUME_TTL_MS } = await import("./pureFeatures.ts");
-  assert.equal(shouldHandOff(HANDOFF_TOKENS + 1, 4), true);
-  assert.equal(shouldHandOff(HANDOFF_TOKENS, 4), false);
-  assert.equal(shouldHandOff(undefined, 4), false);
-  // Review rounds and resumed runs pass no history: never drop their session.
-  assert.equal(shouldHandOff(900_000, 0), false);
-  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, RESUME_TTL_MS + 1), true);
-  assert.equal(shouldHandOff(1_000, 2, HANDOFF_TOKENS, RESUME_TTL_MS), false);
-  assert.equal(shouldHandOff(1_000, 0, HANDOFF_TOKENS, RESUME_TTL_MS + 1), false);
+test("a follow-up hands off and a run with no history keeps its session", async () => {
+  const { shouldHandOff } = await import("./pureFeatures.ts");
+  assert.equal(shouldHandOff(0), false);
+  assert.equal(shouldHandOff(1), true);
+  assert.equal(shouldHandOff(4), true);
 });
 
 test("usage adds up per model, by day, and old days drop out", async () => {
@@ -88,6 +83,46 @@ test("a session brief keeps the ask and the latest reply, and stays short", asyn
   assert.match(brief, /did we fix all of this\?/);
   assert.ok(brief.length <= 2_000);
   assert.equal(sessionBrief([]), "");
+  const coded = sessionBrief(
+    [
+      { role: "user", text: "Fix src/app.ts" },
+      { role: "assistant", text: "Done.\n```ts\n" + "const x = 1;\n".repeat(40) + "```\nLeft src/app.ts green." },
+    ],
+    4_000,
+  );
+  assert.match(coded, /src\/app\.ts/);
+  assert.equal(coded.includes("const x = 1"), false);
+});
+
+test("a chat starts cheap and moves up or down from what the user does", async () => {
+  const { applyVerdict, lessonVerdict, modelTier, nextTier, tierForAgent, tierFromWord } = await import("./pureFeatures.ts");
+  assert.equal(modelTier("direct:ollama:qwen2.5-coder:7b"), 0);
+  assert.equal(modelTier("claude-opus-5-5"), 2);
+  assert.equal(modelTier("sonnet"), 1);
+  assert.equal(tierFromWord("opus, because this is a proof"), 2);
+  assert.equal(tierFromWord("no idea"), null);
+  assert.equal(nextTier(undefined), 0);
+  assert.equal(tierForAgent(0), 1);
+  assert.equal(tierForAgent(2), 2);
+  const fresh = { kept: 0, retried: 0, raised: 0, lowered: 0, lastTier: 0 as const, lastPrompt: "fix the typo", assigned: "direct:ollama:qwen" };
+  const raised = applyVerdict(applyVerdict(fresh, "raised"), "raised");
+  assert.equal(nextTier({ ...raised, lastTier: 0 }), 1);
+  const settled = { ...fresh, kept: 3, lastTier: 2 as const, assigned: "opus" };
+  assert.equal(nextTier(settled), 1);
+  assert.equal(lessonVerdict(fresh, "fix the typo", "opus"), "retried");
+  assert.equal(lessonVerdict({ ...fresh, lastPrompt: "other" }, "new work", "opus"), "raised");
+});
+
+test("a long file read is shortened and a short one is kept", async () => {
+  const { shrinkGatherResult } = await import("./pureFeatures.ts");
+  assert.equal(shrinkGatherResult("Read", "short"), null);
+  const read = shrinkGatherResult("Read", "a".repeat(3_000), 100);
+  assert.ok(read?.startsWith("a".repeat(100)));
+  assert.match(read ?? "", /left on disk/);
+  const shell = shrinkGatherResult("Bash", `head\n${"x".repeat(500)}\nFAIL at the end`, 80);
+  assert.match(shell ?? "", /head/);
+  assert.match(shell ?? "", /FAIL at the end/);
+  assert.equal(shrinkGatherResult("Edit", "z".repeat(5_000)), null);
 });
 
 test("a transcript's last real context survives a trailing empty usage", async () => {
@@ -560,6 +595,14 @@ test("old chats fold away, but never the main, pinned, open or running one", asy
     { id: "stale", updatedAt: now - 30 * day, lastUsedAt: now - 20 * day },
   ];
   assert.deepEqual([...olderChats(used, 14, now, () => false)], ["stale"]);
+});
+
+test("hidden chats stay out of the main list and search still shows them", async () => {
+  const { sidebarHidesChat } = await import("../src/sideChats.ts");
+  assert.equal(sidebarHidesChat(true, false, false), true);
+  assert.equal(sidebarHidesChat(false, true, false), true);
+  assert.equal(sidebarHidesChat(false, false, false), false);
+  assert.equal(sidebarHidesChat(true, true, true), false);
 });
 
 test("rows keep their place, and new ones go on top", async () => {

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,4 +108,27 @@ export function recordPlan(update: (plan: PlanLimits) => PlanLimits) {
 export async function usageReport(): Promise<UsageReport> {
   const log = await load();
   return { rows: summarizeUsage(log, Date.now()), plan: log.plan ?? null };
+}
+
+let peekedPlan: PlanLimits | null | undefined;
+
+function peekPlan(): PlanLimits | null {
+  if (cache?.plan) return cache.plan;
+  if (peekedPlan !== undefined) return peekedPlan;
+  try {
+    const raw = JSON.parse(readFileSync(usageFile(), "utf8")) as Stored;
+    peekedPlan = raw?.plan ?? null;
+  } catch {
+    peekedPlan = null;
+  }
+  return peekedPlan;
+}
+
+// The rolling allowance, or null once that window has reset or never been read.
+// A reset reading must not keep blocking resumes.
+export function fiveHourWindow(now = Date.now()): { percent: number; resetsAt: number | null } | null {
+  const window = peekPlan()?.windows.find((w) => w.id === "five_hour");
+  if (!window || window.percent == null) return null;
+  if (window.resetsAt != null && window.resetsAt <= now) return null;
+  return { percent: window.percent, resetsAt: window.resetsAt };
 }

@@ -26,13 +26,19 @@ import {
   stopClaude,
   type HistoryMsg,
   type UsageInfo,
+  withBrief,
   withHistory,
 } from "./claude";
+import { capsulesBrief, chatSummary, ensureSummary } from "./capsules";
 import { callMcpTool, mcpToolsFor, type McpTool } from "./directMcp";
 import { prepareMemory } from "./memory";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
+import { paidPacket } from "./gather";
+import { imagesToText } from "./imageVision";
+import { generateLocally } from "./localModel";
+import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
-import { staysInside, stripDeepSeekReasoning } from "./pureFeatures";
+import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
@@ -291,14 +297,29 @@ function str(v: unknown) {
 }
 
 // Privacy Mode around every tool: real values go into the tool, placeholders come back out.
+async function fitResult(name: string, text: string): Promise<string> {
+  if (text.length > 6_000) {
+    const local = await generateLocally(
+      `Summarize this tool result for a coding agent in under 120 words. Keep paths, line numbers, errors, and signatures. Drop file bodies.\n\nTool: ${name}\n\n${text.slice(0, 8_000)}`,
+      200,
+      8_000,
+    );
+    if (local) return local;
+  }
+  return shrinkGatherResult(name, text) ?? text;
+}
+
 async function runPrivateTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
-  if (!protecting()) return runTool(ctx, name, input, id);
+  if (!protecting()) {
+    const plain = await runTool(ctx, name, input, id);
+    return { ...plain, text: await fitResult(name, plain.text) };
+  }
   // A fetched URL leaves this computer, so it keeps the placeholders.
   const real = name === "web_fetch" ? input : restoreInput(input);
   const file = name === "read_file" ? String(real.path ?? "") : name === "run_command" ? commandTouchesSecretFile(String(real.command ?? "")) : "";
   if (file && isSecretFile(file)) return { text: secretFileMessage(file), error: true };
   const r = await runTool(ctx, name, real, id);
-  return { ...r, text: scrubOutgoing(r.text).text };
+  return { ...r, text: await fitResult(name, scrubOutgoing(r.text).text) };
 }
 
 async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
@@ -601,7 +622,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
         tools,
         messages,
         cache_control: { type: "ephemeral" },
-        ...(NO_EFFORT.has(model) ? {} : { output_config: { effort: "high" as const } }),
+        ...(NO_EFFORT.has(model) ? {} : { output_config: { effort: "low" as const } }),
         ...(FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
       },
       { signal: ctx.signal },
@@ -829,6 +850,7 @@ function reasoningText(delta: object): string {
 }
 
 function sendUsage(ctx: Ctx, usage: UsageInfo) {
+  if (usage.costUsd) ctx.session.spentUsd = (ctx.session.spentUsd ?? 0) + usage.costUsd;
   send(ctx.win, { kind: "usage", usage, chatId: ctx.chatId, running: true });
 }
 
@@ -870,6 +892,7 @@ export function runDirect(opts: {
   session.workspace = cwd;
   session.engine = "direct";
   session.stopping = false;
+  session.spentUsd = 0;
   // The next Claude Code message must not resume a session that missed this chat's direct turns.
   clearClaudeSession(chatId, session);
   const abort = new AbortController();
@@ -878,13 +901,20 @@ export function runDirect(opts: {
   const system = systemPrompt(cwd, privateAppend([memory.append, ordersPrompt(runOrders(cwd))].filter(Boolean).join("\n\n")));
   session.lastPrompt = opts.prompt;
   const prior = loadSaved(chatId);
-  // Same provider: continue its native history. Otherwise hand over the visible transcript as text.
-  const sameProvider = prior?.provider === opts.provider;
+  // A follow-up gets a short summary. Continuing the saved messages would send the earlier tokens again.
+  const followUp = shouldHandOff(opts.history?.length ?? 0);
+  const sameProvider = !followUp && prior?.provider === opts.provider;
   const saved: Saved = sameProvider ? prior! : { provider: opts.provider, messages: [] };
-  const scrubbed = scrubOutgoing(sameProvider ? opts.prompt : withHistory(opts.prompt, opts.history));
-  const prompt = scrubbed.text;
-  const starting = scrubbed.hidden ? `Hid ${scrubbed.hidden} secret${scrubbed.hidden > 1 ? "s" : ""} before sending. Starting…` : "Starting…";
-  send(win, { kind: "status", running: true, phase: "starting", text: starting, chatId });
+  let prompt = "";
+  let images = opts.images;
+  if (followUp && prior && prior.messages.length) {
+    send(win, {
+      kind: "note",
+      chatId,
+      running: true,
+      text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
+    });
+  }
   const ctx: Ctx = {
     win,
     chatId,
@@ -899,6 +929,25 @@ export function runDirect(opts: {
   void (async () => {
     let failed = "";
     try {
+      if (followUp && !chatSummary(chatId, opts.history)) {
+        send(win, { kind: "status", running: true, phase: "starting", text: "Summarizing this chat locally…", chatId });
+      } else {
+        send(win, { kind: "status", running: true, phase: "starting", text: "Reading the project locally…", chatId });
+      }
+      const [seen, packet, summary] = await Promise.all([
+        imagesToText(opts.prompt, opts.images),
+        paidPacket(cwd, opts.prompt),
+        followUp ? ensureSummary(chatId, opts.history, abort.signal).catch(() => "") : Promise.resolve(""),
+      ]);
+      if (abort.signal.aborted) return;
+      images = seen.images;
+      const shaped = packet ? `${packet}\n\n${seen.prompt}` : seen.prompt;
+      const scrubbed = scrubOutgoing(
+        followUp ? withBrief(shaped, opts.history, capsulesBrief(chatId), summary) : sameProvider ? shaped : withHistory(shaped, opts.history),
+      );
+      prompt = scrubbed.text;
+      const starting = scrubbed.hidden ? `Hid ${scrubbed.hidden} secret${scrubbed.hidden > 1 ? "s" : ""} before sending. Starting…` : "Starting…";
+      send(win, { kind: "status", running: true, phase: "starting", text: starting, chatId });
       const servers = await mcpToolsFor(cwd, (s, command) =>
         askPermission(win, chatId, session, `mcp__${s.name}`, { command }, {
           signal: abort.signal,
@@ -912,8 +961,8 @@ export function runDirect(opts: {
       ctx.mcp = servers.tools;
       for (const text of servers.notes) send(win, { kind: "note", text, chatId, running: true });
       if (abort.signal.aborted) return;
-      if (preset.kind === "anthropic") await runAnthropic(ctx, opts.model, system, saved, prompt, opts.images ?? []);
-      else await runOpenAI(ctx, opts.provider, opts.model, system, saved, prompt, opts.images ?? []);
+      if (preset.kind === "anthropic") await runAnthropic(ctx, opts.model, system, saved, prompt, images ?? []);
+      else await runOpenAI(ctx, opts.provider, opts.model, system, saved, prompt, images ?? []);
     } catch (err) {
       if (!abort.signal.aborted) {
         if (err instanceof Anthropic.AuthenticationError || err instanceof OpenAI.AuthenticationError) {
@@ -938,6 +987,7 @@ export function runDirect(opts: {
       pruneChanges(session);
       sendChanges(win, chatId, session);
       if (failed) send(win, { kind: "error", text: failed, chatId, running: false });
+      noteLearned(chatId, opts.prompt, `direct:${opts.provider}:${opts.model}`, session.spentUsd ?? 0);
       send(win, { kind: "done", running: false, chatId, text: stopped || failed ? "Stopped." : "Done." });
     }
   })();

@@ -1220,6 +1220,7 @@ select.pill { appearance: auto; }
 .usage-meter { width: 46px; height: 4px; border-radius: 2px; background: #333; overflow: hidden; }
 .usage-meter span { display: block; height: 100%; background: #6b9eff; }
 .usage-meter span.hot { background: #f59e0b; }
+.usage .session-hot { color: #f59e0b; }
 
 /* Settings: Claude Code sign-in and Direct providers */
 .settings { width: min(620px, 94vw); max-height: 88vh; overflow: auto; }

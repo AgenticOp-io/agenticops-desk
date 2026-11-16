@@ -20,7 +20,14 @@ export type ApprovalRequest = {
   remember?: boolean;
 };
 
-export type UsageInfo = { costUsd: number; contextTokens: number; contextWindow: number; model?: string };
+export type UsageInfo = {
+  costUsd: number;
+  contextTokens: number;
+  contextWindow: number;
+  model?: string;
+  sessionPercent?: number | null;
+  sessionResetsAt?: number | null;
+};
 export type UsageTally = { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number; calls: number };
 export type UsageRow = { source: string; model: string; today: UsageTally; week: UsageTally; month: UsageTally; daily: number[] };
 export type PlanWindow = { id: string; label: string; percent: number | null; resetsAt: number | null };
@@ -107,6 +114,7 @@ export type BriefingItem = {
 export type ClaudeEvent = {
   kind: "status" | "line" | "thinking" | "tool" | "error" | "done" | "approval" | "approval_done" | "changes" | "usage" | "models" | "todos" | "plan" | "note" | "route";
   model?: string;
+  learned?: boolean;
   todos?: Array<{ content: string; status: string }>;
   // "changes": files Claude edited in this chat that the user has not kept or undone yet.
   files?: string[];

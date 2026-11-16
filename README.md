@@ -15,7 +15,7 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **AIs checking each other:** with a **Second opinion** model set, a model from another provider reviews every change against your request, and its concerns go back to the agent to fix (up to two rounds).
 
-**Cheaper long chats:** a chat that comes back after a break, or grows past 150,000 tokens, starts a fresh session from a short brief instead of resending its whole history. The brief lists work already verified in the chat, and with a **Summaries** model (**Settings → AI models**) it carries a running summary instead of clipped turns. **Set up local model** there, or the box in the Windows setup, installs Ollama and a free local model and turns this on with no further steps.
+**Cheaper follow-ups:** every follow-up continues from a short summary written by a local model, plus work already verified in the chat. The earlier transcript is not sent again. **Set up local model** under **Settings → AI models → Summaries**, or the box in the Windows setup, installs Ollama and a free local model. Pick a different Summaries model only if you want one.
 
 **@ symbols:** `@handleLogin` in the message box points the agent at that function's file and line, not just a file.
 
@@ -38,7 +38,7 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **Private beta, in daily use.** Built and used daily on Windows. macOS and Linux builds ship with every release; they get full installers but not code patches.
 
-- **Chats:** each one resumes its own Claude Code session for about 45 minutes, so a short reply like "yes" keeps its context. After that, or past 150,000 tokens, the next message continues from a short brief instead of resending the session. A run cut off within that time resumes on the next launch.
+- **Chats:** a follow-up continues from a short local summary instead of resending the session. A message sent while a run is still going joins that run. A run cut off by quitting resumes on the next launch if it is still recent.
 - **Permissions:** the first action in a folder asks once. After that, edits, tests, git and network commands run without a prompt. Disk format, administrator commands and shutdown still ask. Questions and plans always ask.
 - **Memory:** a global index under `%APPDATA%\AgenticOps Desk\memory` and the project's Claude Code memory folder go into every run.
 - **Imports:** chats and projects from the editor you used before show up in the sidebar and can be handed to the agent with **Catch up**.

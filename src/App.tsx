@@ -21,7 +21,7 @@ import { ChatStorage } from "./ChatStorage";
 import { SavedLogins } from "./SavedLogins";
 import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
-import { isStale, olderChats, projectForChat } from "./sideChats";
+import { isStale, olderChats, projectForChat, sidebarHidesChat } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
@@ -298,6 +298,7 @@ export function App() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   // Projects whose "older chats" row is open, for this session.
   const [olderOpen, setOlderOpen] = useState<Set<string>>(() => new Set());
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   const [sideView, setSideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
@@ -554,7 +555,21 @@ export function App() {
       }
       if (ev.kind === "usage" && ev.usage) {
         // Each run reports its own cost; add them up so the meter shows the chat's total since launch.
-        setUsageByChat((u) => ({ ...u, [chatId]: { ...ev.usage!, costUsd: (u[chatId]?.costUsd ?? 0) + ev.usage!.costUsd } }));
+        // A plan-limit event carries no new context size, so keep the one already on screen.
+        setUsageByChat((u) => {
+          const prev = u[chatId];
+          const add = ev.usage!;
+          return {
+            ...u,
+            [chatId]: {
+              ...prev,
+              ...add,
+              costUsd: (prev?.costUsd ?? 0) + add.costUsd,
+              contextTokens: add.contextWindow ? add.contextTokens : (prev?.contextTokens ?? add.contextTokens),
+              contextWindow: add.contextWindow || prev?.contextWindow || 0,
+            },
+          };
+        });
       }
       if (ev.kind === "approval_done") {
         setPendingApprovals((list) => list.filter((a) => a.requestId !== ev.id));
@@ -596,6 +611,17 @@ export function App() {
       }
       if (ev.kind === "route" && ev.text) {
         setRouteByChat((cur) => ({ ...cur, [chatId]: ev.text ?? "" }));
+        if (ev.learned && ev.model) {
+          const value = ev.model;
+          if (activeChatRef.current?.id === chatId) setModel(value);
+          const chat = chatsRef.current.find((c) => c.id === chatId);
+          if (chat && chat.model !== value) {
+            const next = { ...chat, model: value };
+            setChats((all) => all.map((c) => (c.id === chatId ? next : c)));
+            setActiveChat((cur) => (cur?.id === chatId ? next : cur));
+            void window.desk.patchChat(chatId, next);
+          }
+        }
       }
       if (ev.kind === "note" && ev.text) {
         patchThread(chatId, (m) => [...m, { role: "system", text: ev.text ?? "" }]);
@@ -1500,7 +1526,7 @@ export function App() {
     const pushGroup = (g: (typeof visibleGroups)[number]) => {
       const current = samePath(g.path, workspace);
       const opened = Boolean(q) || Boolean(prefs.expanded[g.key]);
-      const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
+      const liveChats = g.chats.filter((c) => !sidebarHidesChat(hiddenChatSet.has(c.id), hiddenProjectSet.has(g.key), Boolean(q)));
       // A closed project is one row, so a long list of folders is easy to scan. An open one shows its recent chats,
       // and the rest fold under "older chats". A search shows every match.
       const older = q
@@ -1536,9 +1562,22 @@ export function App() {
     if (!q) {
       rows.push({ kind: "other", id: "archive", count: archived.length, open: archiveOpen });
       if (archiveOpen) for (const g of archived) pushGroup(g);
+      const buried = chats
+        .filter((c) => {
+          const host = groups.find((g) => g.chats.some((x) => x.id === c.id));
+          return sidebarHidesChat(hiddenChatSet.has(c.id), Boolean(host && hiddenProjectSet.has(host.key)), false);
+        })
+        .sort((a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt));
+      if (buried.length) rows.push({ kind: "other", id: "hidden", count: buried.length, open: hiddenOpen });
+      if (buried.length && hiddenOpen) {
+        for (const c of buried) {
+          const g = groups.find((g) => g.chats.some((x) => x.id === c.id));
+          if (g) rows.push({ kind: "chat", id: `h:${c.id}`, group: g, chat: c });
+        }
+      }
     }
     return rows;
-  }, [visibleGroups, q, prefs.expanded, prefs.projectArchive, prefs.chatArchiveDays, hiddenChatSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen, olderOpen, team.managers]);
+  }, [visibleGroups, groups, chats, q, prefs.expanded, prefs.projectArchive, prefs.chatArchiveDays, hiddenChatSet, hiddenProjectSet, runningByChat, workspace, activeChat?.id, otherOpen, archiveOpen, olderOpen, hiddenOpen, team.managers]);
 
   // A newly opened chat shows in the list, once: collapsing its project afterwards stays collapsed.
   const shownChat = useRef<string | null>(null);
@@ -1777,8 +1816,14 @@ export function App() {
                     type="button"
                     className={`more-link other-folders ${dragOver === row.id ? "drag-over" : ""}`}
                     aria-expanded={row.open}
-                    title={row.id === "archive" ? "Projects not opened for three months, or dragged here. Opening or dragging one out brings it back." : undefined}
-                    onClick={() => (row.id === "archive" ? setArchiveOpen : setOtherOpen)((open) => !open)}
+                    title={
+                      row.id === "archive"
+                        ? "Projects not opened for three months, or dragged here. Opening or dragging one out brings it back."
+                        : row.id === "hidden"
+                          ? "Hidden chats and chats in hidden projects. Opening one puts it back in the list."
+                          : undefined
+                    }
+                    onClick={() => (row.id === "archive" ? setArchiveOpen : row.id === "hidden" ? setHiddenOpen : setOtherOpen)((open) => !open)}
                     onDragOver={(e: DragEvent) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "move";
@@ -1787,7 +1832,7 @@ export function App() {
                     onDrop={(e: DragEvent) => {
                       e.preventDefault();
                       const from = parseDrag(e);
-                      if (from?.kind === "project" && from.key) {
+                      if (from?.kind === "project" && from.key && row.id !== "hidden") {
                         if (row.id === "archive") markArchive(from.key, "in");
                         else if (archivedKeys.has(from.key)) bringOut(from.key);
                       }
@@ -1795,7 +1840,12 @@ export function App() {
                       setDragging(null);
                     }}
                   >
-                    {row.open ? "Hide" : "Show"} {row.id === "archive" ? `archive (${row.count})` : `${row.count} other folder${row.count === 1 ? "" : "s"}`}
+                    {row.open ? "Hide" : "Show"}{" "}
+                    {row.id === "archive"
+                      ? `archive (${row.count})`
+                      : row.id === "hidden"
+                        ? `hidden (${row.count})`
+                        : `${row.count} other folder${row.count === 1 ? "" : "s"}`}
                   </button>
                 );
               }
@@ -1837,6 +1887,10 @@ export function App() {
                     onClick={(e) => {
                       e.stopPropagation();
                       if (renamingId === c.id) return;
+                      if (hiddenChatSet.has(c.id) || hiddenProjectSet.has(g.key)) {
+                        unhideChat(c.id);
+                        setStatus(`“${c.title}” is back in the list`);
+                      }
                       void openChat(c);
                     }}
                     onDoubleClick={(e) => {
@@ -1892,7 +1946,7 @@ export function App() {
               const g = row.group;
               const showAll = Boolean(q) || Boolean(prefs.expanded[g.key]);
               const current = samePath(g.path, workspace);
-              const liveChats = g.chats.filter((c) => !hiddenChatSet.has(c.id));
+              const liveChats = g.chats.filter((c) => !sidebarHidesChat(hiddenChatSet.has(c.id), hiddenProjectSet.has(g.key), Boolean(q)));
               const projectRun = liveChats
                 .filter((c) => runningByChat[c.id])
                 .map((c) => progressByChat[c.id])
@@ -1932,14 +1986,23 @@ export function App() {
                   onContextMenu={(e) => openMenu(e, { projectKey: g.key })}
                   onClick={() => {
                     if (prefs.projectArchive[g.key] === "in") markArchive(g.key, null);
-                    // Another project is gone to and left open, even if its list was already showing. Only the
-                    // project you are in collapses, and collapsing never changes the chat on screen.
-                    if (current && !q) return toggleGroup(g.key);
+                    // The name opens the project. It does not collapse it: that hid every chat with no other place to look.
+                    if (current && !q) {
+                      if (!showAll) toggleGroup(g.key);
+                      return;
+                    }
                     if (!showAll) toggleGroup(g.key);
                     void openProjectLatest(g.path, liveChats);
                   }}
                 >
-                  <span className={`row-icon ${showAll ? "open" : ""}`}>
+                  <span
+                    className={`row-icon ${showAll ? "open" : ""}`}
+                    title={showAll ? "Collapse" : "Expand"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleGroup(g.key);
+                    }}
+                  >
                     <Glyph name="caret" />
                   </span>
                   <span className="list-title">{g.name}</span>
@@ -2862,11 +2925,11 @@ export function App() {
                     <div className="settings-label">Second opinion</div>
                     <label className="settings-row">
                       <span>
-                        After a run changes files, this model checks the change against your request. Its concerns go back to the agent
-                        to fix, up to two rounds.
+                        After a run changes files, a local model checks the change against your request. Its concerns go back to the agent
+                        to fix, up to two rounds. Pick a model here only if you want a different one.
                       </span>
                       <select value={prefs.reviewer} onChange={(e) => patchPrefs({ reviewer: e.target.value })}>
-                        <option value="">Off</option>
+                        <option value="">Local model</option>
                         {models
                           .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
                           .map((m) => (
@@ -2899,11 +2962,11 @@ export function App() {
                     <div className="settings-label">Summaries</div>
                     <label className="settings-row">
                       <span>
-                        After each run, this model updates a short summary of the chat and of what the run proved. When a long or idle chat
-                        starts a fresh session, it gets that summary instead of clipped turns. A local Ollama model costs nothing.
+                        After each run, a local model updates a short summary of the chat. Every follow-up sends that summary, not the earlier
+                        transcript. Pick a model here only if you want a different one. The local model costs nothing.
                       </span>
                       <select value={prefs.summarizer} onChange={(e) => patchPrefs({ summarizer: e.target.value })}>
-                        <option value="">Off</option>
+                        <option value="">Local model</option>
                         {models
                           .filter((m) => m.value.startsWith("direct:") && !m.needsSetup)
                           .map((m) => (

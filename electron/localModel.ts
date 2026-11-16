@@ -154,7 +154,7 @@ export const pendingSetupFile = () => path.join(app.getPath("userData"), "local-
 // One-shot, cheap local completion for operational triage (git/gh status, log reads, "what failed and what
 // does it mean"). Returns null when Ollama or the model is not available, so the caller falls back to the
 // cloud agent instead of blocking. Nothing leaves this computer: the model is local and the prompt is local.
-export async function generateLocally(prompt: string, maxTokens = 400): Promise<string | null> {
+export async function generateLocally(prompt: string, maxTokens = 400, timeoutMs = 30_000): Promise<string | null> {
   if (!prompt.trim()) return null;
   try {
     if (!(await serverUp())) return null;
@@ -162,7 +162,7 @@ export async function generateLocally(prompt: string, maxTokens = 400): Promise<
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: LOCAL_MODEL, prompt, stream: false, options: { num_predict: maxTokens, temperature: 0 } }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { response?: string };

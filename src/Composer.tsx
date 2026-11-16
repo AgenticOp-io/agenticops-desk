@@ -263,6 +263,9 @@ export const Composer = forwardRef<
   const ctxPct = props.usage?.contextWindow
     ? Math.min(100, Math.round((props.usage.contextTokens / props.usage.contextWindow) * 100))
     : 0;
+  const sessionPct = props.usage?.sessionPercent;
+  const sessionHot = sessionPct != null && sessionPct >= 80;
+  const sessionReset = props.usage?.sessionResetsAt ? new Date(props.usage.sessionResetsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
 
   return (
     <div
@@ -442,11 +445,12 @@ export const Composer = forwardRef<
         {props.usage && (
           <span
             className="usage"
-            title={`Context: ${props.usage.contextTokens.toLocaleString()} of ${props.usage.contextWindow.toLocaleString()} tokens${props.usage.model ? ` · ${props.usage.model}` : ""}\nEstimated cost of this chat since AgenticOps Desk started: $${props.usage.costUsd.toFixed(4)}`}
+            title={`Context: ${props.usage.contextTokens.toLocaleString()} of ${props.usage.contextWindow.toLocaleString()} tokens${props.usage.model ? ` · ${props.usage.model}` : ""}${sessionPct != null ? `\n5-hour allowance: ${Math.round(sessionPct)}%${sessionReset ? ` · resets ${sessionReset}` : ""}` : ""}\nEstimated cost of this chat since AgenticOps Desk started: $${props.usage.costUsd.toFixed(4)}`}
           >
             <span className="usage-meter">
-              <span style={{ width: `${ctxPct}%` }} className={ctxPct > 80 ? "hot" : ""} />
+              <span style={{ width: `${ctxPct}%` }} className={sessionHot || ctxPct > 80 ? "hot" : ""} />
             </span>
+            {sessionPct != null && <span className={sessionHot ? "session-hot" : ""}>5h {Math.round(sessionPct)}%</span>}
             {props.usage.contextWindow
               ? `${compact(props.usage.contextTokens)} / ${compact(props.usage.contextWindow)} · $${props.usage.costUsd.toFixed(2)}`
               : `${compact(props.usage.contextTokens)} tokens`}
