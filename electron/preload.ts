@@ -300,6 +300,11 @@ contextBridge.exposeInMainWorld("desk", {
   briefing: (sinceMs: number) => ipcRenderer.invoke("briefing:get", sinceMs),
   getTeam: () => ipcRenderer.invoke("team:get"),
   setManager: (chatId: string, on: boolean) => ipcRenderer.invoke("team:manager", chatId, on),
+  onWorkerRetired: (cb: (id: string) => void) => {
+    const h = (_: unknown, id: string) => cb(id);
+    ipcRenderer.on("team:retired", h);
+    return () => ipcRenderer.removeListener("team:retired", h);
+  },
   // A manager chat asks the window to start or message a worker chat, so it runs like any chat the user starts.
   onTeam: (cb: (kind: "start" | "send", payload: TeamOrder) => void) => {
     const start = (_: unknown, p: TeamOrder) => cb("start", p);

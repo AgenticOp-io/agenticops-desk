@@ -406,6 +406,16 @@ function settleApproval(session: Session, requestId: string, result: PermissionR
   return true;
 }
 
+// Set by team.ts: a worker's trust and remembered risks are its manager's, so workers don't ask one by one.
+let managerOf: (chatId: string) => string | undefined = () => undefined;
+export function setManagerLookup(fn: (chatId: string) => string | undefined) {
+  managerOf = fn;
+}
+const managerWorkspace = (chatId: string) => {
+  const m = managerOf(chatId);
+  return m ? sessions.get(m)?.workspace : undefined;
+};
+
 export function askPermission(
   win: BrowserWindow | null,
   chatId: string,
@@ -428,7 +438,9 @@ export function askPermission(
   const questions =
     toolName === "AskUserQuestion" && Array.isArray(input.questions) ? (input.questions as ApprovalQuestion[]) : undefined;
   const description = typeof input.description === "string" ? input.description : undefined;
-  const gate: PermissionGate = options.login ? { ask: true, kind: "login", ...options.login } : permissionGate(session.workspace, toolName, input);
+  let gate: PermissionGate = options.login ? { ask: true, kind: "login", ...options.login } : permissionGate(session.workspace, toolName, input);
+  const parentWs = managerWorkspace(chatId);
+  if (gate.ask && (gate.kind === "trust" || gate.kind === "risk") && parentWs && !permissionGate(parentWs, toolName, input).ask) gate = { ask: false };
   if (!gate.ask) return Promise.resolve({ behavior: "allow", updatedInput: input });
   const summary = gate.kind === "question" ? options.title || approvalSummary(toolName, input) : gate.summary;
   const reason =
@@ -455,7 +467,10 @@ export function askPermission(
         detail: questions ? "" : approvalDetail(toolName, input),
         reason,
         questions,
-        canAlways: gate.kind === "question" && !options.suppressAlwaysAllowRule && Boolean(options.suggestions?.length),
+        canAlways:
+          gate.kind === "trust" ||
+          gate.kind === "risk" ||
+          (gate.kind === "question" && !options.suppressAlwaysAllowRule && Boolean(options.suggestions?.length)),
       },
     });
     sendPhase(win, chatId, session, "approval", `Needs permission: ${toolLabel(toolName, input)}`);
@@ -478,8 +493,10 @@ export function answerApproval(
   const session = sessions.get(chatId);
   const pending = session?.approvals.get(requestId);
   if (!session || !pending) return false;
-  if (decision.allow && pending.gate === "trust") trustWorkspace(session.workspace);
-  if (decision.allow && pending.gate === "risk") rememberRisks(session.workspace, pending.risks ?? []);
+  for (const ws of [session.workspace, managerWorkspace(chatId)]) {
+    if (decision.allow && pending.gate === "trust") trustWorkspace(ws, decision.always);
+    if (decision.allow && pending.gate === "risk") rememberRisks(ws, pending.risks ?? [], decision.always);
+  }
   const result: PermissionResult = decision.allow
     ? {
         behavior: "allow",

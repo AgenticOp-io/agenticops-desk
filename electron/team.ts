@@ -4,7 +4,7 @@ import path from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { z } from "zod";
 import { capsulesBrief } from "./capsules";
-import { chatState, lastAnswer, listModels, onChatEvent, setToolServers } from "./claude";
+import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setToolServers } from "./claude";
 import { loadAgentSdk } from "./claudeBinary";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
@@ -54,6 +54,8 @@ async function retireWorker(managerId: string, id: string, t: Team): Promise<str
   delete t.workers[id];
   save();
   runs.delete(id);
+  const w = getWindow?.();
+  if (w && !w.isDestroyed()) w.webContents.send("team:retired", id); // the window archives the chat
   const removed = await removeWorktree(id, false);
   return removed.ok ? "" : removed.note;
 }
@@ -75,7 +77,10 @@ const settled = new Set<() => void>();
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
 const fail = (text: string) => ({ ...ok(text), isError: true });
 
+let getWindow: (() => BrowserWindow | null) | undefined;
 export function initTeam(window: () => BrowserWindow | null) {
+  getWindow = window;
+  setManagerLookup((id) => load().workers[id]);
   onChatEvent((event) => {
     const run = event.chatId ? runs.get(event.chatId) : undefined;
     if (!run) return;
@@ -180,13 +185,23 @@ export function initTeam(window: () => BrowserWindow | null) {
       ),
       tool(
         "send_to_chat",
-        "Send a follow-up message to one of your workers. If it is still running, the message steers the current run.",
-        { chat_id: z.string(), message: z.string().min(1) },
+        "Send a follow-up message to one of your workers. If it is still running, the message steers the current run. " +
+          "The worker keeps its conversation, so this beats starting a new worker. Set model to switch it: move up a tier " +
+          "when its result is wrong, incomplete, or it is stuck; move down for easy leftover work; move to another provider " +
+          "when one hits a usage limit.",
+        {
+          chat_id: z.string(),
+          message: z.string().min(1),
+          model: z.string().optional().describe(`Run this and later messages on another model. Leave out to keep its model. Choose one of: ${menu}`),
+        },
         async (args) => {
           if (!mine(args.chat_id)) return fail("You can only message workers you started.");
+          if (args.model && !models.some((m) => m.value === args.model)) return fail(`Unknown model "${args.model}". Choose one of: ${menu}`);
+          // A running worker takes the message as a steer on its current run, which can't change model.
+          if (args.model && chatState(args.chat_id).running) return fail("That worker is still running. Call wait_for first, then switch its model.");
           if (!chatState(args.chat_id).running) runs.set(args.chat_id, { done: false, text: "" });
-          if (!post("team:send", { id: args.chat_id, text: args.message })) return fail("The app window is closed.");
-          return ok("Sent. Call wait_for to get its answer.");
+          if (!post("team:send", { id: args.chat_id, text: args.message, model: args.model })) return fail("The app window is closed.");
+          return ok(`Sent${args.model ? ` on ${args.model}` : ""}. Call wait_for to get its answer.`);
         },
       ),
       tool(
@@ -231,7 +246,7 @@ export function initTeam(window: () => BrowserWindow | null) {
             signal.addEventListener("abort", finish);
             check();
           });
-          const titles = new Map((await rememberedChats()).map((c) => [c.id, c.title]));
+          const known = new Map((await rememberedChats()).map((c) => [c.id, c]));
           // Once the manager has read a finished worker's result, it is collected and can be cleaned up.
           for (const id of ids) {
             const run = runs.get(id);
@@ -244,11 +259,17 @@ export function initTeam(window: () => BrowserWindow | null) {
                 const state = finished(id) ? "finished" : s.waiting ? "still running, waiting on the user's approval" : "still running";
                 const answer = (lastAnswer(id) || runs.get(id)?.text || "").slice(-TEXT_KEEP).trim();
                 const verified = capsulesBrief(id).slice(-1500).trim();
-                return [`## ${titles.get(id) ?? id} (${id}): ${state}`, answer || "(no answer yet)", verified && `Verified runs:\n${verified}`]
+                const c = known.get(id);
+                return [
+                  `## ${c?.title ?? id} (${id}): ${state}, on ${c?.model || "the default model"}`,
+                  answer || "(no answer yet)",
+                  verified && `Verified runs:\n${verified}`,
+                ]
                   .filter(Boolean)
                   .join("\n");
               })
-              .join("\n\n"),
+              .join("\n\n") +
+              "\n\nIf a result is wrong, incomplete, or stuck, send_to_chat the same worker with a stronger model rather than starting over.",
           );
         },
       ),

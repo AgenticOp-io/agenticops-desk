@@ -23,6 +23,7 @@
     "files": [
       "boot/boot.mjs",
       "boot/choice.mjs",
+      "build/icon.png",
       "dist/**/*",
       "dist-electron/**/*"
     ],

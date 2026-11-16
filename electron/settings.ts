@@ -42,6 +42,8 @@ export type UiPrefs = {
   popOut: PanelKey[];
   /** How Preview shows a running app: inline in the panel, or in the default browser. */
   previewMode?: "inline" | "browser";
+  /** Never ask before commands or edits. Questions and plan approvals still ask. Per computer. */
+  allowAll?: boolean;
 };
 
 const PANEL_KEYS = ["chats", "files", "inbox", "status", "help", "settings"] as const;
@@ -130,6 +132,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
       ? r.popOut.filter((k): k is PanelKey => (PANEL_KEYS as readonly unknown[]).includes(k))
       : base.popOut,
     previewMode: r.previewMode === "browser" ? "browser" : "inline",
+    allowAll: r.allowAll === true,
   };
 }
 

@@ -67,8 +67,8 @@ export function permissionGateFor(
       kind: "risk",
       summary: fresh.length === 1 ? `Run ${fresh[0]}` : `Run ${fresh.join(" and ")}`,
       note: trusted
-        ? "Allow remembers this in the project. Other work keeps going."
-        : `Allow remembers this, and lets Claude edit, test, use git, and reach the network in ${folder}.`,
+        ? "Allow remembers this in the project. Allow always remembers it in every folder."
+        : `Allow remembers this, and lets the agent edit, test, use git, and reach the network in ${folder}. Allow always remembers it in every folder.`,
       risks: fresh,
     };
   }
@@ -81,6 +81,6 @@ export function permissionGateFor(
     ask: true,
     kind: "trust",
     summary: `Let the agent work in ${folder}`,
-    note: "Edits, tests, git, and network just run after this. Disk format, administrator commands, and shutdown still ask.",
+    note: "Edits, tests, git, and network just run after this. Allow always trusts every folder, including new chats. Disk format, administrator commands, and shutdown still ask.",
   };
 }

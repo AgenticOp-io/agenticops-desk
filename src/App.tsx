@@ -973,7 +973,8 @@ export function App() {
       const { send: sendNow, chats: all } = teamRef.current;
       if (kind === "send") {
         const chat = all.find((c) => c.id === order.id);
-        if (chat && order.text) void sendNow({ images: [], mentions: [], text: order.text, chat, quiet: true });
+        // The worker's own model, not the model of the chat the user happens to be viewing.
+        if (chat && order.text) void sendNow({ images: [], mentions: [], text: order.text, chat, model: order.model || chat.model || "", quiet: true });
         return;
       }
       const boss = all.find((c) => c.id === order.managerId);
@@ -998,6 +999,17 @@ export function App() {
       );
     });
   }, []);
+  // A worker the manager is done with is archived (hidden, restorable from Settings), not deleted.
+  const hiddenRef = useRef(prefs.hiddenChats);
+  hiddenRef.current = prefs.hiddenChats;
+  useEffect(
+    () =>
+      window.desk.onWorkerRetired((id) => {
+        patchPrefs({ hiddenChats: [...new Set([...hiddenRef.current, id])] });
+        void window.desk.getTeam().then(setTeam);
+      }),
+    [],
+  );
   const [workerList, setWorkerList] = useState(false);
   const [watchWorker, setWatchWorker] = useState<string | null>(null);
   const watchWorkerChat = (id: string) => {
@@ -1308,6 +1320,7 @@ export function App() {
     { id: "git", label: "Git", run: () => setDock("git") },
     { id: "preview", label: "Preview a page", run: () => setDock("preview") },
     { id: "notes", label: "Project instructions and MCP", run: () => setDock("notes") },
+    { id: "canvas", label: "Canvas: draw and export", run: () => setDock("canvas") },
     { id: "rules", label: "Standing orders: protected paths and checks", run: () => setDock("rules") },
     { id: "inbox", label: "Decisions inbox", run: () => setInboxOpen(true) },
     { id: "briefing", label: "Briefing: where every chat stands", run: () => showBriefing() },
@@ -1658,16 +1671,6 @@ export function App() {
           </button>
         </div>
         <div className="topbar-group">
-          <button
-            type="button"
-            className={inboxOpen ? "on" : ""}
-            title={pendingApprovals.length ? `Everything waiting on you (${pendingApprovals.length})` : "Everything waiting on you, across all chats"}
-            onClick={() => (popped("inbox") && inboxOpen ? focusPopout("inbox") : setInboxOpen((v) => !v))}
-          >
-            <Glyph name="inbox" />
-            <span>Waiting on you</span>
-            {pendingApprovals.length > 0 && <span className="topbar-badge">{pendingApprovals.length}</span>}
-          </button>
           <button type="button" title="Where every recent chat stands" onClick={() => (popped("status") && briefing ? focusPopout("status") : showBriefing())}>
             <Glyph name="briefing" />
             <span>Chat status</span>
@@ -2100,7 +2103,7 @@ export function App() {
               {activeChat && (
                 <WorktreeChip chatId={activeChat.id} folder={activeChat.projectPath ?? ""} running={running} onNote={setStatus} />
               )}
-              {(["terminal", "git", "preview", "notes", "rules"] as DockTab[]).map((tab) => (
+              {(["terminal", "git", "preview", "notes", "rules", "canvas"] as DockTab[]).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -2406,9 +2409,8 @@ export function App() {
       ))}
 
       {(() => {
-        // The floating card is for the chat you are in. Everything else waits in the inbox, so another
-        // chat's question never jumps in front of your work.
-        const here = pendingApprovals.filter((a) => a.chatId === activeChat?.id);
+        // The floating card is for the chat you are in, plus its workers when it is a manager.
+        const here = pendingApprovals.filter((a) => a.chatId === activeChat?.id || team.workers[a.chatId] === activeChat?.id);
         const card = here[0];
         if (!card) return null;
         return (
@@ -2682,6 +2684,20 @@ export function App() {
                         {p.label}
                       </label>
                     ))}
+
+                    <div className="settings-label">Permissions</div>
+                    <p className="settings-hint">
+                      Skip every permission prompt for commands and edits, in all folders. Questions and plan approvals still ask.
+                      Only turn this on if you trust what the agent will do.
+                    </p>
+                    <label className="settings-check">
+                      <input
+                        type="checkbox"
+                        checked={prefs.allowAll === true}
+                        onChange={(e) => patchPrefs({ allowAll: e.target.checked })}
+                      />
+                      Allow everything without asking
+                    </label>
 
                     <div className="settings-label">Preview</div>
                     <p className="settings-hint">Where a running app opens when you use Preview.</p>

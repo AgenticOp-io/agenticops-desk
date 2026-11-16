@@ -32,6 +32,8 @@ export type UiPrefs = {
   popOut: PanelKey[];
   // How the Preview panel shows a running app: inline iframe, or launched in the default browser. Persistent.
   previewMode: "inline" | "browser";
+  // Never ask before commands or edits. Questions and plan approvals still ask.
+  allowAll?: boolean;
 };
 
 export type PanelKey = "chats" | "files" | "inbox" | "status" | "help" | "settings";

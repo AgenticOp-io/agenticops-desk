@@ -363,6 +363,7 @@ declare global {
       briefing: (sinceMs: number) => Promise<BriefingItem[]>;
       getTeam: () => Promise<Team>;
       setManager: (chatId: string, on: boolean) => Promise<Team | string>;
+      onWorkerRetired: (cb: (id: string) => void) => () => void;
       onTeam: (cb: (kind: "start" | "send", order: TeamOrder) => void) => () => void;
       listWatches: (chatId?: string) => Promise<WatchInfo[]>;
       addWatch: (chatId: string) => Promise<WatchInfo[]>;

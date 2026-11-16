@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Rules } from "./Extras";
+import { Canvas } from "./Canvas";
 import { localServerUrl } from "./preview";
 
-export type DockTab = "terminal" | "git" | "preview" | "notes" | "rules";
+export type DockTab = "terminal" | "git" | "preview" | "notes" | "rules" | "canvas";
 
 export function Dock({
   tab,
@@ -22,6 +23,7 @@ export function Dock({
   if (tab === "terminal") return <Terminal workspace={workspace} />;
   if (tab === "git") return <GitPanel workspace={workspace} onStatus={onStatus} />;
   if (tab === "preview") return <Preview url={previewUrl} onUrl={onPreviewUrl} workspace={workspace} mode={previewMode} onStatus={onStatus} />;
+  if (tab === "canvas") return <Canvas onStatus={onStatus} />;
   if (tab === "rules") return <Rules workspace={workspace} onStatus={onStatus} />;
   return <Notes workspace={workspace} onStatus={onStatus} />;
 }

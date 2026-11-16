@@ -3,6 +3,7 @@ import { loadAgentSdk } from "./claudeBinary";
 import { setToolServers } from "./claude";
 import { opsTriage } from "./opsTriage";
 import { describeImage } from "./imageVision";
+import { generateImage } from "./imageGen";
 
 // The ops desk tool, available to every chat. It runs ONE read-only git or gh status command and hands the
 // output to the local Ollama model for a short triage summary, so busywork (build status, repo state) is
@@ -47,9 +48,22 @@ export function initOpsTools() {
         return { content: [{ type: "text", text: `Image description:\n${text}` }] };
       },
     );
+    const gen = tool(
+      "generate_image",
+      "Create a new image from a text prompt (needs an OpenAI key in Settings). Saves a PNG and returns its file path; copy it into the project if it belongs there.",
+      {
+        prompt: z.string().min(1).max(4000),
+        size: z.enum(["1024x1024", "1536x1024", "1024x1536"]).optional(),
+      },
+      async (args) => {
+        const r = await generateImage(args.prompt, args.size);
+        if (!r.ok) return { content: [{ type: "text", text: r.error }], isError: true };
+        return { content: [{ type: "text", text: `Image saved to ${r.path}` }] };
+      },
+    );
     return {
-      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img] }) },
-      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image"],
+      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img, gen] }) },
+      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image", "mcp__ops__generate_image"],
     };
   });
 }

@@ -124,6 +124,7 @@ import {
   writeShell,
 } from "./features";
 import { loadSettings, patchSettings, type UiPrefs } from "./settings";
+import { setAllowAll } from "./allows";
 import { buildBriefing } from "./briefing";
 import { loadOrders, saveOrders, teamOrders, type Orders } from "./orders";
 import { originsOf } from "./provenance";
@@ -283,6 +284,10 @@ function guardNavigation(w: BrowserWindow) {
   w.webContents.on("will-attach-webview", (e) => e.preventDefault());
 }
 
+// A stray error in one chat or tool must not take the whole app down.
+process.on("uncaughtException", (err) => console.error("uncaughtException", err));
+process.on("unhandledRejection", (err) => console.error("unhandledRejection", err));
+
 function createWindow() {
   // A Mac can close the window and leave the app running. The next window has to flush its chats too.
   allowQuit = false;
@@ -293,6 +298,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: "#181818",
     title: "AgenticOps Desk",
+    icon: path.join(__dirname, "../build/icon.png"),
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -310,6 +316,25 @@ function createWindow() {
     void confirmPatch();
   });
   guardNavigation(win);
+  // Hardening: a crashed or frozen page is reloaded instead of leaving a dead window. Chats run in this
+  // process, so a reload never stops them.
+  const reload = () => {
+    if (win && !win.isDestroyed()) win.webContents.reload();
+  };
+  win.webContents.on("render-process-gone", (_e, d) => {
+    if (d.reason !== "clean-exit") setTimeout(reload, 500);
+  });
+  let freezeTimer: ReturnType<typeof setTimeout> | null = null;
+  win.on("unresponsive", () => {
+    freezeTimer ??= setTimeout(() => {
+      freezeTimer = null;
+      reload();
+    }, 15000);
+  });
+  win.on("responsive", () => {
+    if (freezeTimer) clearTimeout(freezeTimer);
+    freezeTimer = null;
+  });
   win.on("close", (e) => {
     if (allowQuit) return;
     if (liveRunCount() > 0) {
@@ -561,6 +586,7 @@ app.whenReady().then(async () => {
   }
   const s = await loadSettings();
   setPrivacyMode(s.privacy);
+  setAllowAll(s.allowAll);
   clearCredentialFiles();
   if (s.lastWorkspace && existsSync(s.lastWorkspace)) {
     workspace = s.lastWorkspace;
@@ -682,6 +708,7 @@ ipcMain.handle("settings:get", () => loadSettings());
 ipcMain.handle("settings:set", async (_e, prefs: Partial<UiPrefs>) => {
   const next = await patchSettings(prefs);
   setPrivacyMode(next.privacy);
+  setAllowAll(next.allowAll);
   scheduleDeskSync();
   return next;
 });
