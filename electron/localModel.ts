@@ -1,7 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { createWriteStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -9,11 +8,10 @@ import { app } from "electron";
 import { pullProviderModels } from "./providers";
 import { patchSettings } from "./settings";
 
-// Installs Ollama and a small model for chat summaries, then turns Summaries on. The installer asks for this,
-// or Settings › AI models starts it later. Windows only installs Ollama; elsewhere it must already be there.
+// Sets up a local model server (an Ollama already here, else llama.cpp's small server) and a small model for chat summaries, then turns Summaries on. The installer asks for this,
+// or Settings › AI models starts it later. Without Ollama, only Windows can set itself up; elsewhere Ollama must already be there.
 
 export const LOCAL_MODEL = "qwen2.5-coder:7b";
-const SETUP_URL = "https://ollama.com/download/OllamaSetup.exe";
 const API = "http://127.0.0.1:11434";
 
 export type LocalModelStatus = { running: boolean; text: string; ok?: boolean };
@@ -39,66 +37,77 @@ function runFile(file: string, args: string[], env?: NodeJS.ProcessEnv, timeout 
   });
 }
 
-// The downloaded installer only runs if Windows says Ollama signed it.
-async function signedByOllama(file: string): Promise<boolean> {
-  const ps = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  const r = await runFile(
-    ps,
-    ["-NoProfile", "-NonInteractive", "-Command", "$s = Get-AuthenticodeSignature -LiteralPath $env:DESK_FILE; \"$($s.Status)|$($s.SignerCertificate.Subject)\""],
-    { DESK_FILE: file },
-    60_000,
-  );
-  const [state, subject = ""] = r.out.split("|");
-  return state === "Valid" && /(^|, )O=Ollama Inc\.,/.test(subject);
+async function download(url: string, file: string, label: string, say: (t: string) => void) {
+  const res = await fetch(url, { redirect: "follow" });
+  if (!res.ok || !res.body) throw new Error(`The ${label} download returned ${res.status}.`);
+  const total = Number(res.headers.get("content-length")) || 0;
+  let got = 0;
+  let shown = -1;
+  const counted = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream).on("data", (c: Buffer) => {
+    got += c.length;
+    const pct = total ? Math.floor((got / total) * 100) : -1;
+    if (pct !== shown && pct % 5 === 0) say(`Downloading ${label}… ${(shown = pct)}%`);
+  });
+  await pipeline(counted, createWriteStream(`${file}.part`));
+  await fs.rename(`${file}.part`, file);
 }
 
-async function installOllama(say: (t: string) => void): Promise<string> {
+// Without Ollama, the small llama.cpp server plus one model file are enough. Both live under userData/llama.
+const llamaDir = () => path.join(app.getPath("userData"), "llama");
+const llamaExe = () => path.join(llamaDir(), "llama-server.exe");
+const modelFile = () => path.join(llamaDir(), "model.gguf");
+const MODEL_URL = "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf";
+
+async function installLlama(say: (t: string) => void) {
   if (process.platform !== "win32") throw new Error("Install Ollama from ollama.com, then try again.");
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ollama-"));
-  try {
-    const file = path.join(dir, "OllamaSetup.exe");
-    const res = await fetch(SETUP_URL, { redirect: "follow" });
-    if (!res.ok || !res.body) throw new Error(`The Ollama download returned ${res.status}.`);
-    const total = Number(res.headers.get("content-length")) || 0;
-    let got = 0;
-    let shown = -1;
-    const counted = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream).on("data", (c: Buffer) => {
-      got += c.length;
-      const pct = total ? Math.floor((got / total) * 100) : -1;
-      if (pct !== shown && pct % 5 === 0) say(`Downloading Ollama… ${(shown = pct)}%`);
-    });
-    await pipeline(counted, createWriteStream(file));
-    say("Checking the Ollama installer's signature…");
-    if (!(await signedByOllama(file))) throw new Error("The Ollama installer was not signed by Ollama, so it was not run.");
-    say("Installing Ollama…");
-    const r = await runFile(file, ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]);
-    if (r.code !== 0) throw new Error(`The Ollama installer stopped with code ${r.code}.`);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  await fs.mkdir(llamaDir(), { recursive: true });
+  if (!existsSync(llamaExe())) {
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    const list = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5", { headers: { "User-Agent": "desk" } });
+    if (!list.ok) throw new Error(`GitHub returned ${list.status} when looking up llama.cpp.`);
+    const releases = (await list.json()) as Array<{ assets: Array<{ name: string; browser_download_url: string }> }>;
+    const asset = releases.flatMap((r) => r.assets).find((a) => new RegExp(`^llama-.*-bin-win-cpu-${arch}\\.zip$`).test(a.name));
+    if (!asset) throw new Error("No Windows build of llama.cpp was found.");
+    const zip = path.join(llamaDir(), "server.zip");
+    await download(asset.browser_download_url, zip, "the local model server", say);
+    say("Unpacking the local model server…");
+    const r = await runFile(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", zip, "-C", llamaDir()], undefined, 120_000);
+    await fs.rm(zip, { force: true });
+    if (r.code !== 0 || !existsSync(llamaExe())) throw new Error(`Unpacking the local model server failed. ${r.out}`);
   }
-  const exe = ollamaExe();
-  if (!exe) throw new Error("Ollama installed, but ollama.exe was not found.");
-  return exe;
+  if (!existsSync(modelFile())) await download(MODEL_URL, modelFile(), LOCAL_MODEL, say);
+}
+
+function startLlama() {
+  const child = spawn(llamaExe(), ["-m", modelFile(), "--alias", LOCAL_MODEL, "--host", "127.0.0.1", "--port", "11434", "-c", "8192"], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.on("error", () => {});
+  child.unref();
 }
 
 async function serverUp(): Promise<boolean> {
   try {
-    return (await fetch(`${API}/api/version`, { signal: AbortSignal.timeout(2_000) })).ok;
+    return (await fetch(`${API}/v1/models`, { signal: AbortSignal.timeout(2_000) })).ok;
   } catch {
     return false;
   }
 }
 
-async function startServer(exe: string) {
+async function startServer(exe: string | null) {
   if (await serverUp()) return;
-  const child = spawn(exe, ["serve"], { detached: true, stdio: "ignore", windowsHide: true });
-  child.on("error", () => {});
-  child.unref();
+  if (exe) {
+    const child = spawn(exe, ["serve"], { detached: true, stdio: "ignore", windowsHide: true });
+    child.on("error", () => {});
+    child.unref();
+  } else startLlama();
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (await serverUp()) return;
   }
-  throw new Error("Ollama did not start.");
+  throw new Error("The local model server did not start.");
 }
 
 async function pullModel(say: (t: string) => void) {
@@ -130,11 +139,12 @@ export function setupLocalModel(onStatus: (s: LocalModelStatus) => void): Promis
   const say = (text: string) => onStatus((status = { running: true, text }));
   job = (async () => {
     try {
-      say("Looking for Ollama…");
-      const exe = ollamaExe() ?? (await installOllama(say));
-      say("Starting Ollama…");
+      say("Looking for a local model server…");
+      const exe = ollamaExe();
+      if (!exe && !(await serverUp())) await installLlama(say);
+      say("Starting the local model server…");
       await startServer(exe);
-      await pullModel(say);
+      if (exe) await pullModel(say);
       await pullProviderModels("ollama");
       await patchSettings({ summarizer: `direct:ollama:${LOCAL_MODEL}` });
       status = { running: false, ok: true, text: `${LOCAL_MODEL} is ready and writes the summaries.` };
@@ -157,16 +167,20 @@ export const pendingSetupFile = () => path.join(app.getPath("userData"), "local-
 export async function generateLocally(prompt: string, maxTokens = 400, timeoutMs = 30_000): Promise<string | null> {
   if (!prompt.trim()) return null;
   try {
-    if (!(await serverUp())) return null;
-    const res = await fetch(`${API}/api/generate`, {
+    if (!(await serverUp())) {
+      if (!existsSync(llamaExe()) || !existsSync(modelFile())) return null;
+      await startServer(null);
+    }
+    const res = await fetch(`${API}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: LOCAL_MODEL, prompt, stream: false, options: { num_predict: maxTokens, temperature: 0 } }),
+      body: JSON.stringify({ model: LOCAL_MODEL, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: maxTokens, temperature: 0 }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as { response?: string };
-    return typeof data.response === "string" && data.response.trim() ? data.response.trim() : null;
+    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const text = data.choices?.[0]?.message?.content;
+    return typeof text === "string" && text.trim() ? text.trim() : null;
   } catch {
     return null;
   }
