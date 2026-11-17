@@ -2125,6 +2125,9 @@ export function runClaude(opts: RunOptions) {
           send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
         } else if (failed) {
           session.abort = undefined;
+          const lost = session.early?.length ?? 0;
+          session.early = undefined;
+          if (lost) failed += `\n${lost} message${lost > 1 ? "s" : ""} sent while starting ${lost > 1 ? "were" : "was"} not delivered. Send ${lost > 1 ? "them" : "it"} again.`;
           send(opts.win, { kind: "error", text: failed, chatId, running: false });
           patchStored(chatId, (s) => delete s.pending);
           send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
