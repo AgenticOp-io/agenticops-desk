@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initTeam, setManager, teamView } from "./team";
 import { initOpsTools } from "./opsTools";
+import { writeTextAtomicSync } from "./jsonStore";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
 import { completeAt, quickEdit, type QuickEditRequest } from "./quickEdit";
@@ -25,7 +26,7 @@ import {
 } from "./plugins";
 import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
-import { recentActivity } from "./activityLog";
+import { recentActivity, flush as flushActivity } from "./activityLog";
 import { chooseLearned } from "./modelLearn";
 import { opsTriage } from "./opsTriage";
 import { describeImage } from "./imageVision";
@@ -690,6 +691,7 @@ app.on("before-quit", (e) => {
     saveVault(),
     Promise.race([syncNow(), new Promise((resolve) => setTimeout(resolve, 20_000))]),
     flushRendererThreads(),
+    flushActivity(),
   ]).finally(() => app.quit());
 });
 
@@ -1030,7 +1032,7 @@ ipcMain.handle("fs:read", async (_e, filePath: string) => {
 
 ipcMain.handle("fs:write", async (_e, filePath: string, contents: string) => {
   if (!inWorkspace(filePath) && !inWorktrees(filePath)) throw new Error("Only files inside the open folder can be written.");
-  await fs.writeFile(filePath, contents, "utf8");
+  writeTextAtomicSync(filePath, contents);
   return true;
 });
 

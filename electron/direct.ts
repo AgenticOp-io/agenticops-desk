@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app, type BrowserWindow } from "electron";
@@ -41,7 +41,7 @@ import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protec
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
-import { writeJsonAtomicSync } from "./jsonStore";
+import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
 import { loadSettings } from "./settings";
 import { recordUsage } from "./usageLog";
 
@@ -358,7 +358,7 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
         const content = str(input.content);
         if (content === undefined) return { text: "content must be a string", error: true };
         mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, content, "utf8");
+        writeTextAtomicSync(file, content);
         return { text: `Wrote ${content.split("\n").length} lines to ${file}` };
       }
       const oldS = str(input.old_string);
@@ -375,7 +375,7 @@ async function runTool(ctx: Ctx, name: string, input: Record<string, unknown>, i
       if (hits > 1 && input.replace_all !== true) {
         return { text: `old_string appears ${hits} times; add more surrounding text or set replace_all.`, error: true };
       }
-      writeFileSync(file, input.replace_all === true ? text.split(find).join(repl) : text.replace(find, () => repl), "utf8");
+      writeTextAtomicSync(file, input.replace_all === true ? text.split(find).join(repl) : text.replace(find, () => repl));
       return { text: `Edited ${file} (${input.replace_all === true ? hits : 1} replacement${hits > 1 && input.replace_all === true ? "s" : ""})` };
     }
     if (name === "list_files") {

@@ -12,14 +12,16 @@ type Shape =
 type Tool = "select" | "pen" | "line" | "rect" | "ellipse" | "text";
 
 const TOOLS: Tool[] = ["select", "pen", "line", "rect", "ellipse", "text"];
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+const esc = (s: unknown) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-function shapeSvg(s: Shape): string {
+// Escape every value, since a loaded canvas file can hold anything and the string is rendered as HTML.
+function shapeSvg(raw: Shape): string {
+  const s = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === "number" ? v : esc(v)])) as unknown as Shape;
   if (s.t === "pen") return `<polyline points="${s.pts}" fill="none" stroke="${s.c}" stroke-width="${s.w}" stroke-linecap="round" stroke-linejoin="round"/>`;
   if (s.t === "line") return `<line x1="${s.x}" y1="${s.y}" x2="${s.x2}" y2="${s.y2}" stroke="${s.c}" stroke-width="${s.w}" stroke-linecap="round"/>`;
   if (s.t === "rect") return `<rect x="${Math.min(s.x, s.x2)}" y="${Math.min(s.y, s.y2)}" width="${Math.abs(s.x2 - s.x)}" height="${Math.abs(s.y2 - s.y)}" fill="none" stroke="${s.c}" stroke-width="${s.w}"/>`;
   if (s.t === "ellipse") return `<ellipse cx="${(s.x + s.x2) / 2}" cy="${(s.y + s.y2) / 2}" rx="${Math.abs(s.x2 - s.x) / 2}" ry="${Math.abs(s.y2 - s.y) / 2}" fill="none" stroke="${s.c}" stroke-width="${s.w}"/>`;
-  if (s.t === "text") return `<text x="${s.x}" y="${s.y}" fill="${s.c}" font-size="${s.size}" font-family="sans-serif">${esc(s.s)}</text>`;
+  if (s.t === "text") return `<text x="${s.x}" y="${s.y}" fill="${s.c}" font-size="${s.size}" font-family="sans-serif">${s.s}</text>`;
   if (s.t !== "image") return "";
   return `<image x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" href="${s.href}"/>`;
 }

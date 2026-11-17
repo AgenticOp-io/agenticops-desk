@@ -34,11 +34,15 @@ function file() {
 // the last unflushed batch, and a line is only ever written whole (JSONL is append-only).
 export function recordActivity(event: Omit<ActivityEvent, "at">) {
   pending.push({ ...event, at: Date.now() });
-  if (pending.length >= FLUSH_EVERY) void flush();
+  if (pending.length >= FLUSH_EVERY) flush().catch(() => {});
 }
 
 export async function flush(): Promise<void> {
-  if (flushing) return flushing;
+  // Wait for a write in flight, then write what arrived meanwhile, so a quit never leaves events behind.
+  if (flushing) {
+    await flushing.catch(() => {});
+    return flush();
+  }
   if (!pending.length) return;
   const batch = pending;
   pending = [];
@@ -46,6 +50,9 @@ export async function flush(): Promise<void> {
     const lines = batch.map((e) => JSON.stringify(e)).join("\n") + "\n";
     await fs.mkdir(path.dirname(file()), { recursive: true });
     await fs.appendFile(file(), lines, "utf8");
+  }).catch((err) => {
+    pending = batch.concat(pending); // keep the events for the next flush
+    throw err;
   }).finally(() => {
     flushing = null;
   });
@@ -61,8 +68,18 @@ export async function recentActivity(limit = 200): Promise<ActivityEvent[]> {
   } catch {
     return [];
   }
+  const lines = text.split("\n");
+  // Cut the file down to the cap so it cannot grow forever (shortcut: runs on read, not on a timer).
+  if (lines.length > MAX_EVENTS * 2) {
+    // Re-read inside the writer lock so lines appended since the first read are kept.
+    await serialized("activity", async () => {
+      const fresh = (await fs.readFile(file(), "utf8")).split("\n").filter(Boolean).slice(-MAX_EVENTS);
+      await fs.writeFile(file(), fresh.join("\n") + "\n", "utf8");
+    }).catch(() => {});
+    lines.splice(0, lines.length, ...lines.filter(Boolean).slice(-MAX_EVENTS));
+  }
   const out: ActivityEvent[] = [];
-  for (const line of text.split("\n")) {
+  for (const line of lines) {
     if (!line) continue;
     try {
       const e = JSON.parse(line) as ActivityEvent;
@@ -72,6 +89,6 @@ export async function recentActivity(limit = 200): Promise<ActivityEvent[]> {
     }
   }
   // Trim to the cap, then return newest first so the UI can show recent activity at the top.
-  const tail = out.slice(-Math.max(0, MAX_EVENTS), -0).slice(-limit);
+  const tail = out.slice(-Math.max(1, MAX_EVENTS)).slice(-limit);
   return tail.reverse();
 }

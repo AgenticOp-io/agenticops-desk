@@ -162,6 +162,8 @@ type Session = {
   engine?: "claude" | "direct";
   // Open while a Claude Code run can still take another instruction.
   inbox?: Inbox;
+  // Messages sent while the run was still starting (no inbox yet); sent right after the first turn.
+  early?: { prompt: string; images?: ImageAttachment[] }[];
   // Background agents and shells still running in this Claude Code run.
   backgroundTasks?: number;
   // A steer waiting for the next Direct turn, applied before the following model call.
@@ -1394,6 +1396,7 @@ export function guidePrompt(text: string) {
 function endRun(session: Session) {
   session.inbox?.close();
   session.inbox = undefined;
+  session.early = undefined;
   session.guide = undefined;
   const child = session.child;
   const running = session.query;
@@ -1657,11 +1660,11 @@ export function runClaude(opts: RunOptions) {
     send(opts.win, { kind: "done", running: false, sessionId: session.claudeSession, chatId, text: "Stopped." });
     return;
   }
-  if (session.engine === "claude" && session.inbox && !session.stopping) {
-    const inbox = session.inbox;
+  // abort is set before inbox, so a message during start-up must queue, not stop the run that is starting.
+  if (session.engine === "claude" && (session.inbox || session.abort) && !session.stopping) {
     void (async () => {
       const seen = await imagesToText(scrubOutgoing(opts.prompt).text, opts.images);
-      if (session.inbox === inbox && !session.stopping && inbox.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
+      if (!session.stopping && session.inbox?.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
         send(opts.win, {
           kind: "status",
           running: true,
@@ -1670,6 +1673,10 @@ export function runClaude(opts: RunOptions) {
           sessionId: session.claudeSession,
           chatId,
         });
+        return;
+      }
+      if (!session.stopping && !session.inbox && session.abort) {
+        (session.early ??= []).push({ prompt: seen.prompt, images: seen.images });
         return;
       }
       runClaude({ ...opts, prompt: seen.prompt, images: seen.images });
@@ -1747,6 +1754,8 @@ export function runClaude(opts: RunOptions) {
   const begin = (text: string, hidden: number, images?: ImageAttachment[]) => {
     session.inbox = inbox;
     inbox.push(userTurn(text, images));
+    for (const e of session.early ?? []) inbox.push(userTurn(guidePrompt(e.prompt), e.images, "now"));
+    session.early = undefined;
     send(opts.win, {
       kind: "status",
       running: true,

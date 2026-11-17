@@ -1520,6 +1520,9 @@ export function App() {
     const back = groups.find((g) => g.key === key);
     if (back && !back.github && back.chats.length === 0) setOtherOpen(true);
   };
+  // A hidden chat left alone for the chosen days (Settings > Chats; 0 = never) moves from the shared hidden list to its project's archive.
+  const isHiddenStale = (c: { updatedAt: number; lastUsedAt?: number }) =>
+    prefs.chatArchiveDays > 0 && Date.now() - (c.lastUsedAt ?? c.updatedAt) > prefs.chatArchiveDays * 86_400_000;
   const sideHeight = useMemo(() => (row: SideRow) => sideRowHeight(row, prefs.itemFont), [prefs.itemFont]);
   const sideRows = useMemo(() => {
     const rows: SideRow[] = [];
@@ -1539,6 +1542,15 @@ export function App() {
           const open = olderOpen.has(g.key);
           rows.push({ kind: "other", id: `older:${g.key}`, count: older.size, open });
           if (open) for (const c of liveChats) if (older.has(c.id)) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
+        }
+      }
+      if (opened && !q) {
+        const stored = g.chats.filter((c) => hiddenChatSet.has(c.id) && isHiddenStale(c));
+        if (stored.length) {
+          const id = `harch:${g.key}`;
+          const open = olderOpen.has(id);
+          rows.push({ kind: "other", id, count: stored.length, open });
+          if (open) for (const c of stored) rows.push({ kind: "chat", id: `c:${g.key}:${c.id}`, group: g, chat: c });
         }
       }
       if (liveChats.length === 0 && (opened || current)) rows.push({ kind: "note", id: `empty:${g.key}`, text: "No chats yet" });
@@ -1565,6 +1577,7 @@ export function App() {
       const buried = chats
         .filter((c) => {
           const host = groups.find((g) => g.chats.some((x) => x.id === c.id));
+          if (host && !hiddenProjectSet.has(host.key) && hiddenChatSet.has(c.id) && isHiddenStale(c)) return false;
           return sidebarHidesChat(hiddenChatSet.has(c.id), Boolean(host && hiddenProjectSet.has(host.key)), false);
         })
         .sort((a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt));
@@ -1790,8 +1803,9 @@ export function App() {
           >
             {(row) => {
               if (row.kind === "note") return <div className="tree-note">{row.text}</div>;
-              if (row.kind === "other" && row.id.startsWith("older:")) {
-                const key = row.id.slice("older:".length);
+              if (row.kind === "other" && (row.id.startsWith("older:") || row.id.startsWith("harch:"))) {
+                const archive = row.id.startsWith("harch:");
+                const key = archive ? row.id : row.id.slice("older:".length);
                 return (
                   <button
                     type="button"
@@ -1806,7 +1820,7 @@ export function App() {
                       })
                     }
                   >
-                    {row.open ? "Hide" : "Show"} {row.count} older chat{row.count === 1 ? "" : "s"}
+                    {row.open ? "Hide" : "Show"} {row.count} {archive ? "archived" : "older"} chat{row.count === 1 ? "" : "s"}
                   </button>
                 );
               }
@@ -2106,6 +2120,16 @@ export function App() {
           <div className="chat">
             <div className="pane-head chat-head">
               <span className="chat-title">{activeChat?.title ?? "New agent"}</span>
+              {activeChat && !hiddenChatSet.has(activeChat.id) && (
+                <button
+                  type="button"
+                  className="team-chip"
+                  title={`Hide this chat. After ${prefs.chatArchiveDays || "no"} unused days it moves to its project's archive (Settings > Chats).`}
+                  onClick={() => hideChat(activeChat.id)}
+                >
+                  Archive
+                </button>
+              )}
               {activeChat && team.managers.includes(activeChat.id) && (() => {
                 const mine = Object.entries(team.workers)
                   .filter(([, m]) => m === activeChat.id)
@@ -2842,7 +2866,7 @@ export function App() {
                     <div className="settings-label">Older chats</div>
                     <label className="settings-row">
                       <span>
-                        In each project, chats not used for this long fold under a "Show older chats" row. The top chat, pinned chats,
+                        In each project, chats not used for this long fold under a "Show older chats" row, and hidden chats unused this long move to "Show archived chats". The top chat, pinned chats,
                         the open chat and running chats always stay. Search still finds every chat.
                       </span>
                       <select value={String(prefs.chatArchiveDays)} onChange={(e) => patchPrefs({ chatArchiveDays: Number(e.target.value) })}>

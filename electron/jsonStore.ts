@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -45,6 +45,25 @@ export async function writeJsonAtomic(file: string, data: unknown, pretty = true
 export function writeJsonAtomicSync(file: string, data: unknown, pretty = true) {
   const text = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
   mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${seq++}.tmp`;
+  writeFileSync(tmp, text, "utf8");
+  try {
+    renameSync(tmp, file);
+  } catch {
+    writeFileSync(file, text, "utf8");
+    rmSync(tmp, { force: true });
+  }
+}
+
+// Same temp-then-rename write for plain text files (user source files), keeping an existing file's contents intact on a crash.
+export function writeTextAtomicSync(link: string, text: string) {
+  // Write through a symlink to its target, so the rename does not replace the link itself.
+  let file = link;
+  try {
+    file = realpathSync(link);
+  } catch {
+    // a new file has nothing to resolve
+  }
   const tmp = `${file}.${process.pid}.${seq++}.tmp`;
   writeFileSync(tmp, text, "utf8");
   try {
