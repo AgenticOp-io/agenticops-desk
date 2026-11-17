@@ -1,4 +1,5 @@
-import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -65,11 +66,18 @@ async function installLlama(say: (t: string) => void) {
     const arch = process.arch === "arm64" ? "arm64" : "x64";
     const list = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5", { headers: { "User-Agent": "desk" } });
     if (!list.ok) throw new Error(`GitHub returned ${list.status} when looking up llama.cpp.`);
-    const releases = (await list.json()) as Array<{ assets: Array<{ name: string; browser_download_url: string }> }>;
+    const releases = (await list.json()) as Array<{ assets: Array<{ name: string; browser_download_url: string; digest?: string }> }>;
     const asset = releases.flatMap((r) => r.assets).find((a) => new RegExp(`^llama-.*-bin-win-cpu-${arch}\\.zip$`).test(a.name));
     if (!asset) throw new Error("No Windows build of llama.cpp was found.");
     const zip = path.join(llamaDir(), "server.zip");
     await download(asset.browser_download_url, zip, "the local model server", say);
+    // GitHub publishes a sha256 per asset; refuse a zip that does not match it.
+    const want = asset.digest?.replace(/^sha256:/, "");
+    const got = createHash("sha256").update(await fs.readFile(zip)).digest("hex");
+    if (!want || want !== got) {
+      await fs.rm(zip, { force: true });
+      throw new Error("The downloaded local model server did not match its published checksum.");
+    }
     say("Unpacking the local model server…");
     const r = await runFile(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", zip, "-C", llamaDir()], undefined, 120_000);
     await fs.rm(zip, { force: true });
@@ -78,14 +86,17 @@ async function installLlama(say: (t: string) => void) {
   if (!existsSync(modelFile())) await download(MODEL_URL, modelFile(), LOCAL_MODEL, say);
 }
 
+// Not detached: it dies with the app, so the ~5 GB model never lingers after quit.
+let llamaChild: ChildProcess | null = null;
+app.on("before-quit", () => llamaChild?.kill());
+
 function startLlama() {
-  const child = spawn(llamaExe(), ["-m", modelFile(), "--alias", LOCAL_MODEL, "--host", "127.0.0.1", "--port", "11434", "-c", "8192"], {
-    detached: true,
+  const child = (llamaChild = spawn(llamaExe(), ["-m", modelFile(), "--alias", LOCAL_MODEL, "--host", "127.0.0.1", "--port", "11434", "-c", "8192"], {
     stdio: "ignore",
     windowsHide: true,
-  });
+  }));
   child.on("error", () => {});
-  child.unref();
+  child.on("exit", () => (llamaChild = null));
 }
 
 async function serverUp(): Promise<boolean> {
@@ -96,7 +107,13 @@ async function serverUp(): Promise<boolean> {
   }
 }
 
-async function startServer(exe: string | null) {
+// Callers share one start, so a slow model load is not spawned again by every caller.
+let starting: Promise<void> | null = null;
+function startServer(exe: string | null): Promise<void> {
+  return (starting ??= startServerOnce(exe).finally(() => (starting = null)));
+}
+
+async function startServerOnce(exe: string | null) {
   if (await serverUp()) return;
   if (exe) {
     const child = spawn(exe, ["serve"], { detached: true, stdio: "ignore", windowsHide: true });
