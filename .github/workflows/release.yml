@@ -6,9 +6,9 @@ name: Release
 # built file as a beta prerelease. Each build attaches its files straight to a draft release, which is
 # published once all three finish: Actions artifacts counted against a storage quota that 400 MB
 # installers filled, and a full quota fails every build. The draft exists only while the builds run.
+# Tags no longer trigger this: releases are built locally (scripts/release-local.ps1). Run it by hand if needed.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -35,7 +35,7 @@ jobs:
         include:
           - { label: windows, os: windows-latest, args: --win --x64 --arm64 }
           - { label: linux, os: ubuntu-latest, args: --linux --x64 --arm64 }
-          - { label: mac, os: macos-latest, args: --mac --x64 --arm64 }
+          # macOS is off for now (10x minute cost): - { label: mac, os: macos-latest, args: --mac --x64 --arm64 }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

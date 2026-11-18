@@ -1,9 +1,10 @@
 # Builds and publishes a release on this computer instead of GitHub Actions: Windows here, Linux in WSL.
 # macOS cannot be built off a Mac, so a local release has no macOS files.
-# Usage: pwsh scripts/release-local.ps1 [-Tag v0.1.43]   (default: the version in package.json)
+# Windows only unless -Linux is given.
+# Usage: pwsh scripts/release-local.ps1 [-Tag v0.1.43] [-Linux]   (default: the version in package.json)
 # Needs: the tag already pushed, `gh` signed in, WSL Ubuntu with Node in ~/.local/node (and ruby + fpm for .deb),
 # and the patch signing key in $env:PATCH_SIGNING_KEY or the file ~/.agenticops-patch-key.
-param([string]$Tag)
+param([string]$Tag, [switch]$Linux)
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
@@ -35,15 +36,17 @@ try {
   npx electron-builder --win --x64 --arm64 --publish never
   node scripts/make-patch.mjs
 
+  if ($Linux) {
   $toWsl = { param($p) wsl -d Ubuntu -- wslpath -a ($p -replace '\\', '/') }
   wsl -d Ubuntu -- bash (& $toWsl "$work/scripts/build-linux-wsl.sh") (& $toWsl $gitDir) $Tag (& $toWsl "$work/release")
+  }
 
   $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|AppImage|deb)$|^patch' } | ForEach-Object FullName
   if (-not $files) { throw "Nothing was built" }
 
   try { gh release view $Tag --repo $repo *> $null }
   catch {
-    gh release create $Tag --repo $repo --draft --prerelease --title "AgenticOps Desk $Tag beta" --notes "Beta, built locally: Windows and Linux. Installed copies check the git tags of this private repository."
+    gh release create $Tag --repo $repo --draft --prerelease --title "AgenticOps Desk $Tag beta" --notes "Beta, built locally: Windows. Installed copies check the git tags of this private repository."
   }
   gh release upload $Tag @files --repo $repo --clobber
   gh release edit $Tag --repo $repo --draft=false --prerelease
