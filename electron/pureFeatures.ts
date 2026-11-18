@@ -3,6 +3,39 @@ import path from "node:path";
 
 // Electron-free helpers for standing orders, org memory and the second opinion, so plain Node can test them.
 
+// OpenAI's /v1/models body. True only when this exact model id is listed.
+export function openAiListsModel(body: unknown, model: string): boolean {
+  if (!body || typeof body !== "object") return false;
+  const data = (body as { data?: unknown }).data;
+  if (!Array.isArray(data)) return false;
+  return data.some((row) => !!row && typeof row === "object" && (row as { id?: unknown }).id === model);
+}
+
+// Leave two cores for the app. A one-core machine still gets a thread.
+export function localServerThreads(logical: number): number {
+  return Math.max(1, Math.floor(logical) - 2);
+}
+
+// CPU only and low priority, so loading the multi-gigabyte model does not freeze the window.
+export function llamaServerArgs(modelPath: string, alias: string, threads: number): string[] {
+  const n = String(Math.max(1, Math.floor(threads)));
+  return [
+    "-m", modelPath,
+    "--alias", alias,
+    "--host", "127.0.0.1",
+    "--port", "11434",
+    "-c", "8192",
+    "-t", n,
+    "-tb", n,
+    "--prio", "-1",
+    "--device", "none",
+    "-ngl", "0",
+    "--fit", "off",
+    "--no-op-offload",
+    "--log-disable",
+  ];
+}
+
 // A result only ends the run when no background task can still wake the agent; older CLIs never report idle or tasks.
 export function turnIsOver(msg: { type?: unknown; subtype?: unknown; state?: unknown }, backgroundTasks: number): boolean {
   if (msg.type === "result") return backgroundTasks === 0;

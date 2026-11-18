@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createReadStream, createWriteStream, existsSync, readdirSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { app } from "electron";
+import { llamaServerArgs, localServerThreads, openAiListsModel } from "./pureFeatures";
 import { pullProviderModels } from "./providers";
 import { patchSettings } from "./settings";
 
@@ -30,19 +32,23 @@ function runFile(file: string, args: string[], env?: NodeJS.ProcessEnv, timeout 
   });
 }
 
-async function download(url: string, file: string, label: string, say: (t: string) => void) {
+// Returns the sha256 of the bytes written, computed as they arrive.
+async function download(url: string, file: string, label: string, say: (t: string) => void): Promise<string> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) throw new Error(`The ${label} download returned ${res.status}.`);
   const total = Number(res.headers.get("content-length")) || 0;
+  const hash = createHash("sha256");
   let got = 0;
   let shown = -1;
   const counted = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream).on("data", (c: Buffer) => {
+    hash.update(c);
     got += c.length;
     const pct = total ? Math.floor((got / total) * 100) : -1;
     if (pct !== shown && pct % 5 === 0) say(`Downloading ${label}… ${(shown = pct)}%`);
   });
   await pipeline(counted, createWriteStream(`${file}.part`));
   await fs.rename(`${file}.part`, file);
+  return hash.digest("hex");
 }
 
 // The small llama.cpp server plus one model file are enough. Both live under userData/llama.
@@ -71,11 +77,7 @@ async function pullFromRegistry(say: (t: string) => void) {
   const layer = layers.find((l) => l.mediaType === "application/vnd.ollama.image.model");
   if (!layer || !/^sha256:[0-9a-f]{64}$/.test(layer.digest)) throw new Error(`The model registry has no model file for ${LOCAL_MODEL}.`);
   const dest = modelFile();
-  await download(`${base}/blobs/${layer.digest}`, dest, LOCAL_MODEL, say);
-  const got = await new Promise<string>((ok, bad) => {
-    const h = createHash("sha256");
-    createReadStream(dest).on("data", (c) => h.update(c)).on("end", () => ok(h.digest("hex"))).on("error", bad);
-  });
+  const got = await download(`${base}/blobs/${layer.digest}`, dest, LOCAL_MODEL, say);
   if (`sha256:${got}` !== layer.digest) {
     await fs.rm(dest, { force: true });
     throw new Error("The downloaded model did not match its published checksum.");
@@ -97,10 +99,9 @@ async function installLlama(say: (t: string) => void) {
     const asset = releases.flatMap((r) => r.assets).find((a) => new RegExp(`^llama-[^-]+-bin-${key}-${process.arch}\\.${ext.replace(".", "\\.")}$`).test(a.name));
     if (!asset) throw new Error(`No ${process.platform} ${process.arch} build of llama.cpp was found.`);
     const archive = path.join(llamaDir(), `server.${ext}`);
-    await download(asset.browser_download_url, archive, "the local model server", say);
+    const got = await download(asset.browser_download_url, archive, "the local model server", say);
     // GitHub publishes a sha256 per asset; refuse an archive that does not match it.
     const want = asset.digest?.replace(/^sha256:/, "");
-    const got = createHash("sha256").update(await fs.readFile(archive)).digest("hex");
     if (!want || want !== got) {
       await fs.rm(archive, { force: true });
       throw new Error("The downloaded local model server did not match its published checksum.");
@@ -121,26 +122,49 @@ async function installLlama(say: (t: string) => void) {
 
 // Not detached: it dies with the app, so the ~5 GB model never lingers after quit.
 let llamaChild: ChildProcess | null = null;
-app.on("before-quit", () => llamaChild?.kill());
 
-function startLlama() {
-  const exe = llamaExe();
-  if (!exe) throw new Error("The local model server is not installed.");
-  const child = (llamaChild = spawn(exe, ["-m", modelFile(), "--alias", LOCAL_MODEL, "--host", "127.0.0.1", "--port", "11434", "-c", "8192"], {
-    stdio: "ignore",
-    windowsHide: true,
-    // The shared libraries sit next to the binary; Linux needs to be told.
-    env: { ...process.env, LD_LIBRARY_PATH: [path.dirname(exe), process.env.LD_LIBRARY_PATH].filter(Boolean).join(":") },
-  }));
-  child.on("error", () => {});
-  child.on("exit", () => (llamaChild = null));
+function stopLlama() {
+  const child = llamaChild;
+  if (!child) return;
+  llamaChild = null;
+  child.kill();
 }
 
-async function serverUp(): Promise<boolean> {
+app.on("before-quit", () => stopLlama());
+
+function startLlama() {
+  stopLlama();
+  const exe = llamaExe();
+  if (!exe) throw new Error("The local model server is not installed.");
+  // All cores at normal priority, plus OpenMP spinning, makes the window stop answering while the model loads.
+  const threads = localServerThreads(os.availableParallelism?.() ?? os.cpus().length);
+  const child = spawn(exe, llamaServerArgs(modelFile(), LOCAL_MODEL, threads), {
+    stdio: "ignore",
+    windowsHide: true,
+    env: {
+      ...process.env,
+      // The shared libraries sit next to the binary; Linux needs to be told.
+      LD_LIBRARY_PATH: [path.dirname(exe), process.env.LD_LIBRARY_PATH].filter(Boolean).join(":"),
+      OMP_WAIT_POLICY: "PASSIVE",
+      OMP_NUM_THREADS: String(threads),
+    },
+  });
+  llamaChild = child;
+  child.on("error", () => {});
+  child.on("exit", () => {
+    if (llamaChild === child) llamaChild = null;
+  });
+  return child;
+}
+
+// "ready" lists our model. "other" is some other program on the port. "down" means nothing is listening.
+async function probePort(): Promise<"ready" | "other" | "down"> {
   try {
-    return (await fetch(`${API}/v1/models`, { signal: AbortSignal.timeout(2_000) })).ok;
+    const res = await fetch(`${API}/v1/models`, { signal: AbortSignal.timeout(2_000) });
+    if (!res.ok) return "other";
+    return openAiListsModel(await res.json(), LOCAL_MODEL) ? "ready" : "other";
   } catch {
-    return false;
+    return "down";
   }
 }
 
@@ -151,12 +175,25 @@ function startServer(): Promise<void> {
 }
 
 async function startServerOnce() {
-  if (await serverUp()) return;
-  startLlama();
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    if (await serverUp()) return;
+  const now = await probePort();
+  if (now === "ready") return;
+  if (now === "other") {
+    throw new Error(`Port 11434 is in use, but it is not serving ${LOCAL_MODEL}. Stop the other program using that port, then try again.`);
   }
+  const child = startLlama();
+  let died = false;
+  const markDead = () => {
+    died = true;
+  };
+  child.on("exit", markDead);
+  child.on("error", markDead);
+  // A cold load of the model file can take well over half a minute. Killing it early just starts the load again.
+  for (let i = 0; i < 360; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (died) break;
+    if ((await probePort()) === "ready") return;
+  }
+  stopLlama();
   throw new Error("The local model server did not start.");
 }
 
@@ -193,9 +230,12 @@ export const pendingSetupFile = () => path.join(app.getPath("userData"), "local-
 export async function generateLocally(prompt: string, maxTokens = 400, timeoutMs = 30_000): Promise<string | null> {
   if (!prompt.trim()) return null;
   try {
-    if (!(await serverUp())) {
-      if (!llamaExe() || !existsSync(modelFile())) return null;
-      await startServer();
+    const now = await probePort();
+    if (now !== "ready") {
+      if (now === "other" || !llamaExe() || !existsSync(modelFile())) return null;
+      // A chat must not sit inside the model load. The server keeps starting; the next call uses it.
+      void startServer().catch(() => undefined);
+      return null;
     }
     const res = await fetch(`${API}/v1/chat/completions`, {
       method: "POST",

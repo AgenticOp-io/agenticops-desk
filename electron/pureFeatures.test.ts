@@ -94,6 +94,31 @@ test("a session brief keeps the ask and the latest reply, and stays short", asyn
   assert.equal(coded.includes("const x = 1"), false);
 });
 
+test("a local server is ready only when it lists this model", async () => {
+  const { openAiListsModel } = await import("./pureFeatures.ts");
+  assert.equal(openAiListsModel({ data: [{ id: "qwen2.5-coder:7b" }] }, "qwen2.5-coder:7b"), true);
+  assert.equal(openAiListsModel({ data: [{ id: "llama3" }] }, "qwen2.5-coder:7b"), false);
+  assert.equal(openAiListsModel({ data: [] }, "qwen2.5-coder:7b"), false);
+  assert.equal(openAiListsModel({}, "qwen2.5-coder:7b"), false);
+});
+
+test("the local model server leaves the app some CPU", async () => {
+  const { llamaServerArgs, localServerThreads } = await import("./pureFeatures.ts");
+  assert.equal(localServerThreads(8), 6);
+  assert.equal(localServerThreads(2), 1);
+  assert.equal(localServerThreads(1), 1);
+  const args = llamaServerArgs("C:/m.gguf", "qwen2.5-coder:7b", 6);
+  assert.equal(args[args.indexOf("-m") + 1], "C:/m.gguf");
+  assert.equal(args[args.indexOf("--alias") + 1], "qwen2.5-coder:7b");
+  assert.equal(args[args.indexOf("-t") + 1], "6");
+  assert.equal(args[args.indexOf("-tb") + 1], "6");
+  assert.equal(args[args.indexOf("--prio") + 1], "-1");
+  assert.equal(args[args.indexOf("--device") + 1], "none");
+  assert.equal(args[args.indexOf("-ngl") + 1], "0");
+  assert.ok(args.includes("--no-op-offload"));
+  assert.ok(args.includes("--log-disable"));
+});
+
 test("a chat starts cheap and moves up or down from what the user does", async () => {
   const { applyVerdict, lessonVerdict, modelTier, nextTier, tierForAgent, tierFromWord } = await import("./pureFeatures.ts");
   assert.equal(modelTier("direct:ollama:qwen2.5-coder:7b"), 0);
