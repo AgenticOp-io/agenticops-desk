@@ -286,6 +286,11 @@ contextBridge.exposeInMainWorld("desk", {
       canInstall: boolean;
     }>,
   restartForUpdate: () => ipcRenderer.invoke("updates:restart") as Promise<void>,
+  onUpdateStep: (cb: (step: string) => void) => {
+    const listener = (_: unknown, step: string) => cb(step);
+    ipcRenderer.on("updates:step", listener);
+    return () => ipcRenderer.removeListener("updates:step", listener);
+  },
   installUpdate: () => ipcRenderer.invoke("updates:install") as Promise<string | null>,
   previewCommand: (cwd: string) => ipcRenderer.invoke("preview:command", cwd) as Promise<string | null>,
   openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url) as Promise<boolean>,

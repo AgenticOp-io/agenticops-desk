@@ -290,6 +290,11 @@ export function App() {
   const [bodyHits, setBodyHits] = useState<string[]>([]);
   const [updateNote, setUpdateNote] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
+  const [updateVersion, setUpdateVersion] = useState("");
+  useEffect(() => {
+    if (settingsSection !== "updates" || updateVersion) return;
+    void window.desk.checkForUpdate().then((i) => setUpdateVersion(i.current)).catch(() => setUpdateVersion("unknown"));
+  }, [settingsSection, updateVersion]);
   const [updateInstallable, setUpdateInstallable] = useState(false);
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -3076,11 +3081,14 @@ export function App() {
                 {settingsSection === "updates" && (
                   <>
                     <div className="settings-label">Updates</div>
+                    <p className="settings-hint">Current version: {updateVersion || "checking…"}</p>
                     <div className="signin-row">
                       <button
                         className="btn"
-                        onClick={() =>
+                        onClick={() => {
+                          setUpdateNote("Checking for a newer version…");
                           void window.desk.checkForUpdate().then((info) => {
+                            setUpdateVersion(info.current);
                             setUpdateReady(info.patch.ready);
                             setUpdateInstallable(info.canInstall);
                             setUpdateNote(
@@ -3090,8 +3098,8 @@ export function App() {
                                   ? `This copy is ${info.current}. Latest release is ${info.latest}. ${info.url ?? ""} ${info.note}`
                                   : `${info.note} This copy is ${info.current}.`,
                             );
-                          })
-                        }
+                          }).catch(() => setUpdateNote("The update check failed. Try again."));
+                        }}
                       >
                         Check for updates
                       </button>
@@ -3104,8 +3112,10 @@ export function App() {
                         <button
                           className="btn"
                           onClick={() => {
-                            setUpdateNote("Downloading the installer…");
+                            setUpdateNote("Starting the download…");
+                            const off = window.desk.onUpdateStep(setUpdateNote);
                             void window.desk.installUpdate().then((problem) => {
+                              off();
                               if (problem) setUpdateNote(problem);
                             });
                           }}

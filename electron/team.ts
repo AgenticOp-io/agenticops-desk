@@ -20,6 +20,8 @@ const MAX_RUNNING = 3;
 // Under the agent's tool-call limit; the manager calls wait_for again if workers are still going.
 const WAIT_MS = 20 * 60_000;
 const TEXT_KEEP = 3000;
+// The window creates a worker's chat after start_chat returns; if no run shows up in this long, it never started.
+const START_MS = 60_000;
 
 let team: Team | null = null;
 const file = () => path.join(app.getPath("userData"), "team.json");
@@ -49,7 +51,7 @@ export const teamView = () => load();
 // so its history remains reviewable. Returns what happened, for the manager's reply.
 async function retireWorker(managerId: string, id: string, t: Team): Promise<string> {
   if (t.workers[id] !== managerId) return "";
-  if (chatState(id).running || runs.get(id)?.done === false) return "";
+  if (!ended(id)) return "";
   if (!runs.get(id)?.collected) return "";
   delete t.workers[id];
   save();
@@ -71,7 +73,18 @@ export function setManager(chatId: string, on: boolean): Team | string {
 // Each worker's run since the manager last started or messaged it. `collected` is set once the manager
 // has read the result through wait_for, which makes the worker eligible for cleanup (its worktree and
 // roster entry are released — the chat itself is left for review).
-const runs = new Map<string, { done: boolean; collected?: boolean; text: string }>();
+const runs = new Map<string, { done: boolean; started?: boolean; at: number; collected?: boolean; text: string }>();
+const newRun = () => ({ done: false, at: Date.now(), text: "" });
+// Over when the run said "done", or it ran and stopped without one (stopped or failed). Not over while the
+// window has yet to start it: chatState is idle in that gap, which must not read as finished.
+function ended(id: string): boolean {
+  const run = runs.get(id);
+  const running = chatState(id).running;
+  if (running && run) run.started = true;
+  if (!run) return !running;
+  if (run.done) return true;
+  return !running && (Boolean(run.started) || Date.now() - run.at > START_MS);
+}
 const settled = new Set<() => void>();
 
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
@@ -84,6 +97,7 @@ export function initTeam(window: () => BrowserWindow | null) {
   onChatEvent((event) => {
     const run = event.chatId ? runs.get(event.chatId) : undefined;
     if (!run) return;
+    run.started = true;
     if (event.kind === "line" || event.kind === "error") run.text = `${run.text}${event.kind === "error" ? "\nError: " : ""}${event.text ?? ""}`.slice(-TEXT_KEEP);
     if (event.kind === "done") {
       run.done = true;
@@ -96,7 +110,7 @@ export function initTeam(window: () => BrowserWindow | null) {
     if (!t.managers.includes(managerId) || t.workers[managerId]) return null;
     const { tool, createSdkMcpServer } = await loadAgentSdk();
     const mine = (id: string) => t.workers[id] === managerId;
-    const busy = (id: string) => chatState(id).running || runs.get(id)?.done === false;
+    const busy = (id: string) => !ended(id);
     // Retire finished-and-collected workers before each tool call, so the roster only ever holds live work.
     const prune = async () => {
       for (const id of Object.keys(t.workers)) {
@@ -173,7 +187,7 @@ export function initTeam(window: () => BrowserWindow | null) {
           }
           t.workers[id] = managerId;
           save();
-          runs.set(id, { done: false, text: "" });
+          runs.set(id, newRun());
           if (!post("team:start", { id, managerId, title: args.title, prompt: args.prompt, model })) {
             runs.delete(id);
             delete t.workers[id];
@@ -199,7 +213,7 @@ export function initTeam(window: () => BrowserWindow | null) {
           if (args.model && !models.some((m) => m.value === args.model)) return fail(`Unknown model "${args.model}". Choose one of: ${menu}`);
           // A running worker takes the message as a steer on its current run, which can't change model.
           if (args.model && chatState(args.chat_id).running) return fail("That worker is still running. Call wait_for first, then switch its model.");
-          if (!chatState(args.chat_id).running) runs.set(args.chat_id, { done: false, text: "" });
+          if (!chatState(args.chat_id).running) runs.set(args.chat_id, newRun());
           if (!post("team:send", { id: args.chat_id, text: args.message, model: args.model })) return fail("The app window is closed.");
           return ok(`Sent${args.model ? ` on ${args.model}` : ""}. Call wait_for to get its answer.`);
         },
@@ -229,7 +243,7 @@ export function initTeam(window: () => BrowserWindow | null) {
           // Finished either when the run emitted "done" or when nothing is running anymore. The second
           // case covers a worker that was stopped or failed without a "done" event, so wait_for does
           // not sit on the full 20-minute timer for a worker that already ended.
-          const finished = (id: string) => Boolean(runs.get(id)?.done) || !chatState(id).running;
+          const finished = ended;
           await new Promise<void>((resolve) => {
             const check = () => {
               if (!ids.every(finished) && !signal.aborted) return;
@@ -237,11 +251,13 @@ export function initTeam(window: () => BrowserWindow | null) {
             };
             const finish = () => {
               clearTimeout(timer);
+              clearInterval(poll);
               settled.delete(check);
               signal.removeEventListener("abort", finish);
               resolve();
             };
             const timer = setTimeout(finish, WAIT_MS);
+            const poll = setInterval(check, 5000); // catches a start that never happens, which emits no event
             settled.add(check);
             signal.addEventListener("abort", finish);
             check();
@@ -256,7 +272,8 @@ export function initTeam(window: () => BrowserWindow | null) {
             ids
               .map((id) => {
                 const s = chatState(id);
-                const state = finished(id) ? "finished" : s.waiting ? "still running, waiting on the user's approval" : "still running";
+                const run = runs.get(id);
+                const state = finished(id) ? (run && !run.started && !run.done ? "finished (it never started)" : "finished") : s.waiting ? "still running, waiting on the user's approval" : "still running";
                 const answer = (lastAnswer(id) || runs.get(id)?.text || "").slice(-TEXT_KEEP).trim();
                 const verified = capsulesBrief(id).slice(-1500).trim();
                 const c = known.get(id);

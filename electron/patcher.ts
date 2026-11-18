@@ -157,12 +157,13 @@ async function downloadWithRetry(tag: string, dir: string, names: string[], trie
 
 // Downloads the full setup for tag, checks it against the signed manifest, and runs it silently once the app has
 // saved and quit. --force-run starts the new version after the install. The caller refuses while chats run.
-export async function installFullUpdate(tag: string): Promise<string | null> {
+export async function installFullUpdate(tag: string, report: (step: string) => void = () => {}): Promise<string | null> {
   if (!canPatch()) return "This copy can't install updates by itself. Download the installer from the release page.";
   if (!isReleaseTag(tag) || !isNewerVersion(tag, app.getVersion())) return "This copy is already up to date.";
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-setup-"));
   let started = false;
   try {
+    report("Step 1 of 4: downloading the update list…");
     const manifestReason = await downloadWithRetry(tag, dir, PATCH_FILES.slice(0, 2));
     if (manifestReason) return downloadMessage(manifestReason);
     const bytes = await fs.readFile(path.join(dir, "patch-manifest.json"));
@@ -170,12 +171,15 @@ export async function installFullUpdate(tag: string): Promise<string | null> {
     if (!verify(null, bytes, PUBLIC_KEY, signature)) return "The update's signature is not valid.";
     const setup = installerFor(JSON.parse(bytes.toString("utf8")) as PatchManifest, tag, process.arch);
     if (typeof setup === "string") return setup;
+    report("Step 2 of 4: downloading the installer (this can take a minute)…");
     const installerReason = await downloadWithRetry(tag, dir, [setup.name]);
     if (installerReason) return downloadMessage(installerReason);
+    report("Step 3 of 4: checking the download…");
     const exe = path.join(dir, setup.name);
     if (sha256(await fs.readFile(exe)) !== setup.sha256) return "The installer download is damaged.";
     app.once("will-quit", () => spawn(exe, ["/S", "--force-run"], { detached: true, stdio: "ignore" }).unref());
     started = true;
+    report("Step 4 of 4: installing. The app will close and reopen on the new version.");
     app.quit();
     return null;
   } catch (err) {

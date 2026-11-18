@@ -951,7 +951,7 @@ ipcMain.handle(
     const okId = (s: unknown): s is string => typeof s === "string" && SAFE_ID.test(s) && !s.includes("..");
     if (payload?.id !== undefined && !okId(payload.id)) return { title: "", chatId: "" };
     const chat = okId(payload?.slug) && okId(payload?.id) ? { slug: payload.slug, id: payload.id } : null;
-    const cwd = payload?.workspace && existsSync(payload.workspace) ? payload.workspace : "";
+    const cwd = payload?.workspace ? realDir(payload.workspace) : "";
     if (!cwd) return { title: "", chatId: payload?.id ?? "" };
     const saved = payload?.id ? ((await loadThread(payload.id)) as Array<{ role: "user" | "assistant" | "system"; text: string }> | null) : null;
     const briefing = await catchupBriefing(cwd, chat, saved);
@@ -1513,7 +1513,7 @@ ipcMain.handle("updates:check", () => checkAndPatch());
 ipcMain.handle("updates:install", async () => {
   if (!latestRelease) return "Check for updates first.";
   if (liveRunCount() > 0) return "A chat is still running. Install the update when it finishes.";
-  return installFullUpdate(latestRelease);
+  return installFullUpdate(latestRelease, (step) => win?.webContents.send("updates:step", step));
 });
 ipcMain.handle("updates:restart", () => {
   app.relaunch();

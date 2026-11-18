@@ -86,6 +86,92 @@ export async function carryProjectMemory(fromFolder: string, toFolder: string) {
   if (before && pointers.length) writeFileSync(index, `${before.trimEnd()}\n${pointers.join("\n")}\n`);
 }
 
+// A search index of every past chat in this project and its worktrees: one line per transcript (date, first
+// prompt, path), newest first. Rebuilt in the background on each run; the agent greps or reads it.
+const CHAT_INDEX = "chats-index.md";
+async function firstPrompt(file: string): Promise<string> {
+  const fh = await fs.open(file, "r");
+  try {
+    const buf = Buffer.alloc(65_536);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    for (const line of buf.subarray(0, bytesRead).toString("utf8").split("\n")) {
+      try {
+        const msg = JSON.parse(line)?.message;
+        if (msg?.role !== "user") continue;
+        const text = typeof msg.content === "string" ? msg.content : (msg.content ?? []).find((b: { type: string }) => b.type === "text")?.text;
+        if (text && !text.startsWith("<")) return text.replace(/\s+/g, " ").trim().slice(0, 160);
+      } catch {
+        // cut-off last line of the 64 KB slice, or a non-JSON line
+      }
+    }
+  } finally {
+    await fh.close();
+  }
+  return "(no prompt found)";
+}
+
+async function writeChatIndex(workspace: string, memoryDir: string) {
+  const folders = new Set([path.dirname(memoryDir)]);
+  try {
+    const trees = JSON.parse(readFileSync(path.join(app.getPath("userData"), "worktrees.json"), "utf8")) as Record<string, { path: string; base: string; sub: string }>;
+    const base = path.resolve(workspace).toLowerCase();
+    for (const t of Object.values(trees)) if (path.resolve(t.base).toLowerCase() === base) folders.add(path.dirname(claudeProjectMemoryDir(path.resolve(t.path, t.sub))));
+  } catch {
+    // no worktrees.json: only the project's own folder
+  }
+  const found: { file: string; time: number }[] = [];
+  for (const dir of folders) {
+    for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
+      if (!name.endsWith(".jsonl")) continue;
+      const file = path.join(dir, name);
+      const stat = await fs.stat(file).catch(() => null);
+      if (stat) found.push({ file, time: stat.mtimeMs });
+    }
+  }
+  found.sort((a, b) => b.time - a.time);
+  // shortcut: newest 300 chats only, raise it if the index should reach further back
+  const lines = await Promise.all(found.slice(0, 300).map(async (f) => `- ${new Date(f.time).toISOString().slice(0, 16)} ${await firstPrompt(f.file).catch(() => "(unreadable)")} — ${f.file}`));
+  const text = `# Past chats (generated, newest first; do not edit)\n\nProject: ${workspace}\n\n${lines.join("\n")}\n`;
+  const out = path.join(memoryDir, CHAT_INDEX);
+  if ((await fs.readFile(out, "utf8").catch(() => "")) !== text) await fs.writeFile(out, text, "utf8");
+  await writeTrainingSet(found.slice(0, 300).map((f) => f.file), path.join(memoryDir, TRAIN_SET)).catch(() => {});
+}
+
+// Fine-tuning data: prompt/response pairs (plain text only, no tool calls) from the same chats, one JSON per line.
+// Stays in the project memory folder on this computer; never synced. Train from it yourself, elsewhere.
+const TRAIN_SET = "chats-train.jsonl";
+// shortcut: pattern-based redaction catches common key shapes only, review the file before training on it
+const SECRET = /\b(?:sk-|ghp_|gho_|github_pat_|xox[bp]-|AKIA)[\w-]{8,}|\bBearer\s+[\w.~+/=-]{16,}|\{\{SECRET_\d+\}\}|(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S+|\b[A-Fa-f0-9]{32,}\b|\b[A-Za-z0-9+/_-]{40,}={0,2}/gi;
+const textOf = (c: unknown): string => (typeof c === "string" ? c : ((c as { type: string; text?: string }[]) ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n"));
+async function writeTrainingSet(files: string[], out: string) {
+  const rows: string[] = [];
+  for (const file of files) {
+    let prompt = "";
+    let reply = "";
+    const flush = () => {
+      if (prompt && reply) rows.push(JSON.stringify({ messages: [{ role: "user", content: prompt.replace(SECRET, "[redacted]") }, { role: "assistant", content: reply.replace(SECRET, "[redacted]") }] }));
+      reply = "";
+    };
+    for (const line of (await fs.readFile(file, "utf8")).split("\n")) {
+      let msg: { role?: string; content?: unknown } | undefined;
+      try {
+        msg = JSON.parse(line)?.message;
+      } catch {
+        continue;
+      }
+      const text = textOf(msg?.content).trim();
+      if (!text || text.startsWith("<")) continue; // empty, tool-only, or injected system text
+      if (msg?.role === "user") {
+        flush();
+        prompt = text;
+      } else if (msg?.role === "assistant") reply += (reply ? "\n\n" : "") + text;
+    }
+    flush();
+  }
+  const body = rows.join("\n") + "\n";
+  if ((await fs.readFile(out, "utf8").catch(() => "")) !== body) await fs.writeFile(out, body, "utf8");
+}
+
 function ensureScope(dir: string, title: string, extra = "") {
   mkdirSync(dir, { recursive: true });
   const index = path.join(dir, INDEX);
@@ -148,6 +234,11 @@ When to read: at the start of a task, scan the indexes below and open any memory
 Memories reflect what was true when written; if one names a file, function or flag, check it still
 exists before relying on it.
 
+Earlier chats: every past chat is a .jsonl transcript in a folder under ${path.join(os.homedir(), ".claude", "projects")}
+(this project's, plus one per worktree). When the user refers to earlier work you don't have ("fix all", "that bug"),
+grep those transcripts before asking. ${path.join(dirs.project, CHAT_INDEX)} lists every past chat of this project
+(date, first prompt, transcript path): search it first. At the end of a chat, save any list of open work as a memory.
+
 ## Global memory index
 ${readIndex(dirs.global) || "(empty)"}
 
@@ -163,6 +254,7 @@ export function prepareMemory(workspace: string): { append: string; directories:
     ensureScope(dirs.global, "Global memory");
     ensureScope(dirs.project, "Project memory", `Project: ${workspace}\n\n`);
     if (dirs.org) ensureScope(dirs.org, `Organization memory: ${dirs.orgName}`);
+    void writeChatIndex(projectFolder(workspace), dirs.project).catch((err) => console.error("chat index failed", err));
     return {
       append: instructions(dirs, workspace),
       directories: [dirs.global, ...(dirs.org ? [dirs.org] : []), dirs.project],

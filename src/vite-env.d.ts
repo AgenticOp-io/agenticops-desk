@@ -357,6 +357,7 @@ declare global {
         patch: { ready: boolean; note: string };
         canInstall: boolean;
       }>;
+      onUpdateStep: (cb: (step: string) => void) => () => void;
       installUpdate: () => Promise<string | null>;
       previewCommand: (cwd: string) => Promise<string | null>;
       openExternal: (url: string) => Promise<boolean>;
