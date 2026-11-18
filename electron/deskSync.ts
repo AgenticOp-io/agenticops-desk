@@ -110,7 +110,7 @@ function asProjects(value: unknown): SyncProject[] {
   if (!Array.isArray(value)) return [];
   return value.filter((row): row is SyncProject => {
     const item = row as SyncProject;
-    return !!item && THREAD_ID.test(String(item.id)) && typeof item.name === "string" && Array.isArray(item.remotes);
+    return !!item && THREAD_ID.test(String(item.id)) && typeof item.name === "string" && Array.isArray(item.remotes) && item.remotes.every((r) => typeof r === "string");
   });
 }
 
@@ -422,7 +422,6 @@ async function doSync(): Promise<SyncView> {
       mode,
       remote: url,
       syncDir: dir,
-     
       restore: mode === "full",
       announce: false,
     });

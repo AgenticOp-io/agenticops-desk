@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -917,6 +917,8 @@ ipcMain.handle("cursor:chats", async (_e, projectPath?: string) => {
     .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
 });
 ipcMain.handle("cursor:chat", async (_e, slug: string, id: string) => {
+  // Both become path segments in readCursorChat.
+  if (typeof id !== "string" || !SAFE_ID.test(id) || (slug && (typeof slug !== "string" || !SAFE_ID.test(slug)))) return null;
   const saved = await loadThread(id);
   const fromCursor = slug ? await readCursorChat(slug, id) : null;
   if (saved && saved.length) {
@@ -946,7 +948,9 @@ ipcMain.handle(
     _e,
     payload: { slug?: string; id?: string; workspace?: string } | null,
   ) => {
-    const chat = payload?.slug && payload.id ? { slug: payload.slug, id: payload.id } : null;
+    const okId = (s: unknown): s is string => typeof s === "string" && SAFE_ID.test(s) && !s.includes("..");
+    if (payload?.id !== undefined && !okId(payload.id)) return { title: "", chatId: "" };
+    const chat = okId(payload?.slug) && okId(payload?.id) ? { slug: payload.slug, id: payload.id } : null;
     const cwd = payload?.workspace && existsSync(payload.workspace) ? payload.workspace : "";
     if (!cwd) return { title: "", chatId: payload?.id ?? "" };
     const saved = payload?.id ? ((await loadThread(payload.id)) as Array<{ role: "user" | "assistant" | "system"; text: string }> | null) : null;
@@ -1225,6 +1229,13 @@ ipcMain.handle("claude:changeBase", (_e, chatId: string, filePath: string) => ch
 ipcMain.handle("claude:revert", (_e, chatId: string, paths?: string[]) => revertChanges(win, chatId, paths));
 ipcMain.handle("claude:keep", (_e, chatId: string, paths?: string[]) => keepChanges(win, chatId, paths));
 
+// Folder arguments from the page: must be an absolute path to a real folder, never a flag or a relative path.
+function realDir(cwd: unknown): string {
+  if (typeof cwd !== "string" || !path.isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error("Not a folder on this computer.");
+  return cwd;
+}
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
+
 // Explorer actions only touch paths inside the open folder.
 function inWorkspace(target: string, allowRoot = false) {
   return Boolean(workspace) && staysInside(workspace, target, allowRoot);
@@ -1286,7 +1297,10 @@ ipcMain.handle(
       answers?: Record<string, string>;
       message?: string;
     },
-  ) => answerApproval(win, payload.chatId, payload.requestId, payload),
+  ) =>
+    payload && typeof payload.chatId === "string" && typeof payload.requestId === "string"
+      ? answerApproval(win, payload.chatId, payload.requestId, payload)
+      : false,
 );
 
 ipcMain.handle("claude:forget", (_e, chatId: string) => {
@@ -1363,14 +1377,14 @@ ipcMain.handle("chats:delete", async (_e, id: string) => {
   return true;
 });
 ipcMain.handle("chats:search", (_e, query: string) => searchMessages(query));
-ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
-ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(cwd, message));
-ipcMain.handle("git:fetch", (_e, cwd: string) => gitFetch(cwd));
-ipcMain.handle("git:pull", (_e, cwd: string) => gitPull(cwd));
-ipcMain.handle("git:push", (_e, cwd: string) => gitPush(cwd));
-ipcMain.handle("git:history", (_e, cwd: string) => gitHistory(cwd));
-ipcMain.handle("git:checkout", (_e, cwd: string, branch: string) => gitCheckout(cwd, branch));
-ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(cwd, title, body));
+ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(realDir(cwd)));
+ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(realDir(cwd), message));
+ipcMain.handle("git:fetch", (_e, cwd: string) => gitFetch(realDir(cwd)));
+ipcMain.handle("git:pull", (_e, cwd: string) => gitPull(realDir(cwd)));
+ipcMain.handle("git:push", (_e, cwd: string) => gitPush(realDir(cwd)));
+ipcMain.handle("git:history", (_e, cwd: string) => gitHistory(realDir(cwd)));
+ipcMain.handle("git:checkout", (_e, cwd: string, branch: string) => gitCheckout(realDir(cwd), branch));
+ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(realDir(cwd), title, body));
 ipcMain.handle("sync:status", () => syncStatus());
 ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
 ipcMain.handle("sync:create", () => createSyncRepo());
@@ -1457,14 +1471,14 @@ ipcMain.handle("project:trash", async (_e, raw: string) => {
 ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc(cwd, name));
 ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(cwd, name, contents));
 ipcMain.handle("shell:open", (e, cwd: string) =>
-  openShell(cwd, (chunk) => {
+  openShell(realDir(cwd), (chunk) => {
     if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: shellKey(cwd), chunk });
   }),
 );
 ipcMain.handle("shell:write", (_e, id: string, text: string) => writeShell(id, text));
 ipcMain.handle("shell:restart", (e, cwd: string) => {
   closeShell(shellKey(cwd));
-  return openShell(cwd, (chunk) => {
+  return openShell(realDir(cwd), (chunk) => {
     if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: shellKey(cwd), chunk });
   });
 });

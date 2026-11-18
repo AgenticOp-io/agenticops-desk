@@ -55,7 +55,7 @@ export function lineDiff(before: string, after: string): string {
 // Auto model: errors that mean "this AI can't take the job right now", so the next one should try.
 // Anything else (a tool failing, a bad request in the chat itself) stays with the user.
 const FAILOVER =
-  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|overloaded|quota|credit balance|billing|insufficient|too many requests|capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
+  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|overloaded|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
 
 export function shouldFailOver(error: string): boolean {
   return FAILOVER.test(error);
@@ -1007,7 +1007,8 @@ export function staysInside(root: string, target: string, allowRoot = true): boo
   if (!root || !target) return false;
   const rel = path.relative(landed(root), landed(target));
   if (rel === "") return allowRoot;
-  return !rel.startsWith("..") && !path.isAbsolute(rel);
+  // A folder named "..x" is inside; only ".." itself or "../" leaves.
+  return rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 // The newest vX.Y.Z tag after current. Annotated tags arrive twice; the peeled name is the same tag.

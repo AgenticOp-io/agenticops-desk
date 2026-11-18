@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
-import { permissionGateFor, type AllowEntry } from "./gate";
+import { insideFolder, permissionGateFor, type AllowEntry } from "./gate";
+import { staysInside } from "./pureFeatures";
 import { writeJsonAtomicSync } from "./jsonStore";
 
 export { riskKeys } from "./gate";
@@ -78,7 +79,10 @@ export function permissionGate(workspace: string | undefined, toolName: string, 
     trusted: Boolean(local?.trusted || global?.trusted),
     risks: [...(local?.risks ?? []), ...(global?.risks ?? [])],
   };
-  return permissionGateFor(entry, workspace, toolName, input);
+  // staysInside follows links, so a link inside the project that points outside it still asks.
+  const inside = (folder: string, target: string) =>
+    insideFolder(folder, target) && staysInside(folder, path.resolve(folder, target), false);
+  return permissionGateFor(entry, workspace, toolName, input, inside);
 }
 
 export function trustWorkspace(workspace: string | undefined, everywhere?: boolean) {

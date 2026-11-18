@@ -153,7 +153,15 @@ export function initAuto(fn: Dispatch) {
     announce(win, chatId, next);
     setTimeout(() => {
       // Stopped, or the chat was deleted, while this was being handed over.
-      if (live.get(chatId) === run) dispatch?.(next, payload);
+      if (live.get(chatId) !== run) return;
+      try {
+        dispatch?.(next, payload);
+      } catch (err) {
+        // Without this the chat would show "running" forever.
+        live.delete(chatId);
+        send(win, { kind: "error", chatId, running: false, text: err instanceof Error ? err.message : String(err) });
+        send(win, { kind: "done", chatId, running: false, text: "Stopped." });
+      }
     }, 0);
     return true;
   });

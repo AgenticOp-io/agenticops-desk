@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -9,8 +9,8 @@ import { app } from "electron";
 import { pullProviderModels } from "./providers";
 import { patchSettings } from "./settings";
 
-// Sets up a local model server (an Ollama already here, else llama.cpp's small server) and a small model for chat summaries, then turns Summaries on. The installer asks for this,
-// or Settings › AI models starts it later. Without Ollama, only Windows can set itself up; elsewhere Ollama must already be there.
+// Sets up llama.cpp's small server and a small model (pulled from Ollama's public registry over plain HTTP, no Ollama install) for chat summaries, then turns Summaries on.
+// The installer asks for this, or Settings › AI models starts it later. 64-bit Windows, macOS and Linux (x64 and arm64) are supported.
 
 export const LOCAL_MODEL = "qwen2.5-coder:7b";
 const API = "http://127.0.0.1:11434";
@@ -20,14 +20,6 @@ let status: LocalModelStatus = { running: false, text: "" };
 let job: Promise<LocalModelStatus> | null = null;
 
 export const localModelStatus = () => status;
-
-function ollamaExe(): string | null {
-  const candidates =
-    process.platform === "win32"
-      ? [path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Ollama", "ollama.exe")]
-      : ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/usr/bin/ollama"];
-  return candidates.find((p) => existsSync(p)) ?? null;
-}
 
 function runFile(file: string, args: string[], env?: NodeJS.ProcessEnv, timeout = 15 * 60_000): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -53,37 +45,78 @@ async function download(url: string, file: string, label: string, say: (t: strin
   await fs.rename(`${file}.part`, file);
 }
 
-// Without Ollama, the small llama.cpp server plus one model file are enough. Both live under userData/llama.
+// The small llama.cpp server plus one model file are enough. Both live under userData/llama.
 const llamaDir = () => path.join(app.getPath("userData"), "llama");
-const llamaExe = () => path.join(llamaDir(), "llama-server.exe");
+const serverDir = () => path.join(llamaDir(), "server");
 const modelFile = () => path.join(llamaDir(), "model.gguf");
-const MODEL_URL = "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf";
+const EXE_NAME = process.platform === "win32" ? "llama-server.exe" : "llama-server";
+
+// The archives differ in layout (flat on Windows, one folder on macOS/Linux), so look for the binary.
+function llamaExe(): string | null {
+  try {
+    const hit = readdirSync(serverDir(), { recursive: true }).find((f) => path.basename(String(f)) === EXE_NAME);
+    return hit ? path.join(serverDir(), String(hit)) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Plain HTTP against Ollama's registry: the manifest lists layers, and the model layer is the GGUF with its sha256.
+async function pullFromRegistry(say: (t: string) => void) {
+  const [name, tag] = LOCAL_MODEL.split(":");
+  const base = `https://registry.ollama.ai/v2/library/${name}`;
+  const res = await fetch(`${base}/manifests/${tag}`, { headers: { Accept: "application/vnd.docker.distribution.manifest.v2+json" } });
+  if (!res.ok) throw new Error(`The model registry returned ${res.status} for ${LOCAL_MODEL}.`);
+  const layers = ((await res.json()) as { layers?: Array<{ mediaType: string; digest: string }> }).layers ?? [];
+  const layer = layers.find((l) => l.mediaType === "application/vnd.ollama.image.model");
+  if (!layer || !/^sha256:[0-9a-f]{64}$/.test(layer.digest)) throw new Error(`The model registry has no model file for ${LOCAL_MODEL}.`);
+  const dest = modelFile();
+  await download(`${base}/blobs/${layer.digest}`, dest, LOCAL_MODEL, say);
+  const got = await new Promise<string>((ok, bad) => {
+    const h = createHash("sha256");
+    createReadStream(dest).on("data", (c) => h.update(c)).on("end", () => ok(h.digest("hex"))).on("error", bad);
+  });
+  if (`sha256:${got}` !== layer.digest) {
+    await fs.rm(dest, { force: true });
+    throw new Error("The downloaded model did not match its published checksum.");
+  }
+}
 
 async function installLlama(say: (t: string) => void) {
-  if (process.platform !== "win32") throw new Error("Install Ollama from ollama.com, then try again.");
+  if ((process.arch !== "x64" && process.arch !== "arm64") || !["win32", "darwin", "linux"].includes(process.platform)) {
+    throw new Error("The local model needs 64-bit Windows, macOS or Linux.");
+  }
   await fs.mkdir(llamaDir(), { recursive: true });
-  if (!existsSync(llamaExe())) {
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
+  if (!llamaExe()) {
+    const key = { win32: "win-cpu", darwin: "macos", linux: "ubuntu" }[process.platform as "win32" | "darwin" | "linux"];
+    const ext = process.platform === "win32" ? "zip" : "tar.gz";
     const list = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5", { headers: { "User-Agent": "desk" } });
     if (!list.ok) throw new Error(`GitHub returned ${list.status} when looking up llama.cpp.`);
     const releases = (await list.json()) as Array<{ assets: Array<{ name: string; browser_download_url: string; digest?: string }> }>;
-    const asset = releases.flatMap((r) => r.assets).find((a) => new RegExp(`^llama-.*-bin-win-cpu-${arch}\\.zip$`).test(a.name));
-    if (!asset) throw new Error("No Windows build of llama.cpp was found.");
-    const zip = path.join(llamaDir(), "server.zip");
-    await download(asset.browser_download_url, zip, "the local model server", say);
-    // GitHub publishes a sha256 per asset; refuse a zip that does not match it.
+    // Anchored so GPU builds (ubuntu-vulkan-x64, cuda…) do not match; only the plain CPU build does.
+    const asset = releases.flatMap((r) => r.assets).find((a) => new RegExp(`^llama-[^-]+-bin-${key}-${process.arch}\\.${ext.replace(".", "\\.")}$`).test(a.name));
+    if (!asset) throw new Error(`No ${process.platform} ${process.arch} build of llama.cpp was found.`);
+    const archive = path.join(llamaDir(), `server.${ext}`);
+    await download(asset.browser_download_url, archive, "the local model server", say);
+    // GitHub publishes a sha256 per asset; refuse an archive that does not match it.
     const want = asset.digest?.replace(/^sha256:/, "");
-    const got = createHash("sha256").update(await fs.readFile(zip)).digest("hex");
+    const got = createHash("sha256").update(await fs.readFile(archive)).digest("hex");
     if (!want || want !== got) {
-      await fs.rm(zip, { force: true });
+      await fs.rm(archive, { force: true });
       throw new Error("The downloaded local model server did not match its published checksum.");
     }
     say("Unpacking the local model server…");
-    const r = await runFile(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", zip, "-C", llamaDir()], undefined, 120_000);
-    await fs.rm(zip, { force: true });
-    if (r.code !== 0 || !existsSync(llamaExe())) throw new Error(`Unpacking the local model server failed. ${r.out}`);
+    await fs.rm(serverDir(), { recursive: true, force: true });
+    await fs.mkdir(serverDir(), { recursive: true });
+    // Windows 10+ ships tar.exe, which reads zip too.
+    const tar = process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+    const r = await runFile(tar, ["-xf", archive, "-C", serverDir()], undefined, 120_000);
+    await fs.rm(archive, { force: true });
+    const exe = llamaExe();
+    if (r.code !== 0 || !exe) throw new Error(`Unpacking the local model server failed. ${r.out}`);
+    if (process.platform !== "win32") await fs.chmod(exe, 0o755);
   }
-  if (!existsSync(modelFile())) await download(MODEL_URL, modelFile(), LOCAL_MODEL, say);
+  if (!existsSync(modelFile())) await pullFromRegistry(say);
 }
 
 // Not detached: it dies with the app, so the ~5 GB model never lingers after quit.
@@ -91,9 +124,13 @@ let llamaChild: ChildProcess | null = null;
 app.on("before-quit", () => llamaChild?.kill());
 
 function startLlama() {
-  const child = (llamaChild = spawn(llamaExe(), ["-m", modelFile(), "--alias", LOCAL_MODEL, "--host", "127.0.0.1", "--port", "11434", "-c", "8192"], {
+  const exe = llamaExe();
+  if (!exe) throw new Error("The local model server is not installed.");
+  const child = (llamaChild = spawn(exe, ["-m", modelFile(), "--alias", LOCAL_MODEL, "--host", "127.0.0.1", "--port", "11434", "-c", "8192"], {
     stdio: "ignore",
     windowsHide: true,
+    // The shared libraries sit next to the binary; Linux needs to be told.
+    env: { ...process.env, LD_LIBRARY_PATH: [path.dirname(exe), process.env.LD_LIBRARY_PATH].filter(Boolean).join(":") },
   }));
   child.on("error", () => {});
   child.on("exit", () => (llamaChild = null));
@@ -109,45 +146,18 @@ async function serverUp(): Promise<boolean> {
 
 // Callers share one start, so a slow model load is not spawned again by every caller.
 let starting: Promise<void> | null = null;
-function startServer(exe: string | null): Promise<void> {
-  return (starting ??= startServerOnce(exe).finally(() => (starting = null)));
+function startServer(): Promise<void> {
+  return (starting ??= startServerOnce().finally(() => (starting = null)));
 }
 
-async function startServerOnce(exe: string | null) {
+async function startServerOnce() {
   if (await serverUp()) return;
-  if (exe) {
-    const child = spawn(exe, ["serve"], { detached: true, stdio: "ignore", windowsHide: true });
-    child.on("error", () => {});
-    child.unref();
-  } else startLlama();
+  startLlama();
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (await serverUp()) return;
   }
   throw new Error("The local model server did not start.");
-}
-
-async function pullModel(say: (t: string) => void) {
-  const res = await fetch(`${API}/api/pull`, { method: "POST", body: JSON.stringify({ model: LOCAL_MODEL, stream: true }) });
-  if (!res.ok || !res.body) throw new Error(`Ollama returned ${res.status} when downloading the model.`);
-  const decoder = new TextDecoder();
-  let buf = "";
-  let shown = "";
-  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-    buf += decoder.decode(chunk, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      const m = JSON.parse(line) as { status?: string; error?: string; total?: number; completed?: number };
-      if (m.error) throw new Error(`Ollama could not download ${LOCAL_MODEL}: ${m.error}`);
-      const text = m.total && m.completed ? `Downloading ${LOCAL_MODEL}… ${Math.floor((m.completed / m.total) * 100)}%` : `${LOCAL_MODEL}: ${m.status ?? ""}`;
-      if (text !== shown) say((shown = text));
-      if (m.status === "success") return;
-    }
-  }
-  throw new Error(`The download of ${LOCAL_MODEL} stopped before it finished.`);
 }
 
 // One setup at a time; a second call joins the first.
@@ -157,11 +167,10 @@ export function setupLocalModel(onStatus: (s: LocalModelStatus) => void): Promis
   job = (async () => {
     try {
       say("Looking for a local model server…");
-      const exe = ollamaExe();
-      if (!exe && !(await serverUp())) await installLlama(say);
+      // Always install our own server, even if something else answers on the port: it would not have this model.
+      await installLlama(say);
       say("Starting the local model server…");
-      await startServer(exe);
-      if (exe) await pullModel(say);
+      await startServer();
       await pullProviderModels("ollama");
       await patchSettings({ summarizer: `direct:ollama:${LOCAL_MODEL}` });
       status = { running: false, ok: true, text: `${LOCAL_MODEL} is ready and writes the summaries.` };
@@ -179,14 +188,14 @@ export function setupLocalModel(onStatus: (s: LocalModelStatus) => void): Promis
 export const pendingSetupFile = () => path.join(app.getPath("userData"), "local-model-setup.json");
 
 // One-shot, cheap local completion for operational triage (git/gh status, log reads, "what failed and what
-// does it mean"). Returns null when Ollama or the model is not available, so the caller falls back to the
+// does it mean"). Returns null when the local server or model is not installed, so the caller falls back to the
 // cloud agent instead of blocking. Nothing leaves this computer: the model is local and the prompt is local.
 export async function generateLocally(prompt: string, maxTokens = 400, timeoutMs = 30_000): Promise<string | null> {
   if (!prompt.trim()) return null;
   try {
     if (!(await serverUp())) {
-      if (!existsSync(llamaExe()) || !existsSync(modelFile())) return null;
-      await startServer(null);
+      if (!llamaExe() || !existsSync(modelFile())) return null;
+      await startServer();
     }
     const res = await fetch(`${API}/v1/chat/completions`, {
       method: "POST",

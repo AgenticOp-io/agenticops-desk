@@ -1663,8 +1663,13 @@ export function runClaude(opts: RunOptions) {
   // abort is set before inbox, so a message during start-up must queue, not stop the run that is starting.
   if (session.engine === "claude" && (session.inbox || session.abort) && !session.stopping) {
     void (async () => {
-      const seen = await imagesToText(scrubOutgoing(opts.prompt).text, opts.images);
-      if (!session.stopping && session.inbox?.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
+      const inbox = session.inbox;
+      const seen = await imagesToText(scrubOutgoing(opts.prompt).text, opts.images).catch((err) => {
+        send(opts.win, { kind: "error", text: `Could not send your instruction: ${err instanceof Error ? err.message : String(err)}`, chatId, running: true });
+        return null;
+      });
+      if (!seen) return;
+      if (inbox && session.inbox === inbox && !session.stopping && inbox.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
         send(opts.win, {
           kind: "status",
           running: true,
@@ -1779,13 +1784,14 @@ export function runClaude(opts: RunOptions) {
     ...(bash ? { CLAUDE_CODE_GIT_BASH_PATH: bash } : {}),
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
-  const memory = prepareMemory(cwd);
-  const orders = runOrders(cwd);
-  const standing = ordersPrompt(orders);
   void (async () => {
     let failed = "";
     let q: Query | undefined;
     try {
+      // Inside the try: if these throw, the run still ends with an error and done instead of sticking as "running".
+      const memory = prepareMemory(cwd);
+      const orders = runOrders(cwd);
+      const standing = ordersPrompt(orders);
       if (handOff && !chatSummary(chatId, opts.history)) {
         send(opts.win, {
           kind: "status",
@@ -2093,7 +2099,8 @@ export function runClaude(opts: RunOptions) {
       next.inbox.push(userTurn(packet));
       }
     } catch (err) {
-      if (session.query !== q) return;
+      // A newer run owns the session now (or this one was stopped): its state is not ours to touch.
+      if (session.query !== q || session.abort !== abort) return;
       failed = err instanceof Error ? err.message : String(err);
       if (resuming && /no conversation found/i.test(`${failed}\n${session.stderr ?? ""}`)) {
         session.claudeSession = undefined;
@@ -2116,9 +2123,12 @@ export function runClaude(opts: RunOptions) {
     } finally {
       // A run that threw never got its result message, so its inbox is still open; the next message
       // must start a new run, not be "steered" into this dead one.
-      if (session.inbox && session.inbox !== inbox) session.inbox.close();
+      // Only while this run still owns the session; a newer run's inbox must stay open.
+      if (session.abort === abort) {
+        if (session.inbox && session.inbox !== inbox) session.inbox.close();
+        session.inbox = undefined;
+      }
       inbox.close();
-      session.inbox = undefined;
       if (!q || session.query !== q) {
         if (session.stopping && !session.query) {
           session.stopping = false;
@@ -2146,14 +2156,19 @@ export function runClaude(opts: RunOptions) {
       }
       patchStored(chatId, (s) => delete s.pending);
       if (!failed && !session.stopping) {
-        const capsule = recordCapsule(chatId, {
-          request: opts.reviewRequest ?? opts.prompt,
-          outcome: session.finalText ?? "",
-          gates: session.passedGates ?? [],
-          files: [...session.changes.values()].map((c) => c.path),
-        });
-        const turns = [...(opts.history ?? []), { role: "user", text: opts.prompt }, { role: "assistant", text: session.finalText ?? "" }];
-        void refreshSummary(chatId, turns, capsule);
+        // Bookkeeping must never stop the "done" below from being sent.
+        try {
+          const capsule = recordCapsule(chatId, {
+            request: opts.reviewRequest ?? opts.prompt,
+            outcome: session.finalText ?? "",
+            gates: session.passedGates ?? [],
+            files: [...session.changes.values()].map((c) => c.path),
+          });
+          const turns = [...(opts.history ?? []), { role: "user", text: opts.prompt }, { role: "assistant", text: session.finalText ?? "" }];
+          void Promise.resolve(refreshSummary(chatId, turns, capsule)).catch(() => {});
+        } catch (err) {
+          console.error("AgenticOps Desk could not record the run", err);
+        }
       }
       send(opts.win, {
         kind: "done",
@@ -2172,7 +2187,7 @@ export function runClaude(opts: RunOptions) {
         note: failed ? failed.slice(0, 240) : undefined,
       });
       if (!opts.reviewRound && !opts.resume) noteLearned(chatId, opts.prompt, opts.model || session.modelName || "", session.spentUsd ?? 0);
-      if (!failed && !session.stopping) void reviewRun(opts, session, cwd);
+      if (!failed && !session.stopping) void reviewRun(opts, session, cwd).catch(() => {});
     }
   })();
 }

@@ -26,7 +26,7 @@ function file() {
 function load(): Store {
   try {
     const raw = JSON.parse(readFileSync(file(), "utf8")) as Store;
-    return raw && typeof raw === "object" ? raw : {};
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   } catch {
     return {};
   }

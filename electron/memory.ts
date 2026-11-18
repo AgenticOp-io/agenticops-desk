@@ -47,7 +47,21 @@ function orgOf(workspace: string): string | null {
   return owner;
 }
 
-export function memoryDirs(workspace: string) {
+// A chat in its own worktree runs in a folder no other chat has used, so its project memory started empty.
+// Map that folder back to the project folder the chat belongs to.
+function projectFolder(workspace: string): string {
+  try {
+    const trees = JSON.parse(readFileSync(path.join(app.getPath("userData"), "worktrees.json"), "utf8")) as Record<string, { path: string; base: string; sub: string }>;
+    const here = path.resolve(workspace).toLowerCase();
+    for (const tree of Object.values(trees)) if (here === path.resolve(tree.path, tree.sub).toLowerCase()) return tree.base;
+  } catch {
+    // no worktrees.json: the folder is the project
+  }
+  return workspace;
+}
+
+export function memoryDirs(workspaceFolder: string) {
+  const workspace = projectFolder(workspaceFolder);
   const root = memoryRoot();
   const org = orgOf(workspace);
   return {
@@ -68,7 +82,7 @@ export async function carryProjectMemory(fromFolder: string, toFolder: string) {
   const before = existsSync(index) ? readFileSync(index, "utf8") : "";
   mkdirSync(to, { recursive: true });
   await fs.cp(from, to, { recursive: true, force: false });
-  const pointers = readFileSync(path.join(from, INDEX), "utf8").split(/\r?\n/).filter((line) => line.startsWith("- [") && !before.includes(line));
+  const pointers = (existsSync(path.join(from, INDEX)) ? readFileSync(path.join(from, INDEX), "utf8") : "").split(/\r?\n/).filter((line) => line.startsWith("- [") && !before.includes(line));
   if (before && pointers.length) writeFileSync(index, `${before.trimEnd()}\n${pointers.join("\n")}\n`);
 }
 

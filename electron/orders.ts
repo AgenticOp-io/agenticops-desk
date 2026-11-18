@@ -75,8 +75,10 @@ export function runOrders(workspace: string): Orders {
 export function protectedBy(workspace: string, target: string, orders = runOrders(workspace)): string | null {
   if (!orders.protect.length || !target) return null;
   const rel = path.relative(workspace, path.resolve(workspace, target)).replace(/\\/g, "/");
-  if (!rel || rel.startsWith("..")) return null;
-  return orders.protect.find((p) => globToRegExp(p).test(rel)) ?? null;
+  if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) return null;
+  // Windows paths ignore case, so "Migrations/x" must hit a "migrations/**" rule.
+  const fold = (s: string) => (process.platform === "win32" ? s.toLowerCase() : s);
+  return orders.protect.find((p) => globToRegExp(fold(p)).test(fold(rel))) ?? null;
 }
 
 export function ordersPrompt(orders: Orders): string {
@@ -118,7 +120,8 @@ export function runCheck(workspace: string, command: string, signal?: AbortSigna
       out += "\n(stopped after 10 minutes)";
       kill();
     }, 600_000);
-    signal?.addEventListener("abort", kill, { once: true });
+    if (signal?.aborted) kill();
+    else signal?.addEventListener("abort", kill, { once: true });
     child.on("error", (err) => {
       clearTimeout(timer);
       resolve({ ok: false, output: `Could not start the check: ${err.message}` });

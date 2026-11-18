@@ -41,6 +41,7 @@ import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protec
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
 import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
+import { healHistory } from "./healHistory";
 import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
 import { loadSettings } from "./settings";
 import { recordUsage } from "./usageLog";
@@ -975,6 +976,7 @@ export function runDirect(opts: {
       }
     } finally {
       try {
+        healHistory(saved.messages);
         writeSaved(chatId, saved);
       } catch (err) {
         console.error("AgenticOps Desk could not save the direct chat", err);

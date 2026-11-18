@@ -771,6 +771,8 @@ test("a shortcut inside the folder cannot point a file outside it", async () => 
     assert.equal(staysInside(root, path.join(root, "real.txt")), true);
     assert.equal(staysInside(root, path.join(root, "new.txt")), true);
     assert.equal(staysInside(root, root, false), false);
+    assert.equal(staysInside(root, path.join(root, "..hidden", "a.txt")), true);
+    assert.equal(staysInside(root, path.join(root, "..", "outside.txt")), false);
     assert.equal(staysInside(root, path.join(root, "link", "secret.txt")), false);
     assert.equal(staysInside(root, path.join(root, "link", "new.txt")), false);
     assert.equal(staysInside(root, path.join(root, "..", "secret.txt")), false);

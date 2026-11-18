@@ -54,6 +54,7 @@ export function permissionGateFor(
   workspace: string | undefined,
   toolName: string,
   input: Record<string, unknown>,
+  inside: (folder: string, target: string) => boolean = insideFolder,
 ): PermissionGate {
   if (toolName === "AskUserQuestion" || toolName === "ExitPlanMode") return { ask: true, kind: "question" };
   const trusted = entry?.trusted === true;
@@ -75,7 +76,7 @@ export function permissionGateFor(
   if (trusted) return { ask: false };
   // File edits inside the open folder never wait on the user: each file is snapshotted first, and the
   // change bar lets the user review or undo it afterwards. Commands and edits elsewhere still ask once.
-  if (EDIT_TOOLS.has(toolName) && workspace && insideFolder(workspace, editTarget(input))) return { ask: false };
+  if (EDIT_TOOLS.has(toolName) && workspace && inside(workspace, editTarget(input))) return { ask: false };
   const folder = workspace ? workspace.split(/[\\/]/).filter(Boolean).pop() : "this folder";
   return {
     ask: true,

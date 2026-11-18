@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { app, safeStorage } from "electron";
 import { ASKPASS_JS, TELNET_JS } from "./credentialHelpers";
@@ -30,22 +30,30 @@ const file = () => path.join(app.getPath("userData"), "credentials.json");
 const binDir = () => path.join(app.getPath("userData"), "bin");
 const runDir = () => path.join(app.getPath("userData"), "run");
 
+let unreadable = false;
 function load(): Credential[] {
   if (cache) return cache;
   cache = [];
   try {
     if (existsSync(file()) && safeStorage.isEncryptionAvailable()) {
       const raw = JSON.parse(readFileSync(file(), "utf8")) as { enc?: string };
-      if (raw.enc) cache = JSON.parse(safeStorage.decryptString(Buffer.from(raw.enc, "base64"))) as Credential[];
+      if (raw.enc) {
+        const list = JSON.parse(safeStorage.decryptString(Buffer.from(raw.enc, "base64")));
+        cache = Array.isArray(list) ? (list as Credential[]) : [];
+      }
     }
   } catch (err) {
     // Left in place: another Windows user or a reinstalled system cannot read it, and it must not be overwritten here.
     console.error("AgenticOps Desk could not read saved logins", err);
+    unreadable = true;
   }
   return cache;
 }
 
 async function save(list: Credential[]) {
+  // Keep the file we could not decrypt: saving over it would destroy logins that may still be readable elsewhere.
+  if (unreadable && existsSync(file())) copyFileSync(file(), `${file()}.unreadable-${Date.now()}`);
+  unreadable = false;
   if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows could not encrypt this, so it was not saved.");
   await writeJsonAtomic(file(), { enc: safeStorage.encryptString(JSON.stringify(list)).toString("base64") });
   cache = list;

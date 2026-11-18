@@ -166,6 +166,10 @@ async function fetchMember(pkg: string, version: string, dir: string, file: stri
   const exe = path.join(dir, file);
   const partial = `${exe}.partial`;
   const tgz = path.join(dir, `.download-${process.pid}.tgz`);
+  // A crash skips the finally below; sweep leftovers from earlier processes.
+  for (const f of await fs.readdir(dir).catch(() => [] as string[])) {
+    if (/^\.download-\d+\.tgz$/.test(f) && f !== path.basename(tgz)) await fs.rm(path.join(dir, f), { force: true }).catch(() => {});
+  }
   onStatus?.("Downloading the agent engine…");
   try {
     const dist = await registryDist(pkg, version);
@@ -205,7 +209,14 @@ export function loadAgentSdk(onStatus?: (text: string) => void): Promise<AgentSd
     const dir = path.join(app.getPath("userData"), "claude-code", version, "sdk");
     const file = path.join(dir, "sdk.mjs");
     if (!existsSync(file) || !existsSync(`${file}.sha512`)) await fetchMember(SDK_PKG, version, dir, "sdk.mjs", onStatus);
-    return (await import(/* @vite-ignore */ pathToFileURL(file).href)) as AgentSdk;
+    try {
+      return (await import(/* @vite-ignore */ pathToFileURL(file).href)) as AgentSdk;
+    } catch {
+      // A damaged saved copy would fail on every launch. Fetch it again once.
+      await fs.rm(`${file}.sha512`, { force: true });
+      await fetchMember(SDK_PKG, version, dir, "sdk.mjs", onStatus);
+      return (await import(/* @vite-ignore */ pathToFileURL(file).href)) as AgentSdk;
+    }
   })().catch((err) => {
     sdkLoad = null;
     throw err;
