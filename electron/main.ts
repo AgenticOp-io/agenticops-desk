@@ -1232,6 +1232,7 @@ ipcMain.handle("claude:keep", (_e, chatId: string, paths?: string[]) => keepChan
 // Folder arguments from the page: must be an absolute path to a real folder, never a flag or a relative path.
 function realDir(cwd: unknown): string {
   if (typeof cwd !== "string" || !path.isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error("Not a folder on this computer.");
+  if (!inWorkspace(cwd, true) && !inWorktrees(cwd)) throw new Error("Not the open project folder.");
   return cwd;
 }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
