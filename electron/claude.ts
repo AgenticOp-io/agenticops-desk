@@ -21,6 +21,8 @@ import {
   modelTier,
   gateCommand,
   gatePassed,
+  lastRepliesVerbatim,
+  pinnedTables,
   latestContextTokens,
   percentUsed,
   RESUME_TTL_MS,
@@ -211,6 +213,7 @@ type StoredSession = {
 };
 
 const sessions = new Map<string, Session>();
+const frozenMemory = new Map<string, ReturnType<typeof prepareMemory>>();
 let store: Record<string, StoredSession> | null = null;
 let shuttingDown = false;
 
@@ -1546,7 +1549,9 @@ export function withHistory(prompt: string, history?: HistoryMsg[]): string {
 
 // A resumed session would resend its tool history. Carry the brief instead: a few thousand tokens, not the whole log.
 export function withBrief(prompt: string, history?: HistoryMsg[], verified = "", summary = ""): string {
-  const brief = summary || sessionBrief(history);
+  const verbatim = lastRepliesVerbatim(history);
+  // A summary is a few hundred words and loses tables and plans; the newest replies always ride along unchanged.
+  const brief = [summary || sessionBrief(history), summary ? verbatim : "", pinnedTables(history)].filter(Boolean).join("\n\n");
   if (!brief && !verified) return prompt;
   return [
     "This continues an earlier session. Its working context was not reloaded, so file contents and command output from it are not here.",
@@ -1716,6 +1721,15 @@ export function runClaude(opts: RunOptions) {
   }
   // A message with no earlier turns, or a review round, continues the session it already has.
   const resuming = Boolean(session.claudeSession);
+  if (resuming && session.lastTurnAt && Date.now() - session.lastTurnAt > RESUME_TTL_MS) {
+    frozenMemory.delete(`${chatId}\0${opts.workspace}`); // cache is cold anyway, so pick up new memories now
+    send(opts.win, {
+      kind: "note",
+      chatId,
+      running: true,
+      text: "This chat has been idle long enough that its cache expired. Continuing it resends the whole session, which costs more than usual.",
+    });
+  }
   const cwd = opts.workspace;
   session.workspace = cwd;
   session.engine = "claude";
@@ -1789,7 +1803,10 @@ export function runClaude(opts: RunOptions) {
     let q: Query | undefined;
     try {
       // Inside the try: if these throw, the run still ends with an error and done instead of sticking as "running".
-      const memory = prepareMemory(cwd);
+      // Frozen per chat: a changed memory index would rewrite the cached prompt prefix on every resume.
+      const frozenKey = `${chatId}\0${cwd}`;
+      const memory = frozenMemory.get(frozenKey) ?? prepareMemory(cwd);
+      frozenMemory.set(frozenKey, memory);
       const orders = runOrders(cwd);
       const standing = ordersPrompt(orders);
       if (handOff && !chatSummary(chatId, opts.history)) {

@@ -199,6 +199,44 @@ export function sessionBrief(history: { role: string; text: string }[] | undefin
   return text.length <= limit ? text : `…${text.slice(-limit)}`;
 }
 
+// The newest assistant replies word for word (tables, plans, code), so a summary or a trimmed brief cannot lose what the user may ask about next.
+// shortcut: the last 2 replies within 6000 characters in total; the oldest is cut first, then the newest is clipped from its start.
+export function lastRepliesVerbatim(history: { role: string; text: string }[] | undefined, count = 2, limit = 6_000): string {
+  const replies = (history ?? []).filter((m) => m.role === "assistant" && m.text.trim()).slice(-count);
+  const kept: string[] = [];
+  let used = 0;
+  for (const m of replies.reverse()) {
+    const room = limit - used;
+    if (room < 200) break;
+    const text = m.text.trim();
+    kept.unshift(text.length > room ? `…${text.slice(-room)}` : text);
+    used += Math.min(text.length, room);
+  }
+  return kept.map((t) => `Assistant (word for word): ${t}`).join("\n\n");
+}
+
+// Markdown tables from OLDER assistant replies (the newest two ride along whole), so a table sent earlier is not lost.
+// shortcut: tables only, newest first within 4000 characters; plans in prose are not detected. Derived from history, nothing stored.
+export function pinnedTables(history: { role: string; text: string }[] | undefined, skipNewest = 2, limit = 4_000): string {
+  const replies = (history ?? []).filter((m) => m.role === "assistant" && m.text.trim());
+  const older = replies.slice(0, Math.max(0, replies.length - skipNewest));
+  const found: string[] = [];
+  for (const m of older) {
+    for (const block of m.text.split(/\n\s*\n/)) {
+      const lines = block.trim().split("\n");
+      if (lines.length >= 3 && lines.every((l) => l.trim().startsWith("|")) && /^\|?\s*:?-+/.test(lines[1].trim().replace(/^\|\s*/, "|"))) found.push(block.trim());
+    }
+  }
+  const kept: string[] = [];
+  let used = 0;
+  for (const t of found.reverse()) {
+    if (used + t.length > limit) continue;
+    kept.unshift(t);
+    used += t.length;
+  }
+  return kept.length ? `Earlier tables from this chat, unchanged:\n\n${kept.join("\n\n")}` : "";
+}
+
 // Token and cost totals per day, per engine or provider, per model. Kept for USAGE_DAYS days.
 export type UsageTally = { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number; calls: number };
 export type UsageLog = { days: Record<string, Record<string, UsageTally>> };

@@ -94,6 +94,32 @@ test("a session brief keeps the ask and the latest reply, and stays short", asyn
   assert.equal(coded.includes("const x = 1"), false);
 });
 
+test("the newest replies are kept word for word, tables included, within the limit", async () => {
+  const { lastRepliesVerbatim } = await import("./pureFeatures.ts");
+  const table = "| Change | Saving |\n|---|---|\n| " + "long cell ".repeat(40) + " | 25% |";
+  const out = lastRepliesVerbatim([
+    { role: "assistant", text: "old" },
+    { role: "assistant", text: table },
+    { role: "user", text: "q" },
+  ]);
+  assert.ok(out.includes(table));
+  assert.equal(lastRepliesVerbatim([{ role: "assistant", text: "y".repeat(20_000) }]).length < 6_100, true);
+  assert.equal(lastRepliesVerbatim(undefined), "");
+});
+
+test("a table from an older reply is pinned; the newest two replies are left to lastRepliesVerbatim", async () => {
+  const { pinnedTables } = await import("./pureFeatures.ts");
+  const table = "| A | B |\n|---|---|\n| 1 | 2 |";
+  const msgs = [
+    { role: "assistant", text: `Here:\n\n${table}\n\nDone.` },
+    { role: "assistant", text: "two" },
+    { role: "assistant", text: "three" },
+  ];
+  assert.ok(pinnedTables(msgs).includes(table));
+  assert.equal(pinnedTables(msgs.slice(1)), "");
+  assert.equal(pinnedTables(undefined), "");
+});
+
 test("a chat starts cheap and moves up or down from what the user does", async () => {
   const { applyVerdict, lessonVerdict, modelTier, nextTier, tierForAgent, tierFromWord } = await import("./pureFeatures.ts");
   assert.equal(modelTier("direct:ollama:qwen2.5-coder:7b"), 0);
