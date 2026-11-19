@@ -29,7 +29,7 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `claude.ts` | Claude Code runs: streaming, approvals, tool hooks, resume after restart |
 | `capsules.ts` | Verified run records per chat (Intelligence Shorthand IS-T3), fed into the handoff brief; dropped when their files change. Also the running chat summaries the Summaries model writes after each run |
 | `localModel.ts` | Local notes model: downloads llama.cpp's `llama-server` and the GGUF chosen in Settings (`localModelId`: brief notes, more detail, code heavy, or none) from Ollama's registry into `userData/llama`. Ready only when `/v1/models` lists that model. The installer's box leaves `local-model-setup.json`, which the first normal start consumes |
-| `resourceGuard.ts` | Memory and CPU cap for that server: refuses to start without 3 GB spare, two threads, idle priority off the app's cores, and stops the server if free RAM drops under 1.5 GB |
+| `resourceGuard.ts` | Memory and CPU cap for that server: refuses to start without 3 GB spare, two threads, idle priority off the app's cores, and stops the server if free RAM drops under 1.5 GB. Python opened by the agent, the terminal, or a check is capped at two threads, kept off the app's cores, and stopped when memory is low, the window freezes, or the app quits |
 | `claudeBinary.ts` | Finds or downloads the agent SDK and the binary for this computer; installers carry neither |
 | `direct.ts` | Own agent loop and tools for API providers |
 | `directMcp.ts` | MCP servers for Direct runs: config from `.mcp.json` and `~/.claude.json`, start, list tools, call, idle stop |

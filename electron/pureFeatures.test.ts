@@ -167,6 +167,17 @@ test("the local model stays inside a memory and cpu budget", async () => {
   assert.equal(affinityMask(2), null);
 });
 
+test("python started by the app is found, and other python is not", async () => {
+  const { isPythonImage, parseProcessTable, pythonPidsInTree } = await import("./pureFeatures.ts");
+  assert.equal(isPythonImage("C:\\Python\\python.exe"), true);
+  assert.equal(isPythonImage("pythonw.exe"), true);
+  assert.equal(isPythonImage("py.exe"), true);
+  assert.equal(isPythonImage("python3.12"), true);
+  assert.equal(isPythonImage("node.exe"), false);
+  const rows = parseProcessTable("10|1|AgenticOps Desk.exe\n20|10|claude.exe\n30|20|python.exe\n40|30|pythonw.exe\n50|1|python.exe\njunk\n");
+  assert.deepEqual(pythonPidsInTree(rows, 10), [30, 40]);
+});
+
 test("a chat starts cheap and moves up or down from what the user does", async () => {
   const { applyVerdict, lessonVerdict, modelTier, nextTier, tierForAgent, tierFromWord } = await import("./pureFeatures.ts");
   assert.equal(modelTier("direct:ollama:qwen2.5-coder:7b"), 0);

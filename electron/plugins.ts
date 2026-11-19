@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ensureClaudeBinary } from "./claudeBinary";
+import { quietThreads } from "./resourceGuard";
 import { describeMarkdown, parseCliJson } from "./pureFeatures";
 
 // Claude Code plugins, managed through the bundled Claude Code's own `claude plugin ...` commands, so
@@ -25,7 +26,7 @@ const ID = /^[\w.@:-]{1,160}$/;
 async function claude(args: string[], timeout = 180_000): Promise<{ ok: boolean; out: string }> {
   const exe = await ensureClaudeBinary();
   return new Promise((resolve) => {
-    execFile(exe, args, { windowsHide: true, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, NO_COLOR: "1" } }, (err, stdout, stderr) => {
+    execFile(exe, args, { windowsHide: true, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, NO_COLOR: "1", ...quietThreads() } }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: `${stdout ?? ""}${err ? `\n${stderr ?? ""}` : ""}`.trim() });
     });
   });

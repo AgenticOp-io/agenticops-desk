@@ -87,6 +87,7 @@ import {
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
 import { localModelStatus, pendingSetupFile, relievePressure, setupLocalModel, type LocalModelStatus } from "./localModel";
+import { stopPythons, watchPythons } from "./resourceGuard";
 import { carryProjectMemory } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { canInstallUpdate, confirmPatch, installFullUpdate, updateCode } from "./patcher";
@@ -332,6 +333,7 @@ function createWindow() {
   win.on("unresponsive", () => {
     // The local model is the usual cause. Stop it now; reload only if the window is still frozen.
     relievePressure();
+    stopPythons();
     freezeTimer ??= setTimeout(() => {
       freezeTimer = null;
       reload();
@@ -573,6 +575,7 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  watchPythons();
   // The installer could not apply this because the app was already open. The choice file is still here.
   if (existsSync(path.join(app.getPath("userData"), "install-choices.json"))) {
     try {
@@ -682,6 +685,7 @@ function flushRendererThreads(timeoutMs = 3000): Promise<void> {
 let flushingQuit = false;
 app.on("before-quit", (e) => {
   allowQuit = true;
+  stopPythons();
   closeAllShells();
   closeWatches();
   shutdownClaude();

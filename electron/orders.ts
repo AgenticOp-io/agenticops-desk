@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { quietThreads } from "./resourceGuard";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -101,7 +102,7 @@ function shell(command: string) {
 export function runCheck(workspace: string, command: string, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     const { exe, args } = shell(command);
-    const child = spawn(exe, args, { cwd: workspace, windowsHide: true, env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", CI: "1" } });
+    const child = spawn(exe, args, { cwd: workspace, windowsHide: true, env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", CI: "1", ...quietThreads() } });
     let out = "";
     const add = (d: Buffer) => {
       out = (out + d.toString("utf8")).slice(-20_000);

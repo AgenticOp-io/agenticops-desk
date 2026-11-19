@@ -6,6 +6,7 @@ import path from "node:path";
 import { app } from "electron";
 import { recordActivity } from "./activityLog";
 import { realStorePwsh } from "./claude";
+import { quietThreads } from "./resourceGuard";
 import { isNewerVersion, isReleaseTag, newestTag } from "./pureFeatures";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
@@ -166,6 +167,7 @@ export function openShell(cwd: string, onData: (chunk: string) => void): { id: s
     cwd,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, ...quietThreads() },
     // Its own process group on macOS and Linux, so Restart also stops what it started.
     detached: process.platform !== "win32",
   });

@@ -9,6 +9,7 @@ import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials } from "./credentials";
 import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
+import { quietThreads } from "./resourceGuard";
 import { prepareMemory } from "./memory";
 import { capsulesBrief, chatSummary, ensureSummary, forgetCapsules, recordCapsule, refreshSummary } from "./capsules";
 import { paidPacket } from "./gather";
@@ -662,7 +663,7 @@ function spawnHidden(cmd: string, args: string[], cwd: string, env: NodeJS.Proce
     shell: false,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
-    env,
+    env: { ...env, ...quietThreads() },
     signal,
   });
 }

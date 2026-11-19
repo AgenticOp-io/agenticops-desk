@@ -45,6 +45,50 @@ export function shouldStopForMemory(freeBytes: number): boolean {
   return freeBytes < MEMORY_FLOOR_BYTES;
 }
 
+// The process image name, not a path. Matches CPython and the Windows py launcher, not unrelated names.
+export function isPythonImage(name: string): boolean {
+  const base = (name.split(/[/\\]/).pop() ?? "").toLowerCase();
+  return /^(pyw?|python[\d.]*w?)(\.exe)?$/.test(base);
+}
+
+export type ProcessRow = { pid: number; parent: number; name: string };
+
+export function parseProcessTable(text: string): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [pid, parent, name] = line.split("|");
+    const id = Number(pid);
+    const ppid = Number(parent);
+    if (!name || !Number.isInteger(id) || !Number.isInteger(ppid)) continue;
+    rows.push({ pid: id, parent: ppid, name });
+  }
+  return rows;
+}
+
+// Python the app opened, including grandchildren. Other people's Python is left alone.
+export function pythonPidsInTree(rows: ProcessRow[], rootPid: number): number[] {
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    if (!Number.isInteger(row.pid) || row.pid <= 0 || row.pid === rootPid) continue;
+    const list = children.get(row.parent) ?? [];
+    list.push(row);
+    children.set(row.parent, list);
+  }
+  const found: number[] = [];
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length) {
+    const id = stack.pop();
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    for (const child of children.get(id) ?? []) {
+      stack.push(child.pid);
+      if (isPythonImage(child.name)) found.push(child.pid);
+    }
+  }
+  return found;
+}
+
 // Bits for every CPU except the first two, which stay with the app. Null when there is nothing to spare.
 export function affinityMask(logicalCpus: number): number | null {
   const n = Math.floor(logicalCpus);
