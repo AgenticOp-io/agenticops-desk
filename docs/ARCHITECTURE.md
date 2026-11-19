@@ -28,7 +28,7 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | **Engines** | |
 | `claude.ts` | Claude Code runs: streaming, approvals, tool hooks, resume after restart |
 | `capsules.ts` | Verified run records per chat (Intelligence Shorthand IS-T3), fed into the handoff brief; dropped when their files change. Also the running chat summaries the Summaries model writes after each run |
-| `localModel.ts` | One-click local Summaries model: installs Ollama (signature-checked, silent), starts `ollama serve`, pulls the model through `/api/pull`, sets `summarizer`. The installer's box leaves `local-model-setup.json`, which the first normal start consumes |
+| `localModel.ts` | One-click local Summaries model: downloads llama.cpp's `llama-server` and the GGUF from Ollama's registry into `userData/llama`, starts it on port 11434, and sets `summarizer`. Ready only when `/v1/models` lists that model. The installer's box leaves `local-model-setup.json`, which the first normal start consumes |
 | `claudeBinary.ts` | Finds or downloads the agent SDK and the binary for this computer; installers carry neither |
 | `direct.ts` | Own agent loop and tools for API providers |
 | `directMcp.ts` | MCP servers for Direct runs: config from `.mcp.json` and `~/.claude.json`, start, list tools, call, idle stop |
@@ -150,9 +150,9 @@ A follow-up (`shouldHandOff` in `pureFeatures.ts`, true whenever the message has
 
 `setupLocalModel` in `localModel.ts`, one at a time, progress sent as `localModel:status`:
 
-1. Find `ollama.exe` (`%LOCALAPPDATA%\Programs\Ollama`). If missing on Windows, download `OllamaSetup.exe` into a fresh temp folder, run it only if `Get-AuthenticodeSignature` says Valid and the signer is `O=Ollama Inc.`, with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`. Other systems must already have Ollama.
-2. Start `ollama serve` detached unless `127.0.0.1:11434/api/version` answers.
-3. Stream `POST /api/pull` for `LOCAL_MODEL` until `success`.
+1. If `llama-server` is missing, download the CPU build for this computer into `userData/llama/server` and check its sha256 while it downloads.
+2. If `model.gguf` is missing, download `LOCAL_MODEL` from `registry.ollama.ai` into `userData/llama/model.gguf` and check its sha256 while it downloads.
+3. Start `llama-server` on `127.0.0.1:11434` with that file. It is not detached, and quit kills it. It runs at low priority, on two fewer CPU cores than the machine has, with OpenMP waiting passively and no GPU, so the load does not freeze the window. Setup waits up to three minutes. The server is ready only when `GET /v1/models` lists `LOCAL_MODEL`. If something else is already on that port and does not list the model, setup stops and says so. A chat that wants a local completion does not wait on a cold start: it falls back, and the server keeps starting in the background.
 4. `pullProviderModels("ollama")`, then `patchSettings({ summarizer: "direct:ollama:<model>" })`.
 
 ### Saved login

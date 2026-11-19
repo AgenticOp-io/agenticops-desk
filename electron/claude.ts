@@ -532,10 +532,9 @@ export function answerApproval(
   const session = sessions.get(chatId);
   const pending = session?.approvals.get(requestId);
   if (!session || !pending) return false;
-  for (const ws of [session.workspace, managerWorkspace(chatId)]) {
-    if (decision.allow && pending.gate === "trust") trustWorkspace(ws, decision.always);
-    if (decision.allow && pending.gate === "risk") rememberRisks(ws, pending.risks ?? [], decision.always);
-  }
+  // Write trust only for the chat that asked. A worker still reads its manager's saved trust above.
+  if (decision.allow && pending.gate === "trust") trustWorkspace(session.workspace, decision.always);
+  if (decision.allow && pending.gate === "risk") rememberRisks(session.workspace, pending.risks ?? [], decision.always);
   const result: PermissionResult = decision.allow
     ? {
         behavior: "allow",
