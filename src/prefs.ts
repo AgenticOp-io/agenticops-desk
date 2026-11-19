@@ -17,8 +17,10 @@ export type UiPrefs = {
   autoModels: string[];
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
-  // Direct model that writes chat summaries and capsule results after each run; empty is off.
+  // Direct model that writes chat summaries and capsule results after each run; empty follows localModelId.
   summarizer: string;
+  // Which local model writes the short notes, or "" for none.
+  localModelId: string;
   // Dollars a run may spend before it is stopped; 0 is off.
   runBudgetUsd: number;
   privacy: "standard" | "protect" | "local";
@@ -65,6 +67,7 @@ export const defaultPrefs = (): UiPrefs => ({
   autoModels: [],
   autocomplete: "",
   summarizer: "",
+  localModelId: "qwen2.5:1.5b",
   runBudgetUsd: 0,
   privacy: "protect",
   cursorIntegration: "off",

@@ -128,21 +128,43 @@ test("a local server is ready only when it lists this model", async () => {
   assert.equal(openAiListsModel({}, "qwen2.5-coder:7b"), false);
 });
 
-test("the local model server leaves the app some CPU", async () => {
-  const { llamaServerArgs, localServerThreads } = await import("./pureFeatures.ts");
-  assert.equal(localServerThreads(8), 6);
+test("the local model choice is a known model or none", async () => {
+  const { DEFAULT_LOCAL_MODEL, normalizeLocalModel } = await import("./localChoices.ts");
+  assert.equal(normalizeLocalModel(undefined), DEFAULT_LOCAL_MODEL);
+  assert.equal(normalizeLocalModel("qwen2.5-coder:7b"), DEFAULT_LOCAL_MODEL);
+  assert.equal(normalizeLocalModel(""), "");
+  assert.equal(normalizeLocalModel("qwen2.5:3b"), "qwen2.5:3b");
+  assert.equal(normalizeLocalModel("qwen2.5-coder:3b"), "qwen2.5-coder:3b");
+});
+
+test("the local model stays inside a memory and cpu budget", async () => {
+  const { affinityMask, llamaServerArgs, localServerThreads, modelBudget, shouldStopForMemory } = await import("./pureFeatures.ts");
+  assert.equal(localServerThreads(8), 2);
   assert.equal(localServerThreads(2), 1);
   assert.equal(localServerThreads(1), 1);
-  const args = llamaServerArgs("C:/m.gguf", "qwen2.5-coder:7b", 6);
+  const tight = modelBudget({ freeBytes: 6_000_000_000, logicalCpus: 8 }, 4_700_000_000);
+  assert.equal(tight.start, false);
+  assert.match(tight.reason, /6 GB free/);
+  const ok = modelBudget({ freeBytes: 12_000_000_000, logicalCpus: 8 }, 4_700_000_000);
+  assert.equal(ok.start, true);
+  assert.equal(ok.threads, 2);
+  assert.ok(ok.context <= 4096);
+  const args = llamaServerArgs("C:/m.gguf", "qwen2.5-coder:7b", 6, 8192);
   assert.equal(args[args.indexOf("-m") + 1], "C:/m.gguf");
   assert.equal(args[args.indexOf("--alias") + 1], "qwen2.5-coder:7b");
-  assert.equal(args[args.indexOf("-t") + 1], "6");
-  assert.equal(args[args.indexOf("-tb") + 1], "6");
+  assert.equal(args[args.indexOf("-t") + 1], "2");
+  assert.equal(args[args.indexOf("-tb") + 1], "2");
+  assert.equal(args[args.indexOf("-c") + 1], "4096");
+  assert.equal(args[args.indexOf("-b") + 1], "256");
   assert.equal(args[args.indexOf("--prio") + 1], "-1");
   assert.equal(args[args.indexOf("--device") + 1], "none");
   assert.equal(args[args.indexOf("-ngl") + 1], "0");
   assert.ok(args.includes("--no-op-offload"));
   assert.ok(args.includes("--log-disable"));
+  assert.equal(shouldStopForMemory(1_000_000_000), true);
+  assert.equal(shouldStopForMemory(3_000_000_000), false);
+  assert.equal(affinityMask(8), 0b11111100);
+  assert.equal(affinityMask(2), null);
 });
 
 test("a chat starts cheap and moves up or down from what the user does", async () => {

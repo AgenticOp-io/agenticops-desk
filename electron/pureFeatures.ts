@@ -11,20 +11,59 @@ export function openAiListsModel(body: unknown, model: string): boolean {
   return data.some((row) => !!row && typeof row === "object" && (row as { id?: unknown }).id === model);
 }
 
-// Leave two cores for the app. A one-core machine still gets a thread.
+// At most two threads, and always leave the app a core. More threads page the machine and the window stops answering.
 export function localServerThreads(logical: number): number {
-  return Math.max(1, Math.floor(logical) - 2);
+  return Math.max(1, Math.min(2, Math.floor(logical) - 1));
 }
 
-// CPU only and low priority, so loading the multi-gigabyte model does not freeze the window.
-export function llamaServerArgs(modelPath: string, alias: string, threads: number): string[] {
-  const n = String(Math.max(1, Math.floor(threads)));
+// Free bytes that must remain after the model file is in memory, and the floor that stops a running server.
+export const MODEL_RESERVE_BYTES = 3_000_000_000;
+export const MEMORY_FLOOR_BYTES = 1_500_000_000;
+
+export type ResourceSample = { freeBytes: number; logicalCpus: number };
+export type ModelBudget = { start: boolean; threads: number; context: number; reason: string };
+
+// Refuse to load the model when doing so would leave the app without RAM. A small context and two threads are the most it may use.
+export function modelBudget(sample: ResourceSample, modelBytes: number): ModelBudget {
+  const spare = sample.freeBytes - Math.max(0, modelBytes);
+  const threads = localServerThreads(sample.logicalCpus);
+  const context = spare >= 6_000_000_000 ? 4096 : 2048;
+  if (spare < MODEL_RESERVE_BYTES) {
+    const freeGb = Math.max(0, Math.floor(sample.freeBytes / 1_000_000_000));
+    const needGb = Math.ceil((Math.max(0, modelBytes) + MODEL_RESERVE_BYTES) / 1_000_000_000);
+    return {
+      start: false,
+      threads,
+      context,
+      reason: `Not enough free memory to load the local model without freezing the app (${freeGb} GB free, ${needGb} GB needed). Close other programs and try again.`,
+    };
+  }
+  return { start: true, threads, context, reason: "" };
+}
+
+export function shouldStopForMemory(freeBytes: number): boolean {
+  return freeBytes < MEMORY_FLOOR_BYTES;
+}
+
+// Bits for every CPU except the first two, which stay with the app. Null when there is nothing to spare.
+export function affinityMask(logicalCpus: number): number | null {
+  const n = Math.floor(logicalCpus);
+  if (n <= 2 || n > 30) return null;
+  return ((1 << n) - 1) ^ 0b11;
+}
+
+// CPU only, idle priority, and a small batch, so one prompt cannot take the machine.
+export function llamaServerArgs(modelPath: string, alias: string, threads: number, context = 2048): string[] {
+  const n = String(Math.max(1, Math.min(2, Math.floor(threads))));
+  const ctx = String(Math.min(4096, Math.max(512, Math.floor(context))));
   return [
     "-m", modelPath,
     "--alias", alias,
     "--host", "127.0.0.1",
     "--port", "11434",
-    "-c", "8192",
+    "-c", ctx,
+    "-b", "256",
+    "-ub", "128",
     "-t", n,
     "-tb", n,
     "--prio", "-1",

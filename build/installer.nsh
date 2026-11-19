@@ -29,7 +29,7 @@ Function DeskLocalModelCreate
   ${If} $0 == error
     Abort
   ${EndIf}
-  ${NSD_CreateCheckbox} 0 0 100% 18u "Set up a local model: qwen2.5-coder 7B (about 5 GB)"
+  ${NSD_CreateCheckbox} 0 0 100% 18u "Set up a local model: qwen2.5 1.5B (about 1 GB)"
   Pop $LocalModelBox
   ${NSD_Check} $LocalModelBox
   ${NSD_CreateLabel} 0 24u 100% 36u "The download starts in the background when AgenticOps Desk first opens. You can also do this later in Settings, AI models."

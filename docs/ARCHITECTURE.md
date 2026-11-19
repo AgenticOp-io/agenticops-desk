@@ -28,7 +28,8 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | **Engines** | |
 | `claude.ts` | Claude Code runs: streaming, approvals, tool hooks, resume after restart |
 | `capsules.ts` | Verified run records per chat (Intelligence Shorthand IS-T3), fed into the handoff brief; dropped when their files change. Also the running chat summaries the Summaries model writes after each run |
-| `localModel.ts` | One-click local Summaries model: downloads llama.cpp's `llama-server` and the GGUF from Ollama's registry into `userData/llama`, starts it on port 11434, and sets `summarizer`. Ready only when `/v1/models` lists that model. The installer's box leaves `local-model-setup.json`, which the first normal start consumes |
+| `localModel.ts` | Local notes model: downloads llama.cpp's `llama-server` and the GGUF chosen in Settings (`localModelId`: brief notes, more detail, code heavy, or none) from Ollama's registry into `userData/llama`. Ready only when `/v1/models` lists that model. The installer's box leaves `local-model-setup.json`, which the first normal start consumes |
+| `resourceGuard.ts` | Memory and CPU cap for that server: refuses to start without 3 GB spare, two threads, idle priority off the app's cores, and stops the server if free RAM drops under 1.5 GB |
 | `claudeBinary.ts` | Finds or downloads the agent SDK and the binary for this computer; installers carry neither |
 | `direct.ts` | Own agent loop and tools for API providers |
 | `directMcp.ts` | MCP servers for Direct runs: config from `.mcp.json` and `~/.claude.json`, start, list tools, call, idle stop |
@@ -152,7 +153,7 @@ A follow-up (`shouldHandOff` in `pureFeatures.ts`, true whenever the message has
 
 1. If `llama-server` is missing, download the CPU build for this computer into `userData/llama/server` and check its sha256 while it downloads.
 2. If `model.gguf` is missing, download `LOCAL_MODEL` from `registry.ollama.ai` into `userData/llama/model.gguf` and check its sha256 while it downloads.
-3. Start `llama-server` on `127.0.0.1:11434` with that file. It is not detached, and quit kills it. It runs at low priority, on two fewer CPU cores than the machine has, with OpenMP waiting passively and no GPU, so the load does not freeze the window. Setup waits up to three minutes. The server is ready only when `GET /v1/models` lists `LOCAL_MODEL`. If something else is already on that port and does not list the model, setup stops and says so. A chat that wants a local completion does not wait on a cold start: it falls back, and the server keeps starting in the background.
+3. Start `llama-server` on `127.0.0.1:11434` with that file only when free RAM can hold the model and still leave 3 GB. It is not detached, and quit kills it. It runs at idle priority on at most two threads, off the app's first two CPU cores, with a small batch and no GPU. A watch stops it if free RAM falls under 1.5 GB, and a frozen window stops it immediately. Setup waits up to three minutes. The server is ready only when `GET /v1/models` lists `LOCAL_MODEL`. If something else is already on that port and does not list the model, setup stops and says so. A chat that wants a local completion does not wait on a cold start: it falls back, and the server keeps starting in the background only when the budget allows.
 4. `pullProviderModels("ollama")`, then `patchSettings({ summarizer: "direct:ollama:<model>" })`.
 
 ### Saved login

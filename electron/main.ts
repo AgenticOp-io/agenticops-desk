@@ -86,7 +86,7 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
-import { localModelStatus, pendingSetupFile, setupLocalModel, type LocalModelStatus } from "./localModel";
+import { localModelStatus, pendingSetupFile, relievePressure, setupLocalModel, type LocalModelStatus } from "./localModel";
 import { carryProjectMemory } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { canInstallUpdate, confirmPatch, installFullUpdate, updateCode } from "./patcher";
@@ -330,6 +330,8 @@ function createWindow() {
   });
   let freezeTimer: ReturnType<typeof setTimeout> | null = null;
   win.on("unresponsive", () => {
+    // The local model is the usual cause. Stop it now; reload only if the window is still frozen.
+    relievePressure();
     freezeTimer ??= setTimeout(() => {
       freezeTimer = null;
       reload();
