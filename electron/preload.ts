@@ -137,6 +137,8 @@ contextBridge.exposeInMainWorld("desk", {
   setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
     ipcRenderer.invoke("providers:set", id, patch),
   loadProviderModels: (id: string) => ipcRenderer.invoke("providers:load", id),
+  addProvider: (input: { label: string; baseUrl: string }) => ipcRenderer.invoke("providers:add", input),
+  removeProvider: (id: string) => ipcRenderer.invoke("providers:remove", id),
   localModelStatus: () => ipcRenderer.invoke("localModel:status"),
   setupLocalModel: () => ipcRenderer.invoke("localModel:setup"),
   onLocalModel: (cb: (s: { running: boolean; text: string; ok?: boolean }) => void) => {

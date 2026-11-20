@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chatModelIds, globToRegExp, lineDiff, ownerFromRemote } from "./pureFeatures.ts";
+import { chatModelIds, globToRegExp, isCustomProviderId, lineDiff, ownerFromRemote, PROVIDER_CATALOGS } from "./pureFeatures.ts";
 
 test("run capsules: only checked work, dropped once its files change", async () => {
   const { capsuleBrief, gateCommand, gatePassed, makeCapsule } = await import("./pureFeatures.ts");
@@ -128,21 +128,54 @@ test("a local server is ready only when it lists this model", async () => {
   assert.equal(openAiListsModel({}, "qwen2.5-coder:7b"), false);
 });
 
-test("the local model server leaves the app some CPU", async () => {
-  const { llamaServerArgs, localServerThreads } = await import("./pureFeatures.ts");
-  assert.equal(localServerThreads(8), 6);
+test("the local model choice is a known model or none", async () => {
+  const { DEFAULT_LOCAL_MODEL, normalizeLocalModel } = await import("./localChoices.ts");
+  assert.equal(normalizeLocalModel(undefined), DEFAULT_LOCAL_MODEL);
+  assert.equal(normalizeLocalModel("qwen2.5-coder:7b"), DEFAULT_LOCAL_MODEL);
+  assert.equal(normalizeLocalModel(""), "");
+  assert.equal(normalizeLocalModel("qwen2.5:3b"), "qwen2.5:3b");
+  assert.equal(normalizeLocalModel("qwen2.5-coder:3b"), "qwen2.5-coder:3b");
+});
+
+test("the local model stays inside a memory and cpu budget", async () => {
+  const { affinityMask, llamaServerArgs, localServerThreads, modelBudget, shouldStopForMemory } = await import("./pureFeatures.ts");
+  assert.equal(localServerThreads(8), 2);
   assert.equal(localServerThreads(2), 1);
   assert.equal(localServerThreads(1), 1);
-  const args = llamaServerArgs("C:/m.gguf", "qwen2.5-coder:7b", 6);
+  const tight = modelBudget({ freeBytes: 6_000_000_000, logicalCpus: 8 }, 4_700_000_000);
+  assert.equal(tight.start, false);
+  assert.match(tight.reason, /6 GB free/);
+  const ok = modelBudget({ freeBytes: 12_000_000_000, logicalCpus: 8 }, 4_700_000_000);
+  assert.equal(ok.start, true);
+  assert.equal(ok.threads, 2);
+  assert.ok(ok.context <= 4096);
+  const args = llamaServerArgs("C:/m.gguf", "qwen2.5-coder:7b", 6, 8192);
   assert.equal(args[args.indexOf("-m") + 1], "C:/m.gguf");
   assert.equal(args[args.indexOf("--alias") + 1], "qwen2.5-coder:7b");
-  assert.equal(args[args.indexOf("-t") + 1], "6");
-  assert.equal(args[args.indexOf("-tb") + 1], "6");
+  assert.equal(args[args.indexOf("-t") + 1], "2");
+  assert.equal(args[args.indexOf("-tb") + 1], "2");
+  assert.equal(args[args.indexOf("-c") + 1], "4096");
+  assert.equal(args[args.indexOf("-b") + 1], "256");
   assert.equal(args[args.indexOf("--prio") + 1], "-1");
   assert.equal(args[args.indexOf("--device") + 1], "none");
   assert.equal(args[args.indexOf("-ngl") + 1], "0");
   assert.ok(args.includes("--no-op-offload"));
   assert.ok(args.includes("--log-disable"));
+  assert.equal(shouldStopForMemory(1_000_000_000), true);
+  assert.equal(shouldStopForMemory(3_000_000_000), false);
+  assert.equal(affinityMask(8), 0b11111100);
+  assert.equal(affinityMask(2), null);
+});
+
+test("python started by the app is found, and other python is not", async () => {
+  const { isPythonImage, parseProcessTable, pythonPidsInTree } = await import("./pureFeatures.ts");
+  assert.equal(isPythonImage("C:\\Python\\python.exe"), true);
+  assert.equal(isPythonImage("pythonw.exe"), true);
+  assert.equal(isPythonImage("py.exe"), true);
+  assert.equal(isPythonImage("python3.12"), true);
+  assert.equal(isPythonImage("node.exe"), false);
+  const rows = parseProcessTable("10|1|AgenticOps Desk.exe\n20|10|claude.exe\n30|20|python.exe\n40|30|pythonw.exe\n50|1|python.exe\njunk\n");
+  assert.deepEqual(pythonPidsInTree(rows, 10), [30, 40]);
 });
 
 test("a chat starts cheap and moves up or down from what the user does", async () => {
@@ -203,6 +236,9 @@ test("every Claude API model has a price, or the spending cap never counts its c
 
 test("chat model ids drop embeddings and cap the list", () => {
   const ids = chatModelIds([" deepseek-flash ", "text-embedding-3-small", "whisper-1", "deepseek-flash", "dall-e-3", "gpt-image-1"]);
+  assert.ok(PROVIDER_CATALOGS.openai.some((m) => m.id === "gpt-6.2-sol" && m.name.startsWith("GPT")));
+  assert.equal(isCustomProviderId("uab12c"), true);
+  assert.equal(isCustomProviderId("openai"), false);
   assert.deepEqual(ids, ["deepseek-flash"]);
   assert.equal(chatModelIds(Array.from({ length: 30 }, (_, i) => `m${i}`)).length, 20);
 });
@@ -240,6 +276,8 @@ test("Auto fails over only on provider trouble", async () => {
   const { shouldFailOver, coolDownMs } = await import("./pureFeatures.ts");
   assert.ok(shouldFailOver("API Error: 429 rate_limit_error"));
   assert.ok(shouldFailOver("Claude AI usage limit reached|1767000000"));
+  assert.ok(shouldFailOver("You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)"));
+  assert.ok(shouldFailOver("Claude Code returned an error result: You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)"));
   assert.ok(shouldFailOver("OpenAI: 429 You exceeded your current quota"));
   assert.ok(shouldFailOver("API Error: 529 Overloaded"));
   assert.ok(shouldFailOver("Google Gemini rejected the API key. Check it in Settings."));
@@ -264,8 +302,16 @@ test("Auto hands over only after a hidden provider error", async () => {
   const run = { queue: ["next"] as string[], failed: undefined as string | undefined, erred: false };
   assert.equal(autoStep(run, "line", "hi"), "pass");
   assert.equal(autoStep(run, "error", "API Error: 429 rate_limit_error"), "swallow");
-  assert.equal(autoStep(run, "error", "API Error: 529 Overloaded"), "pass", "a second error is shown, not hidden");
+  assert.equal(autoStep(run, "error", "API Error: 529 Overloaded"), "swallow", "a second provider error stays out of the chat");
   assert.equal(autoStep(run, "done", "Done."), "handover");
+  const limit = "You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)";
+  const capped = { queue: ["next"], failed: undefined as string | undefined, erred: false };
+  assert.equal(autoStep(capped, "line", limit), "swallow");
+  assert.equal(autoStep(capped, "line", " (America/Mexico_City)"), "swallow");
+  assert.equal(autoStep(capped, "error", `Claude Code returned an error result: ${limit}`), "swallow");
+  assert.equal(autoStep(capped, "done", "Stopped."), "handover");
+  const essay = `${"Explanation. ".repeat(40)}You've hit your 5-hour limit in the docs.`;
+  assert.equal(autoStep({ queue: ["next"], failed: undefined, erred: false }, "line", essay), "pass");
 
   const plain = { queue: ["next"], failed: undefined, erred: false };
   assert.equal(autoStep(plain, "error", "tests failed"), "pass");
@@ -273,8 +319,8 @@ test("Auto hands over only after a hidden provider error", async () => {
   assert.equal(autoStep(plain, "done", "Done."), "finish");
 
   const last = { queue: [] as string[], failed: undefined, erred: false };
-  assert.equal(autoStep(last, "error", "429 Too Many Requests"), "pass", "nothing left to try, so the user sees it");
-  assert.equal(autoStep(last, "done", "Stopped."), "finish");
+  assert.equal(autoStep(last, "error", "429 Too Many Requests"), "swallow", "the last provider error stays out of the chat");
+  assert.equal(autoStep(last, "done", "Stopped."), "handover");
 });
 
 test("safe sync save writes, overwrites and leaves no temp file", async () => {
@@ -318,18 +364,53 @@ test("symbols from git grep output", async () => {
   assert.deepEqual(parseSymbolHits(out, "handlelogin")[0].name, "handleLogin");
 });
 
-test("Auto order: sticky first, resting last, unknown dropped", async () => {
-  const { autoOrder } = await import("./pureFeatures.ts");
-  const available = ["default", "direct:openai:gpt-5", "direct:ollama:qwen3"];
-  assert.deepEqual(autoOrder({ chosen: [], available, restingUntil: {}, now: 0 }), available);
+test("Auto order: sticky first, used-up models left out, cheap models before strong ones", async () => {
+  const { autoOrder, autoRank, restUntil } = await import("./pureFeatures.ts");
+  const available = ["default", "direct:openai:gpt-6.2-astra", "direct:deepseek:deepseek-flash", "direct:ollama:qwen3"];
+  assert.deepEqual(autoOrder({ chosen: [], available, restingUntil: {}, now: 0 }), [
+    "default",
+    "direct:deepseek:deepseek-flash",
+    "direct:openai:gpt-6.2-astra",
+    "direct:ollama:qwen3",
+  ]);
+  assert.ok(autoRank("direct:deepseek:deepseek-flash") < autoRank("direct:openai:gpt-6.2-astra"));
   assert.deepEqual(
     autoOrder({ chosen: ["direct:ollama:qwen3", "gone", "default"], available, sticky: "default", restingUntil: {}, now: 0 }),
     ["default", "direct:ollama:qwen3"],
   );
   assert.deepEqual(
     autoOrder({ chosen: [], available, sticky: "default", restingUntil: { default: 100 }, now: 50 }),
-    ["direct:openai:gpt-5", "direct:ollama:qwen3", "default"],
+    ["direct:deepseek:deepseek-flash", "direct:openai:gpt-6.2-astra", "direct:ollama:qwen3"],
   );
+  assert.deepEqual(autoOrder({ chosen: [], available, sticky: "direct:ollama:qwen3", restingUntil: {}, now: 0 }), [
+    "default",
+    "direct:deepseek:deepseek-flash",
+    "direct:openai:gpt-6.2-astra",
+    "direct:ollama:qwen3",
+  ]);
+  assert.deepEqual(
+    autoOrder({
+      chosen: [],
+      available,
+      restingUntil: { default: 100, "direct:deepseek:deepseek-flash": 100, "direct:openai:gpt-6.2-astra": 100 },
+      now: 50,
+    }),
+    ["direct:ollama:qwen3"],
+  );
+  const now = 1_700_000_000_000;
+  const sec = Math.floor(now / 1000) + 3600;
+  assert.equal(restUntil(`Claude AI usage limit reached|${sec}`, now), sec * 1000);
+  assert.equal(restUntil("429 rate limit", now), now + 5 * 60_000);
+  const evening = Date.parse("2026-11-20T01:56:00Z");
+  assert.equal(
+    restUntil("You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)", evening),
+    Date.parse("2026-11-20T03:20:00Z"),
+  );
+  assert.equal(restUntil("You've hit your 5-hour limit · resets 9:20pm (Not/AZone)", evening), evening + 5 * 60_000);
+  const { claudeWindowFull } = await import("./pureFeatures.ts");
+  assert.equal(claudeWindowFull({ percent: 100, resetsAt: evening + 60_000 }, evening), true);
+  assert.equal(claudeWindowFull({ percent: 100, resetsAt: evening }, evening), false);
+  assert.equal(claudeWindowFull({ percent: 40, resetsAt: evening + 60_000 }, evening), false);
 });
 
 test("plugin CLI output and command descriptions", async () => {

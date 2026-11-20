@@ -65,7 +65,23 @@ function ProviderRow({ p, onSaved }: { p: ProviderStatus; onSaved: (list: Provid
           </button>
           {p.hasKey && (
             <button className="btn danger" onClick={() => void save({ key: null })}>
-              Remove
+              Remove key
+            </button>
+          )}
+          {p.removable && (
+            <button
+              className="btn danger"
+              onClick={() =>
+                void window.desk
+                  .removeProvider(p.id)
+                  .then((next) => {
+                    setMsg("");
+                    onSaved(next);
+                  })
+                  .catch((err) => setMsg(fail(err)))
+              }
+            >
+              Remove AI
             </button>
           )}
         </div>
@@ -82,7 +98,7 @@ function ProviderRow({ p, onSaved }: { p: ProviderStatus; onSaved: (list: Provid
               Save models
             </button>
             <button className="btn" onClick={() => void loadModels()}>
-              Load from API
+              Test and load
             </button>
           </div>
           <div className="provider-line">
@@ -98,28 +114,90 @@ function ProviderRow({ p, onSaved }: { p: ProviderStatus; onSaved: (list: Provid
   );
 }
 
+function AddProvider({ list, onSaved }: { list: ProviderStatus[]; onSaved: (list: ProviderStatus[]) => void }) {
+  const [label, setLabel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fail = (err: unknown) =>
+    err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(err);
+
+  const add = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const known = new Set(list.map((p) => p.id));
+      const created = await window.desk.addProvider({ label: label.trim(), baseUrl: baseUrl.trim() });
+      const added = created.find((p) => p.removable && !known.has(p.id));
+      let next = created;
+      if (added && key.trim()) {
+        next = await window.desk.setProvider(added.id, { key: key.trim() });
+        try {
+          next = await window.desk.loadProviderModels(added.id);
+          setMsg("Added. Models loaded into the menu.");
+        } catch (err) {
+          setMsg(`${fail(err)} The AI was added and the key is saved.`);
+        }
+      } else setMsg("Added. Paste a key on its row, then Test and load.");
+      setLabel("");
+      setBaseUrl("");
+      setKey("");
+      onSaved(next);
+    } catch (err) {
+      setMsg(fail(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="provider">
+      <div className="provider-head">
+        <strong>Add another AI</strong>
+      </div>
+      <p className="settings-hint">
+        Any service with an OpenAI-style address. Name it, paste the address and key, then test. The models it lists
+        show up in the model menu.
+      </p>
+      <div className="provider-line">
+        <input placeholder="Name, such as Groq" value={label} onChange={(e) => setLabel(e.target.value)} />
+      </div>
+      <div className="provider-line">
+        <input placeholder="https://…/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+      </div>
+      <div className="provider-line">
+        <input type="password" placeholder="API key, if it needs one" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" />
+        <button className="btn" disabled={busy || !label.trim() || !baseUrl.trim()} onClick={() => void add()}>
+          Add and test
+        </button>
+      </div>
+      {msg && <div className="provider-msg">{msg}</div>}
+    </div>
+  );
+}
+
 export function ProvidersSettings({ onChanged }: { onChanged: () => void }) {
   const [list, setList] = useState<ProviderStatus[]>([]);
   useEffect(() => {
     void window.desk.listProviders().then(setList);
   }, []);
+  const save = (next: ProviderStatus[]) => {
+    setList(next);
+    onChanged();
+  };
   return (
     <div className="providers">
       <div className="settings-label">Direct AI providers</div>
       <p className="settings-hint">
         Chats normally run through Claude Code with your Claude sign-in. API models are in the model menu. Pick one to
-        add its key, or save a key here and load the models the provider offers. Direct chats are billed per token.
+        add its key, or save a key here and test it. Direct chats are billed per token. GPT, Gemini, Grok, Mistral, and
+        Qwen are listed. Add another AI at the bottom for any other OpenAI-compatible service.
       </p>
       {list.map((p) => (
-        <ProviderRow
-          key={p.id}
-          p={p}
-          onSaved={(next) => {
-            setList(next);
-            onChanged();
-          }}
-        />
+        <ProviderRow key={p.id} p={p} onSaved={save} />
       ))}
+      <AddProvider list={list} onSaved={save} />
     </div>
   );
 }

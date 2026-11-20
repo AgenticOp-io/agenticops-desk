@@ -11,20 +11,103 @@ export function openAiListsModel(body: unknown, model: string): boolean {
   return data.some((row) => !!row && typeof row === "object" && (row as { id?: unknown }).id === model);
 }
 
-// Leave two cores for the app. A one-core machine still gets a thread.
+// At most two threads, and always leave the app a core. More threads page the machine and the window stops answering.
 export function localServerThreads(logical: number): number {
-  return Math.max(1, Math.floor(logical) - 2);
+  return Math.max(1, Math.min(2, Math.floor(logical) - 1));
 }
 
-// CPU only and low priority, so loading the multi-gigabyte model does not freeze the window.
-export function llamaServerArgs(modelPath: string, alias: string, threads: number): string[] {
-  const n = String(Math.max(1, Math.floor(threads)));
+// Free bytes that must remain after the model file is in memory, and the floor that stops a running server.
+export const MODEL_RESERVE_BYTES = 3_000_000_000;
+export const MEMORY_FLOOR_BYTES = 1_500_000_000;
+
+export type ResourceSample = { freeBytes: number; logicalCpus: number };
+export type ModelBudget = { start: boolean; threads: number; context: number; reason: string };
+
+// Refuse to load the model when doing so would leave the app without RAM. A small context and two threads are the most it may use.
+export function modelBudget(sample: ResourceSample, modelBytes: number): ModelBudget {
+  const spare = sample.freeBytes - Math.max(0, modelBytes);
+  const threads = localServerThreads(sample.logicalCpus);
+  const context = spare >= 6_000_000_000 ? 4096 : 2048;
+  if (spare < MODEL_RESERVE_BYTES) {
+    const freeGb = Math.max(0, Math.floor(sample.freeBytes / 1_000_000_000));
+    const needGb = Math.ceil((Math.max(0, modelBytes) + MODEL_RESERVE_BYTES) / 1_000_000_000);
+    return {
+      start: false,
+      threads,
+      context,
+      reason: `Not enough free memory to load the local model without freezing the app (${freeGb} GB free, ${needGb} GB needed). Close other programs and try again.`,
+    };
+  }
+  return { start: true, threads, context, reason: "" };
+}
+
+export function shouldStopForMemory(freeBytes: number): boolean {
+  return freeBytes < MEMORY_FLOOR_BYTES;
+}
+
+// The process image name, not a path. Matches CPython and the Windows py launcher, not unrelated names.
+export function isPythonImage(name: string): boolean {
+  const base = (name.split(/[/\\]/).pop() ?? "").toLowerCase();
+  return /^(pyw?|python[\d.]*w?)(\.exe)?$/.test(base);
+}
+
+export type ProcessRow = { pid: number; parent: number; name: string };
+
+export function parseProcessTable(text: string): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [pid, parent, name] = line.split("|");
+    const id = Number(pid);
+    const ppid = Number(parent);
+    if (!name || !Number.isInteger(id) || !Number.isInteger(ppid)) continue;
+    rows.push({ pid: id, parent: ppid, name });
+  }
+  return rows;
+}
+
+// Python the app opened, including grandchildren. Other people's Python is left alone.
+export function pythonPidsInTree(rows: ProcessRow[], rootPid: number): number[] {
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    if (!Number.isInteger(row.pid) || row.pid <= 0 || row.pid === rootPid) continue;
+    const list = children.get(row.parent) ?? [];
+    list.push(row);
+    children.set(row.parent, list);
+  }
+  const found: number[] = [];
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length) {
+    const id = stack.pop();
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    for (const child of children.get(id) ?? []) {
+      stack.push(child.pid);
+      if (isPythonImage(child.name)) found.push(child.pid);
+    }
+  }
+  return found;
+}
+
+// Bits for every CPU except the first two, which stay with the app. Null when there is nothing to spare.
+export function affinityMask(logicalCpus: number): number | null {
+  const n = Math.floor(logicalCpus);
+  if (n <= 2 || n > 30) return null;
+  return ((1 << n) - 1) ^ 0b11;
+}
+
+// CPU only, idle priority, and a small batch, so one prompt cannot take the machine.
+export function llamaServerArgs(modelPath: string, alias: string, threads: number, context = 2048): string[] {
+  const n = String(Math.max(1, Math.min(2, Math.floor(threads))));
+  const ctx = String(Math.min(4096, Math.max(512, Math.floor(context))));
   return [
     "-m", modelPath,
     "--alias", alias,
     "--host", "127.0.0.1",
     "--port", "11434",
-    "-c", "8192",
+    "-c", ctx,
+    "-b", "256",
+    "-ub", "128",
     "-t", n,
     "-tb", n,
     "--prio", "-1",
@@ -88,7 +171,7 @@ export function lineDiff(before: string, after: string): string {
 // Auto model: errors that mean "this AI can't take the job right now", so the next one should try.
 // Anything else (a tool failing, a bad request in the chat itself) stays with the user.
 const FAILOVER =
-  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|overloaded|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
+  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|5-hour limit|you've hit your|overloaded|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
 
 export function shouldFailOver(error: string): boolean {
   return FAILOVER.test(error);
@@ -96,15 +179,23 @@ export function shouldFailOver(error: string): boolean {
 
 // What Auto does with one event of a run it routes: let it through, hide a provider error so the next AI
 // can try, end the run, or hand the message over (the run ended after a hidden error).
+// Claude Code prints the 5-hour limit as a normal reply, then again as an error. A short line that is
+// only that notice is hidden. A long reply that merely mentions a limit is not.
+const LIMIT_LINE = /you've hit your|5-hour limit|usage limit reached/i;
+
 export function autoStep(
   run: { queue: string[]; failed?: string; erred?: boolean },
   kind: string,
   text = "",
 ): "pass" | "swallow" | "finish" | "handover" {
-  if (kind === "error" && text && !run.failed && run.queue.length && shouldFailOver(text)) {
-    run.failed = text;
+  const notice = text.trim();
+  const limitLine = kind === "line" && notice.length <= 500 && LIMIT_LINE.test(notice) && shouldFailOver(notice);
+  if ((kind === "error" && notice && shouldFailOver(notice)) || limitLine) {
+    if (!run.failed) run.failed = notice;
     return "swallow";
   }
+  // The engine reports the same limit twice, sometimes in pieces. Later copies stay out of the chat.
+  if (run.failed && (kind === "error" || kind === "line" || kind === "thinking")) return "swallow";
   if (kind === "error") run.erred = true;
   if (kind !== "done") return "pass";
   return run.failed ? "handover" : "finish";
@@ -480,23 +571,112 @@ export function latestContextTokens(transcript: string): number | undefined {
 
 // Rate limits and quota errors last a while; anything else gets a short rest.
 export function coolDownMs(error: string): number {
-  return /429|rate.?limit|usage limit|quota|credit balance|too many requests/i.test(error) ? 5 * 60_000 : 60_000;
+  return /429|rate.?limit|usage limit|5-hour limit|you've hit your|quota|credit balance|too many requests/i.test(error) ? 5 * 60_000 : 60_000;
 }
 
-// The order Auto tries models in: the chat's last good one first (keeps its context), then the user's
-// order. Models resting after a failure go last instead of being dropped, so Auto never has nothing to try.
+// "resets 9:20pm (America/Mexico_City)" → the next time that clock shows, in ms. Null if it cannot be read.
+function clockResetMs(error: string, now: number): number | null {
+  const m = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+\(([^)]+)\)/i.exec(error);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = Number(m[2] ?? "0");
+  const ap = m[3].toLowerCase();
+  const zone = m[4].trim();
+  if (ap === "pm" && hour < 12) hour += 12;
+  if (ap === "am" && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59) return null;
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return null;
+  }
+  const parts = (ms: number) => {
+    const o: Record<string, string> = {};
+    for (const p of fmt.formatToParts(new Date(ms))) if (p.type !== "literal") o[p.type] = p.value;
+    return o;
+  };
+  const wall = (p: Record<string, string>, h: number, min: number) => Date.UTC(+p.year, +p.month - 1, +p.day, h, min, 0);
+  const p = parts(now);
+  let guess = now + (wall(p, hour, minute) - wall(p, +p.hour, +p.minute) - +p.second * 1000);
+  if (guess <= now) guess += 86_400_000;
+  const g = parts(guess);
+  guess += wall(g, hour, minute) - wall(g, +g.hour, +g.minute);
+  if (guess <= now) guess += 86_400_000;
+  if (!(guess > now && guess < now + 14 * 24 * 60 * 60_000)) return null;
+  return guess;
+}
+
+// The signed-in agent's 5-hour window is already full, so Auto should not start it.
+export function claudeWindowFull(window: { percent: number; resetsAt: number | null } | null, now: number): boolean {
+  return window != null && window.percent >= 100 && window.resetsAt != null && window.resetsAt > now;
+}
+
+// When a used-up AI may be tried again. A reset time in the message (unix seconds or ms after "|", or a clock) wins.
+export function restUntil(error: string, now: number): number {
+  const stamp = /\|(\d{10,13})\b/.exec(error);
+  if (stamp) {
+    const n = Number(stamp[1]);
+    const ms = n < 1e12 ? n * 1000 : n;
+    if (ms > now && ms < now + 14 * 24 * 60 * 60_000) return ms;
+  }
+  return clockResetMs(error, now) ?? now + coolDownMs(error);
+}
+
+// Lower runs first when the user has not set an order. One cheap model per lab, then stronger paid
+// models, then whatever the user added, then a model on this computer.
+export function autoRank(model: string): number {
+  const id = model.replace(/^direct:[a-z0-9]+:/, "");
+  if (model === "default") return 0;
+  if (id === "deepseek-flash") return 10;
+  if (/gemini-4-hydrogen|gemini-3\.8-flash|haiku/.test(id)) return 20;
+  if (/^gpt-6\.1-terra$|^gpt-6-sol$|^gpt-6\.2-sol$/.test(id)) return 30;
+  if (/deepseek-v4-pro|mistral-large-4|codestral|qwen4-max/.test(id)) return 40;
+  if (model.startsWith("direct:")) {
+    if (/^direct:(ollama|gpu):/.test(model)) return 100;
+    if (/gemini-4-(carbon|argon|neon)|grok-/.test(id)) return 70;
+    if (/opus|fable|gpt-6\.2-astra/.test(id)) return 90;
+    return 50;
+  }
+  return 95;
+}
+
+// A model on this computer, or the user's own GPU. Auto uses these only after the other models are off.
+export function isOwnedModel(model: string): boolean {
+  return /^direct:(ollama|gpu):/.test(model);
+}
+
+// The order Auto tries models in. The user's list wins among the hosted models; otherwise cheaper
+// capable models run before the strong paid ones, and the chat's last good hosted model stays first.
+// An owned model waits until every hosted model is off. A model that is used up is left out until its rest ends.
 export function autoOrder(opts: {
   chosen: string[];
   available: string[];
   sticky?: string;
   restingUntil: Record<string, number>;
   now: number;
+  owned?: (model: string) => boolean;
 }): string[] {
+  const isOwned = opts.owned ?? isOwnedModel;
   const avail = new Set(opts.available);
-  const base = (opts.chosen.length ? opts.chosen : opts.available).filter((m) => avail.has(m));
-  const list = [...new Set(opts.sticky && base.includes(opts.sticky) ? [opts.sticky, ...base] : base)];
   const resting = (m: string) => (opts.restingUntil[m] ?? 0) > opts.now;
-  return [...list.filter((m) => !resting(m)), ...list.filter(resting)];
+  let pool = (opts.chosen.length ? opts.chosen : opts.available).filter((m) => avail.has(m));
+  if (!opts.chosen.length) pool = [...pool].sort((a, b) => autoRank(a) - autoRank(b) || a.localeCompare(b));
+  const active = [...new Set(pool)].filter((m) => !resting(m));
+  let hosted = active.filter((m) => !isOwned(m));
+  let owned = active.filter(isOwned);
+  if (opts.sticky && hosted.includes(opts.sticky)) hosted = [opts.sticky, ...hosted.filter((m) => m !== opts.sticky)];
+  else if (!hosted.length && opts.sticky && owned.includes(opts.sticky)) owned = [opts.sticky, ...owned.filter((m) => m !== opts.sticky)];
+  return [...hosted, ...owned];
 }
 
 // The JSON in a `claude plugin ... --json` output, which can have log lines before it.
@@ -1374,7 +1554,7 @@ export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: Rec
 
 // Chat models from a provider's /models list. Drops embeddings, images, audio and the rest.
 // shortcut: first 20 only, raise the cap if the menu needs the long tail.
-export function chatModelIds(ids: string[]): string[] {
+export function chatModelIds(ids: string[], limit = 20): string[] {
   const skip = /embed|whisper|tts|dall-e|moderation|transcri|realtime|\baudio\b|\bimage\b|\bspeech\b|\bsora\b/i;
   const seen = new Set<string>();
   const out: string[] = [];
@@ -1383,9 +1563,36 @@ export function chatModelIds(ids: string[]): string[] {
     if (!id || id.length > 80 || seen.has(id) || skip.test(id)) continue;
     seen.add(id);
     out.push(id);
-    if (out.length >= 20) break;
+    if (out.length >= limit) break;
   }
   return out;
+}
+
+// Names the model menu shows before a provider's own list replaces them.
+export const PROVIDER_CATALOGS: Record<string, Array<{ id: string; name: string }>> = {
+  openai: [
+    { id: "gpt-6.2-astra", name: "GPT-6.2 Astra" },
+    { id: "gpt-6.2-sol", name: "GPT-6.2 Sol" },
+    { id: "gpt-6.1-terra", name: "GPT-6.1 Terra" },
+    { id: "gpt-6-sol", name: "GPT-6 Sol" },
+  ],
+  gemini: [
+    { id: "gemini-4-carbon", name: "Gemini 4 Carbon" },
+    { id: "gemini-4-argon", name: "Gemini 4 Argon" },
+    { id: "gemini-4-neon", name: "Gemini 4 Neon" },
+    { id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" },
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+  ],
+  xai: [{ id: "grok-4.7", name: "Grok 4.7" }],
+  mistral: [
+    { id: "mistral-large-4", name: "Mistral Large 4" },
+    { id: "codestral-2508", name: "Codestral" },
+  ],
+  qwen: [{ id: "qwen4-max", name: "Qwen4 Max" }],
+};
+
+export function isCustomProviderId(id: string): boolean {
+  return /^u[a-z0-9]{4,12}$/.test(id);
 }
 
 // Old DeepSeek turns stored a chain of thought. Sending it back makes every later command slower.

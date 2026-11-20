@@ -5,9 +5,8 @@ import { app } from "electron";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { scrubOutgoing } from "./privacy";
 import { capsuleBrief, makeCapsule, type Capsule } from "./pureFeatures";
-import { LOCAL_MODEL } from "./localModel";
-import { askDirect } from "./review";
 import { loadSettings } from "./settings";
+import { askDirect } from "./review";
 
 // Verified run capsules per chat, in app data (never in the project). See Capsule in pureFeatures.ts.
 const KEEP = 12;
@@ -109,12 +108,13 @@ const NEW_TURNS_LIMIT = 10_000; // small local models often have a 4k-token wind
 // The model the user picked, or the local one. An empty Summaries setting still stays on this computer.
 async function summaryModel(): Promise<string> {
   try {
-    const chosen = (await loadSettings()).summarizer?.trim();
+    const settings = await loadSettings();
+    const chosen = settings.summarizer?.trim();
     if (chosen) return chosen;
+    return settings.localModelId ? `direct:ollama:${settings.localModelId}` : "";
   } catch {
-    /* the local model is the default */
+    return "";
   }
-  return `direct:ollama:${LOCAL_MODEL}`;
 }
 
 // The summary for this history, writing it locally when the saved one does not cover these turns.
@@ -150,6 +150,7 @@ export async function summarizeRun(
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text.trim()}`)
     .join("\n\n");
   const clean = (s: string) => scrubOutgoing(s).text;
+  if (!model) return;
   const timeout = AbortSignal.timeout(30_000);
   const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {

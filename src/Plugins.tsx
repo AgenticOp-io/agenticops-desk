@@ -59,10 +59,11 @@ export function AutoSettings({
     <div className="auto-settings" id="settings-auto">
       <div className="settings-label">Auto model</div>
       <p className="settings-hint">
-        Pick "Auto" in the model menu and AgenticOps Desk sends each message to the first AI below. When that AI hits a rate limit,
-        runs out of quota, rejects its key, is down, or declines, the same message goes to the next one, and the failed one
-        rests for a while (5 minutes after a rate limit or quota error, otherwise 1). A chat stays with the AI that last
-        worked for it. If an AI stops partway, the next one is told which files were already changed.
+        Pick "Auto" in the model menu. Each message goes to the first AI that is still on: the signed-in agent, then a cheaper
+        model that can do the work, then a stronger paid model. A model on this computer or your own GPU is used only after
+        those are off. Your list below chooses the hosted models and their order. When an AI is used up, down, or rejects its
+        key, it turns off and the same message goes to the next one. The chat does not show that error. If nothing can run,
+        the chat says no AI models are available. The reason is listed here until you press Try it again, or the limit resets.
       </p>
       <label className="settings-row">
         <span>Use every AI that is set up, in the order of the model menu</span>
@@ -115,7 +116,7 @@ export function AutoSettings({
                 {o.restingUntil && (
                   <span className="settings-hint">
                     {" "}
-                    · resting {minutesLeft(o.restingUntil)}: {o.reason}{" "}
+                    · off {minutesLeft(o.restingUntil)}: {o.reason}{" "}
                     <button className="more-link" onClick={() => void window.desk.wakeAuto(o.value).then(setStatus)}>
                       Try it again now
                     </button>

@@ -1,9 +1,10 @@
 import type { BrowserWindow } from "electron";
 import { changedFiles, chatState, listModels, send, setSendFilter } from "./claude";
-import { autoOrder, autoStep, coolDownMs } from "./pureFeatures";
+import { autoOrder, autoStep, claudeWindowFull, isOwnedModel, restUntil } from "./pureFeatures";
 import { isLocalProvider, privacyMode } from "./privacy";
 import { parseDirectModel } from "./providers";
 import { loadSettings } from "./settings";
+import { fiveHourWindow } from "./usageLog";
 
 // The "Auto" model: one choice that uses every AI the user has enabled (or the ones they picked, in
 // their order). A run goes to the first one that is not resting; when it fails because that AI can't
@@ -36,6 +37,8 @@ const live = new Map<string, Attempt>();
 // The AI that last finished a run for each chat, so the chat keeps its context there.
 const sticky = new Map<string, string>();
 const resting: Record<string, { until: number; reason: string }> = {};
+// Try again now: allow one more sign-in attempt even if the saved window still says full.
+let signInWoken = false;
 let dispatch: Dispatch | null = null;
 
 export function labelOf(model: string): string {
@@ -46,28 +49,38 @@ export function labelOf(model: string): string {
   return `Claude Code · ${opt?.displayName ?? model}`;
 }
 
-// Everything Auto could use right now. Local-only privacy keeps it on this computer.
-// The signed-in agent goes first. A local model writes summaries; it does not take the chat, because
-// a small model answers in prose and never runs tools. The user's chosen order (settings.autoModels) still wins.
+// Everything Auto could use right now. One signed-in agent, then each ready Direct model.
+// Extra Claude Code models share that sign-in's limit, so they are not separate choices.
+// Local-only privacy keeps it on this computer. The user's chosen order still wins.
 export function autoAvailable(): string[] {
-  const enabled = listModels().filter((m) => m.value !== AUTO && !m.needsSetup && !m.pinned).map((m) => m.value);
-  const local = enabled.filter((m) => {
-    const d = parseDirectModel(m);
-    return Boolean(d && isLocalProvider(d.provider));
-  });
-  // "default" is not in listModels() output, so it is always included here explicitly. Local models
-  // stay last, for when the signed-in agent is resting.
-  const rest = enabled.filter((m) => !local.includes(m) && m !== CLAUDE_DEFAULT);
-  const all = [...new Set([CLAUDE_DEFAULT, ...rest, ...local])];
+  const enabled = listModels().filter((m) => m.value !== AUTO && !m.needsSetup && !m.pinned && m.group !== "Claude Code").map((m) => m.value);
+  const all = [...new Set([CLAUDE_DEFAULT, ...enabled])];
   if (privacyMode() !== "local") return all;
   return all.filter((m) => {
     const d = parseDirectModel(m);
-    return m === CLAUDE_DEFAULT || Boolean(d && isLocalProvider(d.provider));
+    return Boolean(d && isLocalProvider(d.provider));
   });
 }
 
+function noteSignInWindow() {
+  if (signInWoken) return;
+  const now = Date.now();
+  const window = fiveHourWindow(now);
+  if (!claudeWindowFull(window, now) || window?.resetsAt == null) return;
+  const cur = resting[CLAUDE_DEFAULT];
+  if (!cur || cur.until < window.resetsAt) resting[CLAUDE_DEFAULT] = { until: window.resetsAt, reason: "5-hour limit" };
+}
+
 function restingUntil(): Record<string, number> {
+  noteSignInWindow();
   return Object.fromEntries(Object.entries(resting).map(([k, v]) => [k, v.until]));
+}
+
+// Ollama, the user's GPU, and a service they added on this computer.
+function modelOwned(model: string): boolean {
+  if (isOwnedModel(model)) return true;
+  const direct = parseDirectModel(model);
+  return Boolean(direct && isLocalProvider(direct.provider));
 }
 
 async function currentOrder(chatId?: string): Promise<string[]> {
@@ -78,13 +91,20 @@ async function currentOrder(chatId?: string): Promise<string[]> {
     sticky: chatId ? sticky.get(chatId) : undefined,
     restingUntil: restingUntil(),
     now: Date.now(),
+    owned: modelOwned,
   });
 }
 
 // For Settings: the order Auto would try right now, which AIs are resting and why, and each chat's pick.
 export async function autoStatus(): Promise<AutoStatus> {
   const now = Date.now();
-  const order = (await currentOrder()).map((value) => {
+  const available = autoAvailable();
+  const trying = await currentOrder();
+  const turnedOff = available.filter((value) => {
+    const r = resting[value];
+    return Boolean(r && r.until > now && !trying.includes(value));
+  });
+  const order = [...trying, ...turnedOff].map((value) => {
     const r = resting[value];
     return r && r.until > now
       ? { value, label: labelOf(value), restingUntil: r.until, reason: r.reason }
@@ -98,12 +118,21 @@ export async function autoStatus(): Promise<AutoStatus> {
 
 // Lets a resting AI (or all of them) be tried again at once, e.g. after topping up credit.
 export function wakeAuto(model?: string) {
+  if (!model || model === CLAUDE_DEFAULT) signInWoken = true;
   if (model) delete resting[model];
   else for (const k of Object.keys(resting)) delete resting[k];
 }
 
+const NO_MODELS = "No AI models available.";
+
 function announce(win: BrowserWindow | null, chatId: string, model: string) {
   send(win, { kind: "route", chatId, model, text: labelOf(model), running: true });
+}
+
+function reportNone(win: BrowserWindow | null, chatId: string) {
+  send(win, { kind: "note", chatId, text: NO_MODELS, running: false });
+  send(win, { kind: "route", chatId, model: AUTO, text: NO_MODELS, running: false });
+  send(win, { kind: "done", chatId, running: false, text: "Stopped." });
 }
 
 // When an AI fails partway through, the next one is told what may already have changed.
@@ -136,16 +165,15 @@ export function initAuto(fn: Dispatch) {
     // This AI couldn't take it: rest it, tell the user, and hand the same message to the next one.
     const failed = run.failed ?? "";
     const reason = failed.split("\n")[0].slice(0, 160);
-    resting[run.current] = { until: Date.now() + coolDownMs(failed), reason };
+    resting[run.current] = { until: restUntil(failed, Date.now()), reason };
     if (sticky.get(chatId) === run.current) sticky.delete(chatId);
     const failedLabel = labelOf(run.current);
-    const next = run.queue.shift()!;
-    send(win, {
-      kind: "note",
-      chatId,
-      running: true,
-      text: `Auto: ${failedLabel} couldn't take this (${reason}). Trying ${labelOf(next)}…`,
-    });
+    const next = run.queue.shift();
+    if (!next) {
+      live.delete(chatId);
+      reportNone(win, chatId);
+      return true;
+    }
     const payload = handover(run, failedLabel);
     run.current = next;
     run.failed = undefined;
@@ -159,7 +187,7 @@ export function initAuto(fn: Dispatch) {
       } catch (err) {
         // Without this the chat would show "running" forever.
         live.delete(chatId);
-        send(win, { kind: "error", chatId, running: false, text: err instanceof Error ? err.message : String(err) });
+        send(win, { kind: "route", chatId, model: next, text: `${labelOf(next)} did not start. See Settings › Auto model.`, running: false });
         send(win, { kind: "done", chatId, running: false, text: "Stopped." });
       }
     }, 0);
@@ -177,16 +205,7 @@ export async function runAuto(win: BrowserWindow | null, payload: AutoPayload) {
   }
   const order = await currentOrder(chatId);
   if (!order.length) {
-    send(win, {
-      kind: "error",
-      chatId,
-      running: false,
-      text:
-        privacyMode() === "local"
-          ? "Auto has no AI it may use: Local only is on, and no Ollama model is set up on this computer."
-          : "Auto has no AI to use. Pick some in Settings › Auto model, or add a provider key.",
-    });
-    send(win, { kind: "done", chatId, running: false, text: "Stopped." });
+    reportNone(win, chatId);
     return;
   }
   const [first, ...queue] = order;

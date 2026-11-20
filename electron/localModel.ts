@@ -1,20 +1,21 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, readdirSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { app } from "electron";
-import { llamaServerArgs, localServerThreads, openAiListsModel } from "./pureFeatures";
+import { DEFAULT_LOCAL_MODEL } from "./localChoices";
+import { llamaServerArgs, openAiListsModel } from "./pureFeatures";
+import { budgetFor, memoryIsLow, preferApp, relaxProcess, releaseApp, sampleResources, watchMemory } from "./resourceGuard";
 import { pullProviderModels } from "./providers";
-import { patchSettings } from "./settings";
+import { loadSettings } from "./settings";
 
 // Sets up llama.cpp's small server and a small model (pulled from Ollama's public registry over plain HTTP, no Ollama install) for chat summaries, then turns Summaries on.
 // The installer asks for this, or Settings › AI models starts it later. 64-bit Windows, macOS and Linux (x64 and arm64) are supported.
 
-export const LOCAL_MODEL = "qwen2.5-coder:7b";
+export const LOCAL_MODEL = DEFAULT_LOCAL_MODEL;
 const API = "http://127.0.0.1:11434";
 
 export type LocalModelStatus = { running: boolean; text: string; ok?: boolean };
@@ -55,6 +56,7 @@ async function download(url: string, file: string, label: string, say: (t: strin
 const llamaDir = () => path.join(app.getPath("userData"), "llama");
 const serverDir = () => path.join(llamaDir(), "server");
 const modelFile = () => path.join(llamaDir(), "model.gguf");
+const modelIdFile = () => path.join(llamaDir(), "model.id");
 const EXE_NAME = process.platform === "win32" ? "llama-server.exe" : "llama-server";
 
 // The archives differ in layout (flat on Windows, one folder on macOS/Linux), so look for the binary.
@@ -68,23 +70,33 @@ function llamaExe(): string | null {
 }
 
 // Plain HTTP against Ollama's registry: the manifest lists layers, and the model layer is the GGUF with its sha256.
-async function pullFromRegistry(say: (t: string) => void) {
-  const [name, tag] = LOCAL_MODEL.split(":");
+async function pullFromRegistry(model: string, say: (t: string) => void) {
+  const split = model.indexOf(":");
+  const name = model.slice(0, split);
+  const tag = model.slice(split + 1);
   const base = `https://registry.ollama.ai/v2/library/${name}`;
   const res = await fetch(`${base}/manifests/${tag}`, { headers: { Accept: "application/vnd.docker.distribution.manifest.v2+json" } });
-  if (!res.ok) throw new Error(`The model registry returned ${res.status} for ${LOCAL_MODEL}.`);
+  if (!res.ok) throw new Error(`The model registry returned ${res.status} for ${model}.`);
   const layers = ((await res.json()) as { layers?: Array<{ mediaType: string; digest: string }> }).layers ?? [];
   const layer = layers.find((l) => l.mediaType === "application/vnd.ollama.image.model");
-  if (!layer || !/^sha256:[0-9a-f]{64}$/.test(layer.digest)) throw new Error(`The model registry has no model file for ${LOCAL_MODEL}.`);
+  if (!layer || !/^sha256:[0-9a-f]{64}$/.test(layer.digest)) throw new Error(`The model registry has no model file for ${model}.`);
   const dest = modelFile();
-  const got = await download(`${base}/blobs/${layer.digest}`, dest, LOCAL_MODEL, say);
+  const got = await download(`${base}/blobs/${layer.digest}`, dest, model, say);
   if (`sha256:${got}` !== layer.digest) {
     await fs.rm(dest, { force: true });
     throw new Error("The downloaded model did not match its published checksum.");
   }
 }
 
-async function installLlama(say: (t: string) => void) {
+async function installedModel(): Promise<string> {
+  try {
+    return (await fs.readFile(modelIdFile(), "utf8")).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function installLlama(model: string, say: (t: string) => void) {
   if ((process.arch !== "x64" && process.arch !== "arm64") || !["win32", "darwin", "linux"].includes(process.platform)) {
     throw new Error("The local model needs 64-bit Windows, macOS or Linux.");
   }
@@ -117,28 +129,61 @@ async function installLlama(say: (t: string) => void) {
     if (r.code !== 0 || !exe) throw new Error(`Unpacking the local model server failed. ${r.out}`);
     if (process.platform !== "win32") await fs.chmod(exe, 0o755);
   }
-  if (!existsSync(modelFile())) await pullFromRegistry(say);
+  if ((await installedModel()) !== model || !existsSync(modelFile())) {
+    await fs.rm(modelFile(), { force: true });
+    await pullFromRegistry(model, say);
+    await fs.writeFile(modelIdFile(), model, "utf8");
+  }
 }
 
-// Not detached: it dies with the app, so the ~5 GB model never lingers after quit.
+// Not detached: it dies with the app, so the model never lingers after quit.
 let llamaChild: ChildProcess | null = null;
+let memoryWatch: (() => void) | null = null;
+let relaxTimer: ReturnType<typeof setTimeout> | null = null;
+let stoppedForMemory = false;
+
+const MEMORY_STOP = "The local model was stopped because memory was running low, so the app stays responsive.";
+
+function modelBytes(): number {
+  try {
+    return statSync(modelFile()).size;
+  } catch {
+    return 1_000_000_000;
+  }
+}
 
 function stopLlama() {
+  if (relaxTimer) clearTimeout(relaxTimer);
+  relaxTimer = null;
+  memoryWatch?.();
+  memoryWatch = null;
+  releaseApp();
   const child = llamaChild;
   if (!child) return;
   llamaChild = null;
   child.kill();
 }
 
+// The window is frozen. Stopping the model is what makes it answer again.
+export function relievePressure(): boolean {
+  if (!llamaChild) return false;
+  stoppedForMemory = true;
+  status = { running: false, ok: false, text: MEMORY_STOP };
+  stopLlama();
+  return true;
+}
+
 app.on("before-quit", () => stopLlama());
 
-function startLlama() {
+function startLlama(model: string) {
   stopLlama();
   const exe = llamaExe();
   if (!exe) throw new Error("The local model server is not installed.");
-  // All cores at normal priority, plus OpenMP spinning, makes the window stop answering while the model loads.
-  const threads = localServerThreads(os.availableParallelism?.() ?? os.cpus().length);
-  const child = spawn(exe, llamaServerArgs(modelFile(), LOCAL_MODEL, threads), {
+  const sample = sampleResources();
+  const budget = budgetFor(modelBytes());
+  if (!budget.start) throw new Error(budget.reason);
+  stoppedForMemory = false;
+  const child = spawn(exe, llamaServerArgs(modelFile(), model, budget.threads, budget.context), {
     stdio: "ignore",
     windowsHide: true,
     env: {
@@ -146,10 +191,18 @@ function startLlama() {
       // The shared libraries sit next to the binary; Linux needs to be told.
       LD_LIBRARY_PATH: [path.dirname(exe), process.env.LD_LIBRARY_PATH].filter(Boolean).join(":"),
       OMP_WAIT_POLICY: "PASSIVE",
-      OMP_NUM_THREADS: String(threads),
+      OMP_NUM_THREADS: String(budget.threads),
     },
   });
   llamaChild = child;
+  preferApp();
+  const relax = () => {
+    if (child.pid) relaxProcess(child.pid, sample.logicalCpus);
+  };
+  relax();
+  // The server sets its own priority after launch, so apply the cap again once it is up.
+  relaxTimer = setTimeout(relax, 1500);
+  memoryWatch = watchMemory(() => relievePressure());
   child.on("error", () => {});
   child.on("exit", () => {
     if (llamaChild === child) llamaChild = null;
@@ -158,11 +211,11 @@ function startLlama() {
 }
 
 // "ready" lists our model. "other" is some other program on the port. "down" means nothing is listening.
-async function probePort(): Promise<"ready" | "other" | "down"> {
+async function probePort(model: string): Promise<"ready" | "other" | "down"> {
   try {
     const res = await fetch(`${API}/v1/models`, { signal: AbortSignal.timeout(2_000) });
     if (!res.ok) return "other";
-    return openAiListsModel(await res.json(), LOCAL_MODEL) ? "ready" : "other";
+    return openAiListsModel(await res.json(), model) ? "ready" : "other";
   } catch {
     return "down";
   }
@@ -174,13 +227,23 @@ function startServer(): Promise<void> {
   return (starting ??= startServerOnce().finally(() => (starting = null)));
 }
 
+async function chosenModel(): Promise<string> {
+  try {
+    return (await loadSettings()).localModelId;
+  } catch {
+    return LOCAL_MODEL;
+  }
+}
+
 async function startServerOnce() {
-  const now = await probePort();
+  const model = await chosenModel();
+  if (!model) throw new Error("No local model is selected.");
+  const now = await probePort(model);
   if (now === "ready") return;
   if (now === "other") {
-    throw new Error(`Port 11434 is in use, but it is not serving ${LOCAL_MODEL}. Stop the other program using that port, then try again.`);
+    throw new Error(`Port 11434 is in use, but it is not serving ${model}. Stop the other program using that port, then try again.`);
   }
-  const child = startLlama();
+  const child = startLlama(model);
   let died = false;
   const markDead = () => {
     died = true;
@@ -191,9 +254,11 @@ async function startServerOnce() {
   for (let i = 0; i < 360; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (died) break;
-    if ((await probePort()) === "ready") return;
+    if ((await probePort(model)) === "ready") return;
   }
+  const low = stoppedForMemory;
   stopLlama();
+  if (low) throw new Error(MEMORY_STOP);
   throw new Error("The local model server did not start.");
 }
 
@@ -203,14 +268,21 @@ export function setupLocalModel(onStatus: (s: LocalModelStatus) => void): Promis
   const say = (text: string) => onStatus((status = { running: true, text }));
   job = (async () => {
     try {
+      const model = await chosenModel();
+      if (!model) {
+        stopLlama();
+        status = { running: false, ok: true, text: "No local model. Notes stay a short brief." };
+        onStatus(status);
+        job = null;
+        return status;
+      }
       say("Looking for a local model server…");
       // Always install our own server, even if something else answers on the port: it would not have this model.
-      await installLlama(say);
+      await installLlama(model, say);
       say("Starting the local model server…");
       await startServer();
       await pullProviderModels("ollama");
-      await patchSettings({ summarizer: `direct:ollama:${LOCAL_MODEL}` });
-      status = { running: false, ok: true, text: `${LOCAL_MODEL} is ready and writes the summaries.` };
+      status = { running: false, ok: true, text: `${model} is ready and writes the summaries.` };
     } catch (err) {
       status = { running: false, ok: false, text: err instanceof Error ? err.message : String(err) };
     }
@@ -230,9 +302,19 @@ export const pendingSetupFile = () => path.join(app.getPath("userData"), "local-
 export async function generateLocally(prompt: string, maxTokens = 400, timeoutMs = 30_000): Promise<string | null> {
   if (!prompt.trim()) return null;
   try {
-    const now = await probePort();
+    const model = await chosenModel();
+    if (!model) {
+      stopLlama();
+      return null;
+    }
+    if (memoryIsLow()) {
+      relievePressure();
+      return null;
+    }
+    if ((await installedModel()) !== model) return null;
+    const now = await probePort(model);
     if (now !== "ready") {
-      if (now === "other" || !llamaExe() || !existsSync(modelFile())) return null;
+      if (now === "other" || !llamaExe() || !existsSync(modelFile()) || !budgetFor(modelBytes()).start) return null;
       // A chat must not sit inside the model load. The server keeps starting; the next call uses it.
       void startServer().catch(() => undefined);
       return null;
@@ -240,7 +322,7 @@ export async function generateLocally(prompt: string, maxTokens = 400, timeoutMs
     const res = await fetch(`${API}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: LOCAL_MODEL, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: maxTokens, temperature: 0 }),
+      body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false, max_tokens: maxTokens, temperature: 0 }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;

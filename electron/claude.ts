@@ -9,11 +9,12 @@ import { permissionGate, rememberRisks, trustWorkspace } from "./allows";
 import { askedForCredentials, credentialsIn, fillCredentials, grantCredentials } from "./credentials";
 import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
+import { quietThreads } from "./resourceGuard";
 import { prepareMemory } from "./memory";
 import { capsulesBrief, chatSummary, ensureSummary, forgetCapsules, recordCapsule, refreshSummary } from "./capsules";
 import { paidPacket } from "./gather";
 import { imagesToText } from "./imageVision";
-import { LOCAL_MODEL, generateLocally } from "./localModel";
+import { generateLocally } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import {
   COMPACT_REREAD,
@@ -664,7 +665,7 @@ function spawnHidden(cmd: string, args: string[], cwd: string, env: NodeJS.Proce
     shell: false,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
-    env,
+    env: { ...env, ...quietThreads() },
     signal,
   });
 }
@@ -2225,7 +2226,9 @@ async function reviewRun(opts: RunOptions, session: Session, cwd: string) {
   const request = opts.reviewRequest ?? opts.prompt;
   const round = opts.reviewRound ?? 0;
   if (privacyMode() === "local") return;
-  const reviewer = (await loadSettings()).reviewer || `direct:ollama:${LOCAL_MODEL}`;
+  const prefs = await loadSettings();
+  const reviewer = prefs.reviewer || (prefs.localModelId ? `direct:ollama:${prefs.localModelId}` : "");
+  if (!reviewer) return;
   if (!session.changes.size) return;
   const clean = (s: string | null) => (s === null || !protecting() ? s : scrubOutgoing(s).text);
   const files = [...session.changes.values()].map((c) => {

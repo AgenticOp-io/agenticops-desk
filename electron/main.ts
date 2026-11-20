@@ -26,7 +26,7 @@ import {
   updateMarketplace,
   updatePlugin,
 } from "./plugins";
-import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
+import { addCustomProvider, parseDirectModel, providerStatus, pullProviderModels, removeCustomProvider, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
 import { recentActivity, flush as flushActivity } from "./activityLog";
 import { chooseLearned } from "./modelLearn";
@@ -88,7 +88,8 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
-import { localModelStatus, pendingSetupFile, setupLocalModel, type LocalModelStatus } from "./localModel";
+import { localModelStatus, pendingSetupFile, relievePressure, setupLocalModel, type LocalModelStatus } from "./localModel";
+import { stopPythons, watchPythons } from "./resourceGuard";
 import { carryProjectMemory } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { canInstallUpdate, confirmPatch, installFullUpdate, updateCode } from "./patcher";
@@ -347,6 +348,9 @@ function createWindow() {
   });
   let freezeTimer: ReturnType<typeof setTimeout> | null = null;
   win.on("unresponsive", () => {
+    // The local model is the usual cause. Stop it now; reload only if the window is still frozen.
+    relievePressure();
+    stopPythons();
     freezeTimer ??= setTimeout(() => {
       freezeTimer = null;
       reload();
@@ -588,6 +592,7 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  watchPythons();
   // The installer could not apply this because the app was already open. The choice file is still here.
   if (existsSync(path.join(app.getPath("userData"), "install-choices.json"))) {
     try {
@@ -697,6 +702,7 @@ function flushRendererThreads(timeoutMs = 3000): Promise<void> {
 let flushingQuit = false;
 app.on("before-quit", (e) => {
   allowQuit = true;
+  stopPythons();
   closeAllShells();
   closeWatches();
   shutdownClaude();
@@ -1114,6 +1120,8 @@ ipcMain.handle("providers:load", async (_e, id: string) => {
   await pullProviderModels(String(id ?? ""));
   return providerStatus();
 });
+ipcMain.handle("providers:add", (_e, input: { label?: string; baseUrl?: string }) => addCustomProvider(input ?? {}));
+ipcMain.handle("providers:remove", (_e, id: string) => removeCustomProvider(String(id ?? "")));
 ipcMain.handle("localModel:status", () => localModelStatus());
 ipcMain.handle("localModel:setup", () => setupLocalModel(sendLocalModel));
 

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import path from "node:path";
-import { PRESETS, parseDirectModel, providerBaseUrl, providerKey } from "./providers";
+import { parseDirectModel, providerBaseUrl, providerInfo, providerKey } from "./providers";
 import { lineDiff } from "./pureFeatures";
 import { recordUsage } from "./usageLog";
 
@@ -56,7 +56,7 @@ export async function askDirect(
 ): Promise<{ label: string; text: string; refused?: boolean } | null> {
   const pick = parseDirectModel(model);
   if (!pick) return null;
-  const preset = PRESETS[pick.provider];
+  const preset = providerInfo(pick.provider);
   if (preset.needsKey && !providerKey(pick.provider)) return null;
   const label = `${preset.label} · ${pick.model}`;
   if (preset.kind === "anthropic") {

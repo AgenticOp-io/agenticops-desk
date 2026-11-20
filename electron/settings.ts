@@ -2,6 +2,7 @@ import { app } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serialized, writeJsonAtomic } from "./jsonStore";
+import { DEFAULT_LOCAL_MODEL, normalizeLocalModel } from "./localChoices";
 import { chatStorage, cursorMode } from "./pureFeatures";
 
 export type UiPrefs = {
@@ -25,8 +26,10 @@ export type UiPrefs = {
   autoModels: string[];
   // Direct model ("direct:<provider>:<model>") for ghost-text autocomplete in the editor; empty turns it off.
   autocomplete: string;
-  // Direct model that writes chat summaries and capsule results after each run; empty uses the plain brief. Per computer.
+  // Direct model that writes chat summaries and capsule results after each run; empty follows localModelId. Per computer.
   summarizer: string;
+  // Which local model writes the short notes, or "" for none. Per computer.
+  localModelId: string;
   // Stop a run once its cost passes this many dollars; 0 is off. Only engines that report cost can be capped.
   runBudgetUsd: number;
   /** How many of one manager's workers may run at once (1-20). Per computer. */
@@ -70,6 +73,7 @@ const defaults = (): UiPrefs => ({
   autoModels: [],
   autocomplete: "",
   summarizer: "",
+  localModelId: DEFAULT_LOCAL_MODEL,
   runBudgetUsd: 0,
   maxWorkers: 3,
   privacy: "protect",
@@ -89,6 +93,12 @@ function settingsFile() {
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
+}
+
+// The old 7B choice is cleared so the local-model picker decides. That file is no longer downloaded.
+function directChoice(value: unknown): string {
+  if (typeof value !== "string" || !value.startsWith("direct:")) return "";
+  return value === "direct:ollama:qwen2.5-coder:7b" ? "" : value;
 }
 
 function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
@@ -117,12 +127,18 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     activeFile: str(r.activeFile),
     draft: str(r.draft),
     theme: r.theme === "light" ? "light" : "dark",
-    reviewer: typeof r.reviewer === "string" && r.reviewer.startsWith("direct:") ? r.reviewer : "",
-    autocomplete: typeof r.autocomplete === "string" && r.autocomplete.startsWith("direct:") ? r.autocomplete : "",
-    summarizer: typeof r.summarizer === "string" && r.summarizer.startsWith("direct:") ? r.summarizer : "",
+    reviewer: directChoice(r.reviewer),
+    autocomplete: directChoice(r.autocomplete),
+    summarizer: directChoice(r.summarizer),
+    localModelId: normalizeLocalModel(r.localModelId),
     runBudgetUsd: typeof r.runBudgetUsd === "number" && r.runBudgetUsd > 0 && r.runBudgetUsd <= 1000 ? r.runBudgetUsd : 0,
     maxWorkers: clamp(Math.round(Number(r.maxWorkers)) || base.maxWorkers, 1, 20),
-    autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
+    autoModels: Array.isArray(r.autoModels)
+      ? r.autoModels
+          .filter((m): m is string => typeof m === "string")
+          .map((m) => (m === "direct:ollama:qwen2.5-coder:7b" ? `direct:ollama:${DEFAULT_LOCAL_MODEL}` : m))
+          .slice(0, 40)
+      : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
     cursorIntegration: cursorMode(r.cursorIntegration),
     chatStorage: chatStorage(r.chatStorage),

@@ -4,6 +4,7 @@ import { app, safeStorage } from "electron";
 import { credentialNote, isSavedLogin } from "./credentials";
 import { writeJsonAtomic } from "./jsonStore";
 import { providerBaseUrl, type ProviderId } from "./providers";
+import { isCustomProviderId } from "./pureFeatures";
 import { Vault } from "./redact";
 
 // Privacy Mode: passwords, keys and tokens are swapped for placeholders before anything reaches a model,
@@ -92,7 +93,7 @@ export function restoreIncoming(text: string): string {
 }
 
 export function isLocalProvider(id: ProviderId): boolean {
-  if (id !== "ollama") return false;
+  if (id !== "ollama" && !isCustomProviderId(id)) return false;
   try {
     const host = new URL(providerBaseUrl(id)).hostname.replace(/^\[|\]$/g, "");
     return host === "localhost" || host === "::1" || /^127\./.test(host);

@@ -27,6 +27,7 @@ import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
 import { ActivityLog } from "./ActivityLog";
 import { extractCodeBlocks } from "./codeBlocks";
+import { LOCAL_MODEL_CHOICES } from "../electron/localChoices";
 import { clamp, defaultPrefs, moveKey, PANELS, type PanelKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, BriefingItem, Team, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
 
@@ -3011,10 +3012,26 @@ export function App() {
                           ))}
                       </select>
                     </label>
+                    <label className="settings-row">
+                      <span>Local model for the short notes on this computer. None keeps a brief, and the agent can re-read details when it needs them.</span>
+                      <select
+                        value={prefs.localModelId}
+                        onChange={(e) => {
+                          const localModelId = e.target.value;
+                          setPrefs((p) => ({ ...p, localModelId }));
+                          void window.desk.saveSettings({ localModelId }).then(() => window.desk.setupLocalModel());
+                        }}
+                      >
+                        {LOCAL_MODEL_CHOICES.map((choice) => (
+                          <option key={choice.id || "none"} value={choice.id}>
+                            {choice.label} — {choice.detail}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <div className="settings-row">
                       <span>
-                        Set up a free local model: installs Ollama if it is missing, downloads qwen2.5-coder 7B (about 5 GB), and picks it
-                        here. It runs in the background.
+                        Downloads the model selected above and starts it in the background. Brief notes is about 1 GB. The others are about 2 GB.
                         {localModel.text && (
                           <span className="settings-hint" role="status">
                             {" "}

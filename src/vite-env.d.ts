@@ -63,6 +63,7 @@ export type ProviderStatus = {
   editableModels: boolean;
   models: string[];
   ready: boolean;
+  removable?: boolean;
 };
 export type ImageAttachment = { mediaType: string; data: string; name?: string };
 export type InstalledPlugin = { id: string; version?: string; scope?: string; enabled: boolean; installPath?: string };
@@ -227,6 +228,8 @@ declare global {
       listProviders: () => Promise<ProviderStatus[]>;
       setProvider: (id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) => Promise<ProviderStatus[]>;
       loadProviderModels: (id: string) => Promise<ProviderStatus[]>;
+      addProvider: (input: { label: string; baseUrl: string }) => Promise<ProviderStatus[]>;
+      removeProvider: (id: string) => Promise<ProviderStatus[]>;
       localModelStatus: () => Promise<{ running: boolean; text: string; ok?: boolean }>;
       setupLocalModel: () => Promise<{ running: boolean; text: string; ok?: boolean }>;
       onLocalModel: (cb: (s: { running: boolean; text: string; ok?: boolean }) => void) => () => void;
