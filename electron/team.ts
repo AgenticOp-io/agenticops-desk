@@ -8,6 +8,7 @@ import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setTo
 import { loadAgentSdk } from "./claudeBinary";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
+import { loadSettings } from "./settings";
 import { createWorktree, removeWorktree } from "./worktrees";
 
 // A manager chat gets "desk" tools to start, message and wait on worker chats. The window creates each worker
@@ -16,7 +17,6 @@ import { createWorktree, removeWorktree } from "./worktrees";
 
 export type Team = { managers: string[]; workers: Record<string, string> };
 
-const MAX_RUNNING = 3;
 // Under the agent's tool-call limit; the manager calls wait_for again if workers are still going.
 const WAIT_MS = 20 * 60_000;
 const TEXT_KEEP = 3000;
@@ -109,6 +109,7 @@ export function initTeam(window: () => BrowserWindow | null) {
     const t = load();
     if (!t.managers.includes(managerId) || t.workers[managerId]) return null;
     const { tool, createSdkMcpServer } = await loadAgentSdk();
+    const maxRunning = async () => (await loadSettings()).maxWorkers;
     const mine = (id: string) => t.workers[id] === managerId;
     const busy = (id: string) => !ended(id);
     // Retire finished-and-collected workers before each tool call, so the roster only ever holds live work.
@@ -155,7 +156,7 @@ export function initTeam(window: () => BrowserWindow | null) {
       ),
       tool(
         "start_chat",
-        `Start a worker chat in this project with its own task. It runs in its own git worktree by default, so workers don't edit the same files. At most ${MAX_RUNNING} of your workers run at once. Returns the worker's id; then call wait_for. When you are done with a worker (its result read), call close_worker so it is cleaned up rather than left around.`,
+        `Start a worker chat in this project with its own task. It runs in its own git worktree by default, so workers don't edit the same files. Only a limited number of your workers run at once (set in Settings; start_chat says when you hit it). Returns the worker's id; then call wait_for. When you are done with a worker (its result read), call close_worker so it is cleaned up rather than left around.`,
         {
           title: z.string().min(1).max(80).describe("Short title shown in the sidebar"),
           prompt: z.string().min(1).describe("The full task. The worker can't see your chat, so include everything it needs."),
@@ -174,7 +175,8 @@ export function initTeam(window: () => BrowserWindow | null) {
         async (args) => {
           await prune();
           const running = Object.keys(t.workers).filter((id) => mine(id) && busy(id)).length;
-          if (running >= MAX_RUNNING) return fail(`${running} of your workers are still running. Call wait_for first.`);
+          const limit = await maxRunning();
+          if (running >= limit) return fail(`${running} of your workers are still running and the limit is ${limit} (set in Settings). Call wait_for first.`);
           if (args.model && !models.some((m) => m.value === args.model)) return fail(`Unknown model "${args.model}". Choose one of: ${menu}`);
           const me = await manager();
           if (!me?.projectPath) return fail("This chat's project folder is not on this computer.");

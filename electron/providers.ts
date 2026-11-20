@@ -95,12 +95,14 @@ export const PRESETS: Record<ProviderId, Preset> = {
   },
 };
 
-type Stored = Partial<Record<ProviderId, { key?: string; models?: string[]; baseUrl?: string }>>;
+// keyRejected: the provider refused this key (401/403); cleared when a new key is saved or it works again.
+type Stored = Partial<Record<ProviderId, { key?: string; models?: string[]; baseUrl?: string; keyRejected?: boolean }>>;
 
 export type ProviderStatus = {
   id: ProviderId;
   label: string;
   hasKey: boolean;
+  keyRejected: boolean;
   needsKey: boolean;
   keyHint: string;
   baseUrl: string;
@@ -174,19 +176,30 @@ export function providerStatus(): ProviderStatus[] {
   return (Object.keys(PRESETS) as ProviderId[]).map((id) => {
     const preset = PRESETS[id];
     const hasKey = Boolean(load()[id]?.key);
+    const keyRejected = Boolean(load()[id]?.keyRejected);
     const models = modelsOf(id);
     return {
       id,
       label: preset.label,
       hasKey,
+      keyRejected,
       needsKey: preset.needsKey,
       keyHint: preset.keyHint,
       baseUrl: providerBaseUrl(id),
       editableModels: !preset.models,
       models,
-      ready: (hasKey || !preset.needsKey) && models.length > 0,
+      ready: (hasKey || !preset.needsKey) && !keyRejected && models.length > 0,
     };
   });
+}
+
+// Remembers whether the provider accepted the key, so the agent menu only lists providers that work.
+export function setKeyRejected(id: ProviderId, rejected: boolean) {
+  const cur = load()[id];
+  if (!cur || Boolean(cur.keyRejected) === rejected) return;
+  if (rejected) cur.keyRejected = true;
+  else delete cur.keyRejected;
+  save();
 }
 
 export function setProvider(id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) {
@@ -198,6 +211,7 @@ export function setProvider(id: string, patch: { key?: string | null; models?: s
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows could not encrypt the key, so it was not saved.");
     cur.key = safeStorage.encryptString(patch.key.trim()).toString("base64");
   }
+  if (patch.key !== undefined) delete cur.keyRejected;
   if (Array.isArray(patch.models)) {
     cur.models = patch.models.map((m) => m.trim()).filter(Boolean).slice(0, 30);
   }
@@ -213,34 +227,12 @@ export function setProvider(id: string, patch: { key?: string | null; models?: s
 }
 
 // Model picker entries for the Direct engine: value "direct:<provider>:<model>".
-// A provider that still needs a key or a model list stays in the menu so it can be set up there.
+// Only providers with a key that has not been rejected (or that need none) and a model list are listed;
+// the rest are set up in Settings → Providers.
 export function directModelOptions(): DirectModelOption[] {
-  return providerStatus().flatMap((p) => {
-    const group = `Direct · ${p.label}`;
-    if (p.ready) {
-      return p.models.map((m) => ({ value: `direct:${p.id}:${m}`, displayName: modelName(p.id, m), group }));
-    }
-    if (p.id === "anthropic") return [];
-    if (p.models.length && p.needsKey && !p.hasKey) {
-      return p.models.map((m) => ({
-        value: `direct:${p.id}:${m}`,
-        displayName: modelName(p.id, m),
-        group,
-        needsSetup: "key" as const,
-        description: p.keyHint,
-      }));
-    }
-    if (p.models.length) return [];
-    return [
-      {
-        value: `setup:${p.id}`,
-        displayName: p.needsKey && !p.hasKey ? "Add API key…" : "Load models…",
-        group,
-        needsSetup: p.needsKey && !p.hasKey ? ("key" as const) : ("models" as const),
-        description: p.keyHint,
-      },
-    ];
-  });
+  return providerStatus()
+    .filter((p) => p.ready)
+    .flatMap((p) => p.models.map((m) => ({ value: `direct:${p.id}:${m}`, displayName: modelName(p.id, m), group: `Direct · ${p.label}` })));
 }
 
 // Asks the provider for its model list and stores the chat models. Claude's list is fixed.
@@ -260,7 +252,9 @@ export async function pullProviderModels(id: string): Promise<void> {
   } catch (err) {
     throw new Error(`${preset.label} did not answer: ${err instanceof Error ? err.message : String(err)}`);
   }
+  if (res.status === 401 || res.status === 403) setKeyRejected(id, true);
   if (!res.ok) throw new Error(`${preset.label} returned ${res.status} when listing models.`);
+  setKeyRejected(id, false);
   const body = (await res.json()) as { data?: Array<{ id?: string }> };
   const ids = chatModelIds((body.data ?? []).map((m) => m.id ?? ""));
   if (!ids.length) throw new Error(`${preset.label} did not list any chat models.`);

@@ -843,6 +843,32 @@ test("the installer choice is Git, Local, or Hybrid, and import is only an expli
   assert.equal(installChoices(null), null);
 });
 
+test("ops triage only runs commands that change nothing and stay in the repository", async () => {
+  const { readOnlyOpsCommand } = await import("./pureFeatures.ts");
+  for (const ok of ["git status", "git log --oneline -5", "git diff HEAD~1 -- src", "git log main..HEAD", "git branch -a", "git remote -v", "git stash list", "gh run list --limit 3", "gh auth status", "gh api repos/o/r/actions/runs --jq .total_count"]) {
+    assert.ok(readOnlyOpsCommand(ok), ok);
+  }
+  for (const bad of [
+    "git branch -D main",
+    "git branch newname",
+    "git remote -v add x https://evil",
+    "git log --output=C:/x.txt",
+    "git diff --no-index a b",
+    "git diff /dev/null C:/Users/x/.ssh/id_rsa",
+    "git diff ../../secret.txt x",
+    "git push",
+    "git status; rm -rf x",
+    "gh auth status --show-token",
+    "gh auth status -t",
+    "gh api repos/o/r/actions/runs/1 -X DELETE",
+    "gh api repos/o/r/actions/runs -f a=b",
+    "gh api user",
+    "gh release create v1",
+  ]) {
+    assert.equal(readOnlyOpsCommand(bad), null, bad);
+  }
+});
+
 test("the newest tag is the highest release", async () => {
   const { newestTag } = await import("./pureFeatures.ts");
   assert.equal(newestTag(["refs/tags/v0.1.16", "refs/tags/v0.1.18", "refs/tags/v0.1.18^{}", "refs/tags/v0.1.17"], "0.1.17"), "v0.1.18");

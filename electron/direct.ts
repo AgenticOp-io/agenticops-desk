@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { app, type BrowserWindow } from "electron";
+import { recordActivity } from "./activityLog";
 import { fillCredentials } from "./credentials";
 import {
   approveLogins,
@@ -39,7 +40,7 @@ import { generateLocally } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
-import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
+import { PRESETS, providerBaseUrl, providerKey, setKeyRejected, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { healHistory } from "./healHistory";
 import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
@@ -174,7 +175,8 @@ async function walk(dir: string, out: string[], max: number) {
   }
   for (const e of entries) {
     if (out.length >= max) return;
-    if (SKIP.has(e.name)) continue;
+    // A link could point outside the project, and search reads what it lists without asking.
+    if (SKIP.has(e.name) || e.isSymbolicLink()) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) await walk(full, out, max);
     else out.push(full);
@@ -311,6 +313,13 @@ async function fitResult(name: string, text: string): Promise<string> {
 }
 
 async function runPrivateTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
+  const r = await guardedTool(ctx, name, input, id);
+  // Name and outcome only: the activity log never holds command text or output.
+  recordActivity({ kind: "tool", chatId: ctx.chatId, action: name, outcome: r.error ? "failed" : "ok" });
+  return r;
+}
+
+async function guardedTool(ctx: Ctx, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; error?: boolean }> {
   if (!protecting()) {
     const plain = await runTool(ctx, name, input, id);
     return { ...plain, text: await fitResult(name, plain.text) };
@@ -967,7 +976,8 @@ export function runDirect(opts: {
     } catch (err) {
       if (!abort.signal.aborted) {
         if (err instanceof Anthropic.AuthenticationError || err instanceof OpenAI.AuthenticationError) {
-          failed = `${preset.label} rejected the API key. Check it in Settings.`;
+          failed = `${preset.label} rejected the API key, so its models are hidden from the agent menu until you save a new key in Settings.`;
+          setKeyRejected(opts.provider, true);
         } else if (err instanceof Anthropic.APIError || err instanceof OpenAI.APIError) {
           failed = `${preset.label}: ${err.message}`;
         } else {

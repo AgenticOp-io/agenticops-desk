@@ -774,6 +774,9 @@ export function App() {
 
   // Changes live in the main process, so a chat opened later still shows what Claude changed in it.
   const activeChatId = activeChat?.id;
+
+  // Canvas lives in its own window, opened by the agent's show_canvas tool or by the Canvas button.
+  const openCanvas = () => activeChatId && void window.desk.canvasOpen(activeChatId);
   useEffect(() => {
     if (!activeChatId) {
       setWatches([]);
@@ -1351,7 +1354,7 @@ export function App() {
     { id: "git", label: "Git", run: () => setDock("git") },
     { id: "preview", label: "Preview a page", run: () => setDock("preview") },
     { id: "notes", label: "Project instructions and MCP", run: () => setDock("notes") },
-    { id: "canvas", label: "Canvas: draw and export", run: () => setDock("canvas") },
+    { id: "canvas", label: "Canvas: reports and diagrams the agent made", run: openCanvas },
     { id: "rules", label: "Standing orders: protected paths and checks", run: () => setDock("rules") },
     { id: "inbox", label: "Decisions inbox", run: () => setInboxOpen(true) },
     { id: "briefing", label: "Briefing: where every chat stands", run: () => showBriefing() },
@@ -2195,7 +2198,7 @@ export function App() {
               {activeChat && (
                 <WorktreeChip chatId={activeChat.id} folder={activeChat.projectPath ?? ""} running={running} onNote={setStatus} />
               )}
-              {(["terminal", "git", "preview", "notes", "rules", "canvas"] as DockTab[]).map((tab) => (
+              {(["terminal", "git", "preview", "notes", "rules"] as DockTab[]).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -2209,6 +2212,9 @@ export function App() {
                   {tab === "notes" ? "Instructions" : tab[0].toUpperCase() + tab.slice(1)}
                 </button>
               ))}
+              <button type="button" className="ghost" onClick={openCanvas} title="Open this chat's Canvas in its own window">
+                Canvas
+              </button>
               <span className="grow" />
               <button
                 className="ghost"
@@ -3033,6 +3039,17 @@ export function App() {
                         {[1, 2, 5, 10, 25, 50].map((n) => (
                           <option key={n} value={String(n)}>
                             ${n} per run
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="settings-label">Manager chats</div>
+                    <label className="settings-row">
+                      <span>How many of a manager's worker chats may run at once. More finish sooner but use more of your allowance at the same time. Applies to the next worker a manager starts; a manager chat that is already open still tells the agent the old number until you start a new one.</span>
+                      <select value={String(prefs.maxWorkers)} onChange={(e) => patchPrefs({ maxWorkers: Number(e.target.value) })}>
+                        {[1, 2, 3, 4, 5, 6, 8, 10, 15, 20].map((n) => (
+                          <option key={n} value={String(n)}>
+                            {n}
                           </option>
                         ))}
                       </select>

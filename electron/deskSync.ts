@@ -38,6 +38,7 @@ import {
 import { privacyVault } from "./privacy";
 import { hideForSync, hideThreadForSync } from "./redact";
 import { loadSettings, patchSettings, type UiPrefs } from "./settings";
+import { canvasFile, deleteCanvas } from "./canvas";
 
 // The desk's own copy of chats, memory and settings. Project source stays in each project's repo.
 // Two computers changing the same chat merge by message. A push that loses the race takes the other commit and merges again.
@@ -224,7 +225,7 @@ async function listFiles(root: string): Promise<string[]> {
       return;
     }
     for (const entry of entries) {
-      if (entry.name === ".git" || entry.name === ".prompts" || entry.name.endsWith(".tmp")) continue;
+      if (entry.name === ".git" || entry.name === ".prompts" || entry.name.endsWith(".tmp") || entry.isSymbolicLink()) continue;
       const child = rel ? path.join(rel, entry.name) : entry.name;
       if (entry.isDirectory()) await walk(child);
       else out.push(child);
@@ -271,6 +272,8 @@ async function ensureRepo(dir: string, remote: string): Promise<{ ok: boolean; o
   // Commits here are the app's own; git refuses to commit on a computer with no name set.
   await runGit(dir, ["config", "user.name", "AgenticOps Desk"]);
   await runGit(dir, ["config", "user.email", "desk@agenticop.io"]);
+  // A link committed to the repository must stay a plain file: copied through, it would read or overwrite any file here.
+  await runGit(dir, ["config", "core.symlinks", "false"]);
   const ignore = path.join(dir, ".gitignore");
   if (!existsSync(ignore)) await fs.writeFile(ignore, "*.tmp\n", "utf8");
   const attrs = path.join(dir, ".gitattributes");
@@ -469,6 +472,8 @@ async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<st
     }
     await fs.rm(local, { force: true }).catch(() => undefined);
     await fs.rm(path.join(remoteDir, `${id}.json`), { force: true }).catch(() => undefined);
+    await deleteCanvas(id);
+    await fs.rm(path.join(dir, "canvas", `${id}.json`), { force: true }).catch(() => undefined);
   }
   for (const chat of chats) {
     if (!THREAD_ID.test(chat.id)) continue;
@@ -482,7 +487,26 @@ async function mergeThreadFiles(dir: string, chats: SyncChat[], previous: Map<st
       await pushThread(local, remote).catch((err) => console.error(`AgenticOps Desk did not sync thread ${chat.id}`, err));
     }
     else if (existsSync(remote)) await copyIfDifferent(remote, local);
+    await syncCanvas(chat.id, dir, remoteNewer).catch((err) => console.error(`AgenticOps Desk did not sync canvas ${chat.id}`, err));
   }
+}
+
+// The Canvas document of a chat (canvas/<id>.json) is one whole file, not merged. A canvas edited on this
+// computer since the last sync is pushed; otherwise the synced copy is taken. Remote file times are useless
+// (a pull rewrites them), so the local edit is judged by the mtime this sync last saw.
+async function syncCanvas(id: string, dir: string, remoteNewer: boolean) {
+  const local = canvasFile(id);
+  const remote = path.join(dir, "canvas", `${id}.json`);
+  const hasLocal = existsSync(local);
+  const seen = pushedAt.get(local);
+  // First sync since start: no record, so fall back to which side's chat changed last.
+  const localEdited = hasLocal && (seen === undefined ? !remoteNewer : (await fs.stat(local)).mtimeMs !== seen);
+  if (existsSync(remote) && !localEdited) await copyIfDifferent(remote, local);
+  else if (hasLocal) {
+    const doc = JSON.parse(await fs.readFile(local, "utf8")) as unknown;
+    await writeIfDifferent(Buffer.from(JSON.stringify(hideThreadForSync(doc, privacyVault().pinnedValues()))), remote);
+  }
+  if (existsSync(local)) pushedAt.set(local, (await fs.stat(local)).mtimeMs);
 }
 
 // Both copies exist: merge by message, so two computers adding to one chat both keep their turns.

@@ -47,7 +47,7 @@ function ProviderRow({ p, onSaved }: { p: ProviderStatus; onSaved: (list: Provid
       <div className="provider-head">
         <strong>{p.label}</strong>
         <span className={`provider-state ${p.ready ? "on" : ""}`}>
-          {p.ready ? "Ready" : p.needsKey && !p.hasKey ? "No key" : "Add a model"}
+          {p.ready ? "Ready" : p.keyRejected ? "Key rejected" : p.needsKey && !p.hasKey ? "No key" : "Add a model"}
         </span>
       </div>
       <p className="settings-hint">{p.keyHint}</p>

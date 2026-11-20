@@ -13,6 +13,7 @@ import "@fontsource/source-serif-4/latin-600-italic.css";
 import "@fontsource/source-serif-4/latin-700.css";
 import "katex/dist/katex.min.css";
 import { App } from "./App";
+import { Canvas } from "./Canvas";
 
 // A render error in any component would otherwise blank the whole window; this keeps a way back.
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
@@ -37,10 +38,11 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
 }
 import "./styles.css";
 
+// The Canvas popup is this same page opened with ?canvas=<chatId>.
+const canvasChat = new URLSearchParams(location.search).get("canvas");
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
+    <ErrorBoundary>{canvasChat ? <Canvas chatId={canvasChat} /> : <App />}</ErrorBoundary>
   </React.StrictMode>,
 );

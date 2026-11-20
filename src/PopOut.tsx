@@ -53,7 +53,8 @@ function Window({
   closeRef.current = onClose;
 
   useEffect(() => {
-    // main.ts only lets "desk-popout-" windows open.
+    // main.ts only lets a "desk-popout-" window open right after the page asked for it, so a preview frame can't.
+    window.desk.expectPopout(`desk-popout-${name}`);
     const w = window.open("", `desk-popout-${name}`, `width=${width},height=${height}`);
     if (!w) {
       setFailed(true);

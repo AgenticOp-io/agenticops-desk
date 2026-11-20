@@ -194,6 +194,7 @@ type Session = {
   fixAttempts?: number;
   // This run's check commands by tool call id, the ones that passed, and the final reply: its capsule.
   gateCalls?: Map<string, string>;
+  toolNames?: Map<string, string>; // tool_use id -> tool name, until its result is logged
   passedGates?: string[];
   finalText?: string;
   // Short names of tools this run already used, so a compact can continue without the tool log.
@@ -352,13 +353,14 @@ export function onChatEvent(fn: (event: ClaudeEvent) => void) {
 // Extra in-process tool servers for a chat's runs: the desk tools shared by every chat (ops), and a
 // manager chat's desk tools (team.ts). All registered providers run and their tools merge into the run.
 type ToolServers = { servers: Record<string, McpServerConfig>; allowed: string[] };
-const toolServerProviders: Array<(chatId: string, signal: AbortSignal) => Promise<ToolServers | null>> = [];
-export function setToolServers(fn: (chatId: string, signal: AbortSignal) => Promise<ToolServers | null>) {
+type ToolServerProvider = (chatId: string, signal: AbortSignal, cwd: string) => Promise<ToolServers | null>;
+const toolServerProviders: ToolServerProvider[] = [];
+export function setToolServers(fn: ToolServerProvider) {
   toolServerProviders.push(fn);
 }
 
-async function mergedToolServers(chatId: string, signal: AbortSignal): Promise<ToolServers | null> {
-  const results = await Promise.all(toolServerProviders.map((fn) => fn(chatId, signal).catch(() => null)));
+async function mergedToolServers(chatId: string, signal: AbortSignal, cwd: string): Promise<ToolServers | null> {
+  const results = await Promise.all(toolServerProviders.map((fn) => fn(chatId, signal, cwd).catch(() => null)));
   const servers: Record<string, McpServerConfig> = {};
   const allowed: string[] = [];
   for (const r of results) {
@@ -757,6 +759,7 @@ function announceTool(
   if (id) {
     session.announcedTools ??= new Set();
     session.announcedTools.add(id);
+    (session.toolNames ??= new Map()).set(id, name);
   }
   const activity = describeTool(name, input);
   const trace = (session.trace ??= []);
@@ -933,6 +936,11 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
         const r = b as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
         const gate = r.type === "tool_result" && r.tool_use_id ? session.gateCalls?.get(r.tool_use_id) : undefined;
         if (gate && gatePassed(r)) (session.passedGates ??= []).push(gate);
+        const tool = r.type === "tool_result" && r.tool_use_id ? session.toolNames?.get(r.tool_use_id) : undefined;
+        if (tool) {
+          session.toolNames!.delete(r.tool_use_id!);
+          recordActivity({ kind: "tool", chatId, action: tool, outcome: r.is_error ? "failed" : "ok" });
+        }
       }
       if (!session.approvals.size) sendPhase(win, chatId, session, "thinking", "Thinking…");
       return;
@@ -1861,7 +1869,7 @@ export function runClaude(opts: RunOptions) {
       }
       const { query } = await loadAgentSdk();
       const { runBudgetUsd } = await loadSettings();
-      const extra = await mergedToolServers(chatId, abort.signal);
+      const extra = await mergedToolServers(chatId, abort.signal, cwd);
       if (session.abort !== abort) return;
       let turnStream = stream;
       let resumeId = resuming ? session.claudeSession : undefined;

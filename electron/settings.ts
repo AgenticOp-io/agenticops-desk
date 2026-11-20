@@ -29,6 +29,8 @@ export type UiPrefs = {
   summarizer: string;
   // Stop a run once its cost passes this many dollars; 0 is off. Only engines that report cost can be capped.
   runBudgetUsd: number;
+  /** How many of one manager's workers may run at once (1-20). Per computer. */
+  maxWorkers: number;
   privacy: "standard" | "protect" | "local";
   /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
   cursorIntegration: "off" | "partial" | "full";
@@ -69,6 +71,7 @@ const defaults = (): UiPrefs => ({
   autocomplete: "",
   summarizer: "",
   runBudgetUsd: 0,
+  maxWorkers: 3,
   privacy: "protect",
   cursorIntegration: "off",
   chatStorage: "",
@@ -118,6 +121,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     autocomplete: typeof r.autocomplete === "string" && r.autocomplete.startsWith("direct:") ? r.autocomplete : "",
     summarizer: typeof r.summarizer === "string" && r.summarizer.startsWith("direct:") ? r.summarizer : "",
     runBudgetUsd: typeof r.runBudgetUsd === "number" && r.runBudgetUsd > 0 && r.runBudgetUsd <= 1000 ? r.runBudgetUsd : 0,
+    maxWorkers: clamp(Math.round(Number(r.maxWorkers)) || base.maxWorkers, 1, 20),
     autoModels: Array.isArray(r.autoModels) ? r.autoModels.filter((m): m is string => typeof m === "string").slice(0, 40) : [],
     privacy: r.privacy === "standard" || r.privacy === "local" ? r.privacy : "protect",
     cursorIntegration: cursorMode(r.cursorIntegration),

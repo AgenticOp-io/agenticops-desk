@@ -2,6 +2,16 @@
 
 What AgenticOps Desk does and how to use it. The same material, shorter, is in the app under **Help** (F1). For how it is built, see [ARCHITECTURE.md](./ARCHITECTURE.md). For what protects your secrets and where that stops, see [SECURITY.md](./SECURITY.md).
 
+## Quick start
+
+1. **Sign in** under **Settings → Engine & sign-in**. The first chat downloads the agent engine once.
+2. **Add** a project folder in the sidebar, then **New chat** (Ctrl+N).
+3. Type what you want and press **Enter**. The agent edits files and runs commands. The first command in a folder asks once; after you allow it, ordinary coding runs without asking.
+4. Review what changed on the **change bar** under the chat: **Keep** or **Undo** each file.
+5. Optional, all in Settings: **Set up local model** (cheaper follow-ups), **Sync** (your other computers), **Direct AI providers** (other models), **Privacy Mode** (on already).
+
+Stuck? **F1** opens Help, and **Ctrl+Shift+P** searches every action.
+
 ## Contents
 
 - [The window](#the-window)
@@ -19,6 +29,9 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 - [Deleting a project from the disk](#deleting-a-project-from-the-disk)
 - [Files and the editor](#files-and-the-editor)
 - [Around the chat](#around-the-chat)
+- [Manager chats](#manager-chats)
+- [Canvas](#canvas)
+- [Activity log and recovery](#activity-log-and-recovery)
 - [Memory](#memory)
 - [Plugins](#plugins)
 - [Updates](#updates)
@@ -32,7 +45,7 @@ What AgenticOps Desk does and how to use it. The same material, shorter, is in t
 - **Separate windows:** under Settings › Appearance › **Open in their own window**, tick any of Chats, Files, Waiting on you, Chat status, Help and Settings. A ticked panel opens as its own window, which you can move beside the chat, and it stays in sync with the main window. Its top-bar button opens or closes that window. Help and Settings are ticked to start with. When both Chats and Files are ticked, the sidebar goes away and the chat uses the full width. If a window can't open, the panel shows inside the main window instead.
 - **Left side:** projects and chats, or the folder tree.
 - **Right side:** the conversation and message box. **Code** opens the editor beside it.
-- **Under the message box:** Terminal, Git, Preview, Instructions and Rules.
+- **Under the message box:** Terminal, Git, Preview, Instructions and Rules. **Canvas** opens in its own window.
 
 There is no status bar. Sign-in state and the agent engine's state are in **Settings → Engine & sign-in**. If you are signed out, sending a message shows the error in the chat.
 
@@ -45,10 +58,12 @@ There is no status bar. Sign-in state and the agent engine's state are in **Sett
 | **Appearance** | Theme, window font size, agent list font size |
 | **Privacy & logins** | Privacy Mode, Always hide these values, Saved logins |
 | **Sync** | The sync repository, and what Cursor chats do |
-| **Chats & projects** | Hidden items, Project cleanup, Where chats live, Import from other tools, and Cursor folders in Git mode |
+| **Chats & projects** | Hidden items, Project cleanup, Where chats live, Import from other tools, Older chats, and Cursor folders in Git mode |
 | **Engine & sign-in** | Claude Code status, Sign in, Check |
-| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Summaries, Spending cap, Auto model |
+| **AI models** | Direct AI providers, Second opinion, Editor autocomplete, Summaries and the local model, Spending cap, Manager chats (worker limit), Auto model |
+| **Instructions & rules** | What the agent reads (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`) and the standing orders the app enforces |
 | **Usage** | Plan limits, and tokens and cost per engine, provider and model |
+| **Activity log** | Recent runs, tool calls, git operations, approvals and errors |
 | **Plugins** | Browse, install and manage plugins |
 | **Updates** | Check for a newer release, and Restart to update |
 
@@ -92,10 +107,38 @@ The list has three sections, top to bottom:
 
 ## Chats
 
-- A follow-up does not resume the earlier session and does not send the transcript again. After each run a local model writes a short summary of the chat. The next message carries that summary, plus a short local reading of the project (what changed, which files matter), plus work already verified in this chat, and the new request. A long file read or search is shortened before the paid model sees it. If a run re-reads about 1.5 million tokens of its own tool output, it stops and continues from a short packet. Each chat starts on Sonnet. The local model reads that chat’s record and the new message and can step the chat up to Opus; it does not take the chat unless you pick it in the menu. Sending the same request again, or switching the menu to a heavier model, moves that chat up. Several messages you accept move it back down. Auto tries the signed-in agent first, and a local model only when the others are unavailable. Attached images are described on this computer and the image itself is not sent when that works. A second opinion uses the local model unless you pick another, and a fix round starts fresh instead of resuming the large session. A note says the earlier tokens were left out. If the local model is off or the summary is not ready, the message carries a short brief of the first request and the latest replies instead. A message sent while a run is still going joins that run. A run cut off by quitting resumes its session if it is still recent; after about 45 minutes it asks you to send again, and that message continues from the summary. Each run whose checks (type check, tests, lint, build, commit) passed after its last edit leaves a small record of what was asked, the result, and the files it changed. A record is left out once one of those files changes, so the agent trusts only what still holds and does not re-check it. The summary also shortens a long record. **Settings → AI models → Summaries** uses the local model unless you pick another one. **Set up local model** there (or the box on the installer's last page) downloads and silently installs Ollama if it is missing, after checking that Ollama Inc. signed the installer, starts it, and downloads qwen2.5-coder 7B (about 5 GB). Project memory still applies, and the agent opens a file again only to change it.
+### How a follow-up works
+
+A follow-up does **not** resume the old session or resend the transcript. That keeps long chats cheap. Instead, the next message carries:
+
+1. **A short summary** of the chat, written on this computer by a local model after each run.
+2. **The last two replies, word for word**, and any older markdown tables, so a table or plan you were just given is never lost to the summary.
+3. **Work already verified.** A run whose checks (type check, tests, lint, build, commit) passed after its last edit leaves a small record: what was asked, the result and the files changed. The record is dropped once one of those files changes, so the agent trusts only what still holds and does not re-check it.
+4. **A short local reading of the project** (what changed, which files matter), then your new request.
+
+Project memory still applies, and the agent opens a file again only to change it.
+
+If the local model is off or the summary isn't ready, the message carries a short brief of the first request and the latest replies instead. **Settings → AI models → Summaries** picks a different summary model.
+
+### Keeping costs down
+
+- **Long output is shortened** before the paid model sees it: a long file read, search or command result keeps its head and tail. A run that re-reads about 1.5 million tokens of its own tool output stops and continues from a short packet, with a note.
+- **Each chat starts on Sonnet.** A local model reads the chat's record and the new message and can step it up to Opus. It never takes the chat unless you pick it in the menu. Sending the same request again, or switching the menu to a heavier model, moves the chat up; several accepted messages move it back down. Auto tries the signed-in agent first and uses a local model only when the others are unavailable.
+- **Images are described on this computer** and the image itself isn't sent when that works.
+- **A second opinion** uses the local model unless you pick another, and a fix round starts fresh instead of resuming the large session, with a note that the earlier tokens were left out.
+- **Memory is fixed for the length of a chat's cache.** A memory written mid-chat reaches that chat's next run only after the cache has expired, so it doesn't invalidate the cached start of the conversation every turn.
+- **Cold-cache warning.** A chat idle for a while loses its cache. If you continue one that was working about 45 minutes ago or more, a note says continuing resends the whole session and costs more than usual.
+- **Interrupted runs.** A message sent while a run is going joins that run. A run cut off by quitting resumes its session if it is still recent (under about 45 minutes); after that it asks you to send again, and that message continues from the summary.
+
+### Local model
+
+**Settings → AI models → Summaries → Set up local model** (or the box on the installer's last page) downloads llama.cpp's small server and a 7B coding model (about 4.5 GB, the sizes are checked as they download), starts it on this computer, and turns Summaries on. No Ollama install is needed. Loading runs at low priority so the window keeps responding, and the server stops when you quit. Progress shows in Settings; if it fails, for example with no network, press the button again.
+
+### Working in a chat
+
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.
 - Several chats can run at once. **Stop** ends only the chat on screen.
-- **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. While the model is reasoning, that reasoning streams in the round and folds away when the reply starts. Open **Thought** to read it again. It stays in the chat and is not sent back on the next command. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
+- **Rounds:** each message you send starts a round: your request, a record of the work that stays open while it runs and folds away when the reply is in, then the reply. While the model is reasoning, that text streams in the round and folds away when the reply starts. Open **Thought** to read it again. It stays in the chat and is not sent back on the next command. An instruction sent mid-run joins the same round. A plan or task list the agent writes shows above the messages. Long chats show the latest rounds; earlier ones open from the top.
 - **Notifications:** when a chat finishes or needs you and the window isn't in front, a desktop notice appears. Clicking it brings the window back, even from the tray.
 - Closing the window while a chat is working hides the app to the tray and keeps going. **Quit** from the tray icon stops it. A run cut off by quitting resumes the next time you send.
 - Closing the window when nothing is running saves open chats first. On macOS the app stays open after its window closes, and a reopened window saves its chats the same way.
@@ -143,7 +186,7 @@ The list has three sections, top to bottom:
 Picked in the model menu, per chat. The menu opens a submenu for each engine or provider, and Claude models sit in a submenu per family (Fable, Opus, Sonnet, Haiku): **Claude Code → Opus → Opus 4.6**, for example. Under Claude Code, each family starts with **Latest**, which follows your sign-in's newest model, then every fixed version. Auto uses the default and Latest entries, not the fixed versions, since they share one sign-in's limits.
 
 - **Claude Code** (default): the official agent, using your Claude sign-in and subscription. No separate CLI install is needed. The installer doesn't contain the agent itself: the first chat downloads Anthropic's agent SDK and the engine for this computer from npm (about 270 MB), checks npm's SHA-512 fingerprint, and keeps them in the app's data folder. Progress shows as a message. A new app version that needs a newer engine downloads it once and removes the old one.
-- **Direct:** the app's own agent loop, calling the Claude API (every model it still serves: Fable 5.2 to 5, Opus 5.5 to 4.5, Sonnet 5.5 to 4.5, and Haiku 5.5 and 4.5; Mythos and the retired Opus 4.1, Opus 4 and Sonnet 4 are not listed), OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. **Cloud GPU** is your own Ollama server reached through an SSH tunnel at `localhost:11435`; start the server and the tunnel yourself, then **Load models**. It counts as a cloud provider, so Privacy Mode still hides secrets before they are sent. DeepSeek's models are in the model menu; pick one and paste the key there. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought. A new command stops the DeepSeek reply that is streaming and any command it is running, and the run continues with your command. A failed call, such as a rejected key or a rate limit, still shows as an error. The other providers load their model list when you add a key, from the menu or from **Settings → AI models → Direct AI providers**.
+- **Direct:** the app's own agent loop, calling the Claude API (every model it still serves: Fable 5.2 to 5, Opus 5.5 to 4.5, Sonnet 5.5 to 4.5, and Haiku 5.5 and 4.5; Mythos and the retired Opus 4.1, Opus 4 and Sonnet 4 are not listed), OpenAI, OpenRouter, Google Gemini, DeepSeek, or Ollama with your key. Billed per token by that provider, except local Ollama. **Cloud GPU** is your own Ollama server reached through an SSH tunnel at `localhost:11435`; start the server and the tunnel yourself, then **Load models**. It counts as a cloud provider, so Privacy Mode still hides secrets before they are sent. The model menu lists only providers that are ready to use: add a key (and, where needed, **Load models**) in **Settings → Providers** first. If a provider rejects its key, its models leave the menu and Settings shows **Key rejected** until you save a new key. Agent runs turn DeepSeek thinking off, so a tool round does not wait out a chain of thought. A new command stops the DeepSeek reply that is streaming and any command it is running, and the run continues with your command. A failed call, such as a rejected key or a rate limit, still shows as an error. The other providers load their model list when you add a key, from the menu or from **Settings → AI models → Direct AI providers**.
 - **Auto:** uses all of these, or the ones you pick in **Settings → AI models → Auto model**, in your order. On a rate limit, quota error, rejected key, unreachable service or refusal, the message moves to the next AI and the failed one rests for a few minutes. Errors about the work itself, such as a failing test, do not switch AIs. A chat keeps the AI that last worked for it, and a label next to the model menu says which one answered. If an AI fails after changing files, the next one is told which files. Settings shows which AIs are resting, and **Try it again now** wakes one early.
 - **Second opinion:** a model from another provider reviews each change against your request, and sends concerns back to the agent, for up to two rounds.
 - **MCP servers on Direct:** Direct chats use the same MCP servers as the default engine: the project's `.mcp.json`, and the servers in your user settings (`~/.claude.json`). A server from the project's `.mcp.json` came with the repository, so the chat asks once before starting it, and again if that entry changes. Each tool call goes through the same permissions as the agent's other tools. Servers stop after 15 minutes unused. Plugins' own servers still need the default engine.
@@ -281,7 +324,6 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 
 ## Around the chat
 
-- **Manager chats:** right-click a chat and choose **Make manager**. It can then start worker chats in the same project, send them follow-ups, and wait for their results, so one agent can split a job across several. Each worker is an ordinary chat: it shows in Chats, its questions and approvals come to you in Waiting on you (the manager can't answer them). Allow on a worker trusts that worker's folder only; if the manager's folder is already trusted, the worker does not ask again, and Chat status lists it. Workers run in their own git worktree unless the manager says otherwise, at most three of a manager's workers run at once, and a worker can't become a manager itself. The manager picks each worker's model to fit its task, from every AI that's ready in your model menu: the default engine's models and each Direct provider you've added a key for, such as DeepSeek. Cheap, fast models get simple, mechanical work, mid models ordinary coding, and the strongest hard design and debugging. Providers still waiting on a key aren't offered. With a follow-up it can also move a finished worker to another model, keeping its conversation: up a tier when the result is wrong or stuck, down for easy leftovers, or to another provider when one hits a usage limit. The worker's model menu shows the choice, and you can change it. The chat header shows **Manager · n running** on a manager, and **Worker of …** on a worker, which opens its manager. Next to **Manager · n running**, each running worker has a bubble: click it to watch that worker live in its own window, with its commands, their output and its replies as they arrive. Click **Manager · n running** to pick any of its workers, finished ones too. **Open chat** in that window opens the worker in the main window so you can reply to it. A manager needs the default engine; on a Direct model it has no worker tools. Each worker's run has the same spending cap as any run.
 
 - **Terminal:** a shell in the project, up to three at once. Output keeps collecting while the panel is hidden, and Restart ends the shell and everything it started.
 - **Git:** branch, changes, commit, fetch, pull, push, checkout, history, and a pull request through GitHub's `gh` command.
@@ -290,6 +332,38 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 - **Rules:** standing orders for the folder: rules added to every run, paths the agent may not edit, and checks that must pass. Checks run on both engines when a run changed files. A failure goes back to the agent with the output, up to the attempt limit you set. A team can commit `.agenticops/orders.json` with rules and protected paths. Any `checks` in that file are ignored, so a cloned repository can't run commands by itself.
 - **Waiting on you** (the inbox) lists everything waiting on you across chats: a permission request from another chat waits there instead of covering the chat you are in. **Chat status** (the briefing) shows where the last three days of chats stand, and opens by itself when you come back after 8 hours away. **Ctrl+Shift+P** opens the command palette.
 - Links in replies, and pages that try to open a new window, open in your browser. The Preview frame is sandboxed and can't take over the app's window.
+
+## Manager chats
+
+Right-click a chat and choose **Make manager**. A manager can start worker chats in the same project, send them follow-ups and wait for their results, so one agent can split a job across several. A manager needs the default engine; on a Direct model it has no worker tools.
+
+**Workers**
+
+- Each worker is an ordinary chat. It shows in Chats, and its questions and approvals come to you in **Waiting on you**; the manager can't answer them.
+- **Allow** on a worker trusts that worker's folder only. If the manager's folder is already trusted, the worker doesn't ask again, and Chat status lists it.
+- Workers run in their own git worktree unless the manager says otherwise, and a worker can't become a manager.
+- Each worker's run has the same spending cap as any run.
+- **How many run at once:** **Settings → AI models → Manager chats** (default 3, up to 20). More workers finish sooner but use more of your allowance at the same time. A change applies to the next worker a manager starts; a manager chat that is already open keeps telling the agent the old number until you start a new one.
+
+**Models.** The manager picks each worker's model to fit its task, from every AI that is ready in your model menu: the default engine's models and each Direct provider you've added a key for. Cheap, fast models get simple mechanical work, mid models ordinary coding, and the strongest hard design and debugging. With a follow-up it can move a finished worker to another model and keep its conversation: up a tier when the result is wrong or stuck, down for easy leftovers, or to another provider when one hits a usage limit. The worker's model menu shows the choice, and you can change it.
+
+**Watching.** The chat header shows **Manager · n running** on a manager and **Worker of …** on a worker, which opens its manager. Each running worker has a bubble next to the manager label: click it to watch that worker live in its own window, with its commands, their output and its replies as they arrive. Click **Manager · n running** to pick any of its workers, finished ones too. **Open chat** in that window opens the worker in the main window so you can reply.
+
+## Canvas
+
+**Canvas** is where the agent shows what it makes for you: reports, network and architecture diagrams, charts, tables and one-page summaries. Ask for one ("draw a network diagram of these servers", "write this up as a report") and it opens in its own window. The agent fills it with its `show_canvas` tool, as an HTML page, an SVG picture or Markdown.
+
+- **Export:** PDF (real text, not a picture), PNG (one tall image, up to 16,000 px), HTML, SVG for a diagram, Markdown for a text document.
+- **One per chat.** Each chat has its own canvas; asking again replaces it and updates the open window. The **Canvas** button in the chat header reopens it.
+- **Part of the chat.** It is saved in `canvas/<chat id>.json` in the app data folder, survives restarts, goes with the chat in desk sync (secrets hidden the same way as in the chat) and is removed when you delete the chat.
+- **Locked down.** Canvas pages can't run scripts or load anything from the internet, so images have to be embedded in the page.
+- Canvas works with the default engine. Direct chats don't have the tool yet.
+
+## Activity log and recovery
+
+- **Activity log** (**Settings → Activity log**): a timeline of agent runs and their outcomes, each tool call and whether it failed, git operations, approvals and errors. It keeps labels and outcomes only, never prompts, replies or secrets.
+- **Crash and freeze recovery:** if the window's page crashes, or stays frozen for 15 seconds, it reloads by itself. Chats run in the app's main process, so a reload never stops them.
+- **Image tools for the agent:** every chat on the default engine can read an attached image as text (local vision first, cloud fallback) and run one read-only `git` or `gh` status command through a local-model summary (`ops_triage`), so busywork doesn't use the paid model. With an OpenAI key saved under **Settings → AI models → Direct AI providers**, it can also create an image from a prompt; the PNG goes to the app's data folder, not your project.
 
 ## Memory
 
@@ -300,6 +374,11 @@ Plain markdown files that carry over between chats, in three scopes:
 - **Project:** this codebase, in Claude Code's own memory folder.
 
 The agent reads the indexes at the start of a run and writes to them as it learns. Memory syncs with your chats.
+
+**Past chats.** Each run also refreshes two generated files in the project's memory folder, from the newest 300 chats of that project (older ones drop out):
+
+- `chats-index.md`: one line per chat (date, first request, transcript path), so the agent can find earlier work by searching it.
+- `chats-train.jsonl`: plain prompt and reply pairs in the `messages` format most fine-tuning tools accept, for training a model yourself. Tool calls and injected text are left out, and key-like strings, tokens, `password=` values and `{{SECRET_n}}` placeholders become `[redacted]`. Redaction follows patterns, so read the file before you train on it. It stays on this computer and is not synced.
 
 ## Plugins
 

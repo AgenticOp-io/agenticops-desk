@@ -398,6 +398,15 @@ button { cursor: pointer; }
 
 /* Cursor layout: editor in the middle, agent chat docked on the right. */
 .agent.with-code { flex-direction: row; }
+.canvas-window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+}
+.canvas-side .pane-head { display: flex; align-items: center; gap: 6px; }
+.canvas-empty { padding: 16px; }
 .agent.with-code .chat {
   flex: 0 0 var(--chat-width, 460px);
   width: var(--chat-width, 460px);

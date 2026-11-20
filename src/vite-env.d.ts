@@ -56,6 +56,7 @@ export type ProviderStatus = {
   id: string;
   label: string;
   hasKey: boolean;
+  keyRejected: boolean;
   needsKey: boolean;
   keyHint: string;
   baseUrl: string;
@@ -98,6 +99,7 @@ export type Orders = {
 export type WatchInfo = { chatId: string; file: string; pattern: string };
 // Manager chats, and each worker chat's manager (electron/team.ts).
 export type Team = { managers: string[]; workers: Record<string, string> };
+export type CanvasDoc = { chatId: string; title: string; kind: "html" | "svg" | "markdown"; content: string };
 export type TeamOrder = { id: string; managerId?: string; title?: string; prompt?: string; model?: string; text?: string };
 
 export type BriefingItem = {
@@ -347,6 +349,7 @@ declare global {
       writeShell: (id: string, text: string) => Promise<boolean>;
       closeShell: (id: string) => Promise<boolean>;
       focusPopout: (name: string) => Promise<boolean>;
+      expectPopout: (frameName: string) => void;
       spellGuess: (word: string) => string | null;
       onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => () => void;
       checkForUpdate: () => Promise<{
@@ -373,6 +376,10 @@ declare global {
       getTeam: () => Promise<Team>;
       setManager: (chatId: string, on: boolean) => Promise<Team | string>;
       onWorkerRetired: (cb: (id: string) => void) => () => void;
+      onCanvas: (cb: (doc: CanvasDoc | null) => void) => () => void;
+      canvasOpen: (chatId: string) => Promise<void>;
+      canvasGet: (chatId: string) => Promise<CanvasDoc | null>;
+      canvasExport: (format: "pdf" | "png", html: string, name: string) => Promise<boolean>;
       onTeam: (cb: (kind: "start" | "send", order: TeamOrder) => void) => () => void;
       listWatches: (chatId?: string) => Promise<WatchInfo[]>;
       addWatch: (chatId: string) => Promise<WatchInfo[]>;

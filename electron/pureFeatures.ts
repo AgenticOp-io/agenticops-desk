@@ -1241,6 +1241,46 @@ export function mcpToolName(server: string, tool: string): string {
   return `mcp__${clean(server)}__${clean(tool)}`.slice(0, 64);
 }
 
+// ops_triage runs without a permission prompt, so it takes only commands that can't change anything or read
+// outside the repository. Returns the argument list, or null to refuse.
+const BRANCH_FLAGS = new Set(["-a", "-r", "-v", "-vv", "--all", "--remotes", "--list", "--verbose", "--show-current"]);
+const GIT_UNSAFE = /^--(?:output|no-index|ext-diff|textconv)(?:=|$)/i;
+export function readOnlyOpsCommand(command: string): string[] | null {
+  const cmd = command.trim();
+  if (!cmd || cmd.length > 400 || /[;&|`<>$\r\n]/.test(cmd)) return null;
+  const args = cmd.split(/\s+/);
+  const [bin, sub, sub2] = args.map((a) => a.toLowerCase());
+  if (args.some((a) => /^[^a-zA-Z0-9._\/=:@~^-]/.test(a))) return null;
+  if (bin === "git") {
+    // A path outside the repository makes git diff compare any two files, as --no-index does.
+    const outside = (a: string) => /^(?:[\\/~]|[a-z]:)/i.test(a) || /(?:^|[\\/=])\.\.(?:[\\/]|$)/.test(a);
+    if (args.slice(1).some((a) => GIT_UNSAFE.test(a) || outside(a))) return null;
+    if (["status", "log", "show", "diff", "rev-parse"].includes(sub)) return args;
+    if (sub === "stash" && sub2 === "list") return args;
+    if (sub === "remote") return args.length === 3 && sub2 === "-v" ? args : null;
+    if (sub === "branch") return args.slice(2).every((a) => BRANCH_FLAGS.has(a)) ? args : null;
+    return null;
+  }
+  if (bin !== "gh") return null;
+  if (args.some((a) => /^(?:-t|--show-token|--hostname)/i.test(a))) return null;
+  if (sub === "status" && !sub2) return args;
+  if (sub === "auth" && sub2 === "status") return args;
+  if ((sub === "run" && (sub2 === "list" || sub2 === "view")) || (sub === "release" && sub2 === "list")) return args;
+  if (sub === "api" && /^repos?\/[^/]+\/[^/]+\/actions\/runs(?:\/\d+(?:\/jobs)?)?(?:\?[\w=&.-]*)?$/i.test(args[2] ?? "")) {
+    // GET only: no method, fields or input. --jq takes one expression after it.
+    for (let i = 3; i < args.length; i++) {
+      if (args[i] === "--paginate") continue;
+      if ((args[i] === "--jq" || args[i] === "-q") && args[i + 1] && !args[i + 1].startsWith("-")) {
+        i++;
+        continue;
+      }
+      return null;
+    }
+    return args;
+  }
+  return null;
+}
+
 export type PatchManifest = {
   version: string;
   shell: string;
@@ -1281,9 +1321,8 @@ export function slugFromResolved(resolved: string): string {
   return resolved.replace(/^[A-Za-z]:/, (m) => m[0].toLowerCase()).replace(/[^A-Za-z0-9]+/g, "-");
 }
 
-// Deletions carry the time they happened, so a stale deletion on one computer cannot wipe a chat that was
-// updated after it. The newest timestamp wins for the same id; formats without a time are treated as now
-// (still destructive, but only for genuinely fresh deletions). `a` is local, `b` is the remote copy.
+// Deletions carry the time they happened; the newest timestamp wins for the same id. Formats without a time are
+// treated as now. `a` is local, `b` is the remote copy.
 export function mergeDeleted(a: Record<string, number>, b: Record<string, number>): Record<string, number> {
   const out = new Map<string, number>();
   for (const [id, at] of Object.entries(a)) if (id && ((out.get(id) ?? 0) < at)) out.set(id, at);
@@ -1308,7 +1347,7 @@ export function asDeleted(raw: unknown): Record<string, number> {
 }
 
 // Newer updatedAt wins, except the project: only a move changes that, so using a chat on an old computer can't undo one.
-// A deleted id stays deleted on every computer, but only a deletion newer than the chat itself removes it.
+// A deleted id stays deleted on every computer, whatever its updatedAt: ids are never reused, so this can't hide a new chat.
 export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: Record<string, number>): SyncChat[] {
   const gone = new Set(Object.keys(deleted));
   const map = new Map<string, SyncChat>();

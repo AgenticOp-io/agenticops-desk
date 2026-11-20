@@ -9,6 +9,7 @@ const SECTIONS: Section[] = [
     id: "start",
     title: "Start here",
     body: [
+      "Quick start: 1. Sign in under Settings › Engine & sign-in. 2. Add a project folder in the sidebar and press Ctrl+N for a new chat. 3. Type what you want and press Enter. 4. Review the files it changed on the bar under the chat: Keep or Undo each one.",
       "AgenticOps Desk is a desktop workspace for AI coding agents. The left side is your projects and chats. The right side is the conversation, and Code opens the files the agent is working in.",
       "Each chat keeps its own conversation. A follow-up continues from a short summary written on this computer, so the earlier transcript is not sent again. A message sent while a run is still going joins that run. Closing the app and opening it again brings the same chats back. A run cut off by quitting resumes the next time you send, if it is still recent.",
       "Several chats can work at once. The list shows one word for each, such as Thinking, Working or Writing. The detail is next to the chat title.",
@@ -40,8 +41,9 @@ const SECTIONS: Section[] = [
       "Each chat learns between Sonnet and Opus. The local model writes the summary and does not take the chat, unless you pick it in the menu. Switch the menu to a heavier model, or send the same request again, and later messages start higher. Auto stays on the signed-in agent, and uses a local model only when the others are unavailable.",
       "Stop ends the run in the chat you are looking at. Other chats keep going.",
       "The meter under the box is how full this chat’s context is, and a rough cost since this window opened.",
-      "Every follow-up starts from a short summary of the chat, a local reading of the project, and work already verified, instead of the earlier transcript. Long reads are shortened. A run that gets very large continues from a short packet. A note says so. The agent opens a file again only to change it.",
-      "Summaries: after each run, a local model updates that summary. Settings › AI models › Summaries lets you pick a different model. The summary also lists work this chat already verified (checks that passed), as long as those files have not changed. Set up local model there installs Ollama and a free local model in the background, so this costs nothing. The Windows setup offers the same.",
+      "Every follow-up starts from a short summary of the chat, a local reading of the project, and work already verified, instead of the earlier transcript. The last two replies, and any older tables, ride along word for word, so a table you were just given is not lost. Long reads are shortened. A run that gets very large continues from a short packet. A note says so. The agent opens a file again only to change it.",
+      "Summaries: after each run, a local model updates that summary. Settings › AI models › Summaries lets you pick a different model. The summary also lists work this chat already verified (checks that passed), as long as those files have not changed.",
+      "Local model: Set up local model (Settings › AI models › Summaries, or the Windows setup) downloads a small server and a free 7B coding model, about 4.5 GB, and starts it on this computer. No Ollama install is needed. It loads at low priority so the window stays responsive, and it stops when you quit. If it fails, press the button again.",
       "Settings › AI models › Spending cap stops a run once it has spent the amount you pick. It covers the default engine and Claude API keys; other providers don’t report a price. Your next message continues the chat.",
     ],
   },
@@ -54,6 +56,44 @@ const SECTIONS: Section[] = [
       "Errors about the work itself, such as a failing test or a standing-order check, do not switch AIs.",
       "A chat keeps using the AI that last worked for it, so its context carries over. The label next to the model menu shows which AI answered. If an AI fails after it has already changed files, the next one is told which files so it does not redo the work.",
       "With Local only privacy, Auto only uses Ollama on this computer. Stop ends the run without handing it to another AI.",
+    ],
+  },
+  {
+    id: "cost",
+    title: "Keeping costs down",
+    body: [
+      "Cold cache: a chat left idle for about 45 minutes loses its cache. Continuing it then resends the whole session and costs more than usual, and a note in the chat says so.",
+      "Memory is picked up once and held while the chat's cache is warm, so a memory written mid-chat reaches that chat after the cache expires. This avoids restarting the cached conversation every turn.",
+      "Each chat starts on Sonnet and can step up to Opus, and back down. Images are described on this computer when possible. Settings › Usage shows tokens and cost, and Settings › AI models › Spending cap stops a run at a dollar amount you choose.",
+    ],
+  },
+  {
+    id: "managers",
+    title: "Manager chats",
+    body: [
+      "Right-click a chat and choose Make manager. It can then start worker chats in the same project, send them follow-ups and wait for their results, so one agent can split a job across several. It needs the default engine.",
+      "Each worker is an ordinary chat in your list, in its own git worktree. Its questions and approvals come to Waiting on you. Allow on a worker trusts that worker's folder only.",
+      "How many workers run at once: Settings › AI models › Manager chats (default 3, up to 20). More finish sooner but use more of your allowance at once. A change applies to the next worker a manager starts; a manager chat already open keeps the old number until you start a new one.",
+      "The manager picks each worker's model to fit its task: cheap models for mechanical work, the strongest for hard design and debugging. It can move a finished worker up or down a tier, or to another provider if one hits a limit.",
+      "Watch: the chat header shows Manager · n running. Click a worker's bubble to watch it live in its own window. Open chat in that window opens the worker in the main window so you can reply.",
+    ],
+  },
+  {
+    id: "canvas",
+    title: "Canvas",
+    body: [
+      "Canvas is where the agent shows what it makes for you: reports, network and architecture diagrams, charts, tables and summary pages. Ask for one (\"draw a network diagram of these servers\", \"write this up as a report\") and it opens in its own window.",
+      "Export it from the buttons at the top of that window: PDF, PNG and HTML for anything, plus SVG for a diagram or Markdown for a text document. Each chat has its own canvas, and asking again replaces it. It is saved with the chat, so it is still there after a restart and goes along with the chat in desk sync. The Canvas button in the chat header reopens it.",
+      "Pages on the canvas can't run scripts or load anything from the internet.",
+    ],
+  },
+  {
+    id: "recovery",
+    title: "Activity log and recovery",
+    body: [
+      "Settings › Activity log lists recent runs, tool calls, git operations, approvals and errors. It keeps labels and outcomes only, never prompts, replies or secrets.",
+      "If the window crashes or stays frozen for 15 seconds, it reloads by itself. Chats keep running because they live in the app's main process.",
+      "Image tools: the agent can read an attached image as text (local vision first), run one read-only git or gh status command through a local summary, and, with an OpenAI key saved under Direct AI providers, create an image. Created images go to the app's data folder, not your project.",
     ],
   },
   {
@@ -129,13 +169,14 @@ const SECTIONS: Section[] = [
       "Right-click a chat to rename it, pin it, branch it, or delete it. Search also looks inside messages, not only titles.",
       "On a message you sent: Rewind drops everything after it and the next send continues from there. Retry sends that message again. Branch copies the chat up to that point into a new chat. Replay on… sends that message to another model in a new branch, to compare the answers. File edits stay on the change bar, where you can keep or undo them.",
       "Agent, Plan, and Auto-edit, and the model, are remembered on the chat you are in.",
+      "Past chats: each run refreshes chats-index.md in the project's memory folder, one line per chat from the newest 300, so the agent can find earlier work. It also writes chats-train.jsonl there: plain prompt and reply pairs with key-like strings replaced by [redacted], for training a model yourself. Read it before you train on it. It stays on this computer and is not synced.",
     ],
   },
   {
     id: "around",
     title: "Around the chat",
     body: [
-      "Terminal, Git, Preview, and Instructions sit under the message box. Git shows the branch and changes, commits tracked files, and can open a pull request with GitHub’s gh command. Preview loads a web address, or runs the project’s dev script and opens the address it prints. Instructions edits CLAUDE.md, AGENTS.md, and the project’s .mcp.json for connected tools, which both engines use; Direct asks before starting a server from that file.",
+      "Terminal, Git, Preview, Instructions and Rules sit under the message box; Canvas opens in its own window. Git shows the branch and changes, commits tracked files, and can open a pull request with GitHub’s gh command. Preview loads a web address, or runs the project’s dev script and opens the address it prints. Instructions edits CLAUDE.md, AGENTS.md, and the project’s .mcp.json for connected tools, which both engines use; Direct asks before starting a server from that file.",
       "When the agent writes a plan or a task list, they show above the messages.",
       "Watch a log file (right-click a chat, or /watch): when new lines in that file contain an error, they go to the chat, which starts investigating on its own, at most once every 2 minutes. × on the chip stops it. In the editor, a line above a file a chat changed quotes the request behind it; click it to open that chat.",
       "Rules holds standing orders for the folder: rules added to every run, protected paths the agent may not edit, and checks that must pass. Checks run with every model once a run has changed files, and a failure goes back to the agent. A team can commit .agenticops/orders.json in the repo with the same rules and protected paths, so everyone gets them; checks in that file are ignored, so a cloned repo can never run commands on its own.",

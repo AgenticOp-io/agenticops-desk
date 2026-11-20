@@ -36,6 +36,8 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `providers.ts` | Provider presets and encrypted keys |
 | `autoRoute.ts` | The Auto model. Watches events through `setSendFilter` in `claude.ts` |
 | `team.ts` | Manager chats. Gives a manager's Claude Code runs the in-process `desk` tools (`setToolServers` in `claude.ts`), watches workers through `onChatEvent`, and asks the window to start or message workers (`team:start`, `team:send`), so a worker is an ordinary chat. Saved in `team.json` |
+| `opsTools.ts`, `opsTriage.ts`, `imageVision.ts`, `imageGen.ts` | The in-process `ops` tools every chat gets: local triage of a read-only git or gh command, image-to-text (local vision first), and OpenAI image generation (PNG to `userData/images`) |
+| `activityLog.ts` | Append-only log of runs, tool and git operations, approvals and errors: labels and outcomes only. Shown in Settings → Activity log |
 | `quickEdit.ts`, `review.ts`, `briefing.ts` | Quick edit and autocomplete, Second opinion, catch-up and morning briefings |
 | **Permissions and safety** | |
 | `gate.ts`, `allows.ts` | Folder trust and the commands that still ask |
@@ -57,7 +59,7 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `patcher.ts`, `tarMember.ts` | Signed code patches, and the full setup checked against the signed manifest |
 | `pureFeatures.ts` | Logic with no Electron dependency, so plain Node can unit test it. `staysInside` reads the disk to follow links |
 
-The renderer's main files: `App.tsx` (sidebar, chat pane, settings), `Composer.tsx`, `Conversation.tsx`, `Dock.tsx`, `CodePane.tsx`, `Windowed.tsx` (virtualized sidebar), `SyncSettings.tsx`, `SavedLogins.tsx`, `PrivacySettings.tsx`, `Plugins.tsx`, `Help.tsx`.
+The renderer's main files: `App.tsx` (sidebar, chat pane, settings), `Composer.tsx`, `Conversation.tsx`, `Dock.tsx`, `Canvas.tsx` (the Canvas popup, this same page opened with `?canvas=<chatId>`; shows what the agent's `show_canvas` tool sent, sandboxed; the document lives in `canvas/<chatId>.json` through `electron/canvas.ts` and syncs with the chat in `deskSync.ts`; PDF and PNG via `canvas:export` in `main.ts`), `ActivityLog.tsx`, `CodePane.tsx`, `Windowed.tsx` (virtualized sidebar), `SyncSettings.tsx`, `SavedLogins.tsx`, `PrivacySettings.tsx`, `Plugins.tsx`, `Help.tsx`.
 
 `boot/boot.mjs` is the packaged entry point. It chooses between the installed code and a patch, and falls back if a patch fails to open a window.
 
@@ -78,6 +80,7 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `sync-config.json`, `desk-sync\` | Sync address and its working clone | n/a |
 | `allows.json` | Folder trust | No |
 | `claude-sessions.json`, `direct\` | Engine session state and Direct history | No |
+| `activity.jsonl` | Activity log: labels and outcomes only, no prompts or secrets (`activityLog.ts`) | No |
 | `usage.json` | Tokens and cost per day, source and model (60 days), plus the last plan-limit reading (`usageLog.ts`) | No |
 | `capsules.json` | Verified run records per chat (last 12) | No |
 | `chat-summaries.json` | Running summary per chat and how many turns it covers | No |
@@ -91,7 +94,7 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `mcp-approvals.json` | Project MCP servers the user allowed, by folder and exact entry | No |
 | `tools-import.json` | When Claude Code and VS Code chats were last imported | No |
 
-Project memory lives in Claude Code's folder: `~/.claude/projects/<encoded-path>/memory`. Project folders on disk are per computer.
+Project memory lives in Claude Code's folder: `~/.claude/projects/<encoded-path>/memory`. `memory.ts` also regenerates `chats-index.md` and `chats-train.jsonl` there from the newest 300 chats (`writeChatIndex`). A chat's memory addendum is built once and kept (`frozenMemory` in `claude.ts`) until the cache-expiry note at `RESUME_TTL_MS`, so it doesn't change the cached prompt prefix mid-chat. `settings.maxWorkers` (1–20) caps a manager's running workers (`team.ts`). Project folders on disk are per computer.
 
 ## Key flows
 

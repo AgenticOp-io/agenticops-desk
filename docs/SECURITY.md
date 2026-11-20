@@ -20,6 +20,7 @@ There is no server of ours, and no telemetry in the app's own code. The Claude C
 | Direct provider keys | `providers.json` | Encrypted with `safeStorage` | No |
 | Placeholder values | `privacy-vault.json` | Encrypted with `safeStorage` | No |
 | Chats | `threads\` | **Not encrypted.** Real values can appear in them | Hidden copy only |
+| Past-chat files | `chats-index.md`, `chats-train.jsonl` in the project's memory folder | **Not encrypted.** The training file redacts key and token shapes by pattern, so an unusual secret can remain. Read it before training on it | Memory folders sync only where memory sync covers them; check before sharing |
 
 On Windows, `safeStorage` uses DPAPI, which ties the data to your Windows account. It protects against someone reading the files from another account, or from a copied or stolen disk without your Windows login. It does **not** protect against software running as you.
 

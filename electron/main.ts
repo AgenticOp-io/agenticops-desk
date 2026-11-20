@@ -1,9 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, shell, Tray } from "electron";
+import { deleteCanvas, loadCanvas, saveCanvas, setCanvasRemoved, setCanvasShown } from "./canvas";
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { initTeam, setManager, teamView } from "./team";
 import { initOpsTools } from "./opsTools";
 import { writeTextAtomicSync } from "./jsonStore";
@@ -220,10 +222,15 @@ function watchWorkspace() {
 
 // The window must only ever show AgenticOps Desk: the preload gives the page full file, shell and git access.
 // Links (chat replies, the preview pane) open in the system browser instead of replacing the app.
+// Only the app's own page: any other file:// page (a relative link in a reply, a file the agent wrote) would get the preload.
 function isAppUrl(url: string) {
-  const dev = process.env.VITE_DEV_SERVER_URL;
-  if (dev) return url.startsWith(dev);
-  return url.startsWith("file://");
+  try {
+    const u = new URL(url);
+    const own = new URL(process.env.VITE_DEV_SERVER_URL || pathToFileURL(path.join(__dirname, "../dist/index.html")).href);
+    return u.protocol === own.protocol && u.host === own.host && decodeURIComponent(u.pathname).toLowerCase() === decodeURIComponent(own.pathname).toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 function openOutside(url: string) {
@@ -234,11 +241,21 @@ function openOutside(url: string) {
 // can focus an already-open panel when its menu item is clicked again.
 const popouts = new Map<string, BrowserWindow>();
 let pendingPopout: string | null = null;
+// The pop-out the app's own page just announced. A frame inside the page (the preview) can't announce one,
+// so it can't open a blank window that would carry the preload.
+let expectedPopout: string | null = null;
+ipcMain.on("popout:expect", (e, frameName: unknown) => {
+  const ok = win && !win.isDestroyed() && e.sender === win.webContents && e.senderFrame === win.webContents.mainFrame;
+  expectedPopout = ok && typeof frameName === "string" && frameName.startsWith("desk-popout-") ? frameName : null;
+  e.returnValue = Boolean(expectedPopout);
+});
 
 function guardNavigation(w: BrowserWindow) {
   w.webContents.setWindowOpenHandler(({ url, frameName }) => {
     // Panels pop out as blank windows the page draws into (src/PopOut.tsx).
-    if (w === win && url === "about:blank" && frameName.startsWith("desk-popout-")) {
+    const expected = expectedPopout;
+    expectedPopout = null;
+    if (w === win && url === "about:blank" && frameName === expected) {
       pendingPopout = frameName;
       return {
         action: "allow",
@@ -1375,6 +1392,7 @@ ipcMain.handle("chats:delete", async (_e, id: string) => {
     console.error("AgenticOps Desk could not remove direct history", err);
   }
   await deleteChat(id);
+  await deleteCanvas(id);
   return true;
 });
 ipcMain.handle("chats:search", (_e, query: string) => searchMessages(query));
@@ -1469,8 +1487,8 @@ ipcMain.handle("project:trash", async (_e, raw: string) => {
   }
   return { ok: true, note: `Moved ${path.basename(target)} to the ${bin}.` };
 });
-ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc(cwd, name));
-ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(cwd, name, contents));
+ipcMain.handle("project:read", (_e, cwd: string, name: string) => readProjectDoc(realDir(cwd), name));
+ipcMain.handle("project:write", (_e, cwd: string, name: string, contents: string) => writeProjectDoc(realDir(cwd), name, String(contents ?? "")));
 ipcMain.handle("shell:open", (e, cwd: string) =>
   openShell(realDir(cwd), (chunk) => {
     if (!e.sender.isDestroyed()) e.sender.send("shell:data", { cwd: shellKey(cwd), chunk });
@@ -1523,6 +1541,89 @@ ipcMain.handle("updates:restart", () => {
 // Standing orders, the "why" trail, the briefing, and watched logs.
 ipcMain.handle("orders:get", (_e, cwd: string) => ({ ...loadOrders(cwd || workspace), team: teamOrders(cwd || workspace) }));
 ipcMain.handle("orders:set", (_e, cwd: string, next: Partial<Orders>) => ({ ...saveOrders(cwd || workspace, next), team: teamOrders(cwd || workspace) }));
+// Canvas: one popup window per chat. It is the same app page with ?canvas=<chatId>, so it uses the same preload.
+const canvasWindows = new Map<string, BrowserWindow>();
+async function openCanvasWindow(chatId: string, focus: boolean) {
+  const doc = await loadCanvas(chatId);
+  let w = canvasWindows.get(chatId);
+  if (w && !w.isDestroyed()) {
+    w.webContents.send("canvas:show", doc);
+    if (doc) w.setTitle(`Canvas: ${doc.title}`);
+    if (focus) w.focus();
+    return;
+  }
+  w = new BrowserWindow({
+    width: 980,
+    height: 780,
+    minWidth: 420,
+    minHeight: 360,
+    backgroundColor: "#181818",
+    title: doc ? `Canvas: ${doc.title}` : "Canvas",
+    icon: path.join(__dirname, "../build/icon.png"),
+    autoHideMenuBar: true,
+    parent: win && !win.isDestroyed() ? win : undefined,
+    webPreferences: {
+      preload: existsSync(path.join(__dirname, "preload.mjs")) ? path.join(__dirname, "preload.mjs") : path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  w.setMenuBarVisibility(false);
+  guardNavigation(w);
+  canvasWindows.set(chatId, w);
+  w.once("closed", () => canvasWindows.delete(chatId));
+  if (process.env.VITE_DEV_SERVER_URL) void w.loadURL(`${process.env.VITE_DEV_SERVER_URL}?canvas=${encodeURIComponent(chatId)}`);
+  else void w.loadFile(path.join(__dirname, "../dist/index.html"), { query: { canvas: chatId } });
+}
+setCanvasRemoved((chatId) => canvasWindows.get(chatId)?.close());
+setCanvasShown(async (doc) => {
+  await saveCanvas(doc);
+  scheduleDeskSync();
+  await openCanvasWindow(doc.chatId, false);
+});
+ipcMain.handle("canvas:open", (_e, chatId: string) => openCanvasWindow(String(chatId ?? ""), true));
+ipcMain.handle("canvas:get", (_e, chatId: string) => loadCanvas(String(chatId ?? "")));
+// Canvas PDF and PNG: lay the page out in a hidden window with no network and print or capture it.
+// Scripts are already blocked by the page's own policy; the request filter stops anything loading from outside.
+let exportSession: Electron.Session | null = null;
+ipcMain.handle("canvas:export", async (e, format: "pdf" | "png", html: string, name: string) => {
+  if ((format !== "pdf" && format !== "png") || typeof html !== "string" || typeof name !== "string") return false;
+  const owner = BrowserWindow.fromWebContents(e.sender) ?? win!;
+  const target = await dialog.showSaveDialog(owner, {
+    defaultPath: `${name.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 80) || "canvas"}.${format}`,
+    filters: [{ name: format.toUpperCase(), extensions: [format] }],
+  });
+  if (target.canceled || !target.filePath) return false;
+  // A temp file, not a data: URL: Chromium refuses data: URLs as large as a 2 MB canvas can become.
+  const tmp = path.join(app.getPath("temp"), `desk-canvas-${randomUUID()}.html`);
+  const tmpUrl = pathToFileURL(tmp).href;
+  exportSession ??= session.fromPartition("canvas-export");
+  exportSession.webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*", "file://*/*", "ws://*/*", "wss://*/*"] }, (d, cb) => cb({ cancel: d.url !== tmpUrl }));
+  const page = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, session: exportSession } });
+  try {
+    page.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    page.webContents.on("will-navigate", (ev) => ev.preventDefault());
+    await fs.writeFile(tmp, html, "utf8");
+    await page.loadURL(tmpUrl);
+    if (format === "pdf") {
+      await fs.writeFile(target.filePath, await page.webContents.printToPDF({ printBackground: true }));
+    } else {
+      // shortcut: a page taller than 16000px is cut off at that height; split it if people hit it.
+      const height = Number(await page.webContents.executeJavaScript("document.documentElement.scrollHeight")) || 800;
+      page.setContentSize(1100, Math.min(Math.max(height, 200), 16000));
+      await new Promise((r) => setTimeout(r, 150));
+      await fs.writeFile(target.filePath, (await page.webContents.capturePage()).toPNG());
+    }
+    return true;
+  } catch (err) {
+    dialog.showErrorBox("Export failed", `The canvas could not be saved as ${format.toUpperCase()}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  } finally {
+    page.destroy();
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+  }
+});
 ipcMain.handle("provenance:get", (_e, file: string) => (typeof file === "string" ? originsOf(file) : []));
 ipcMain.handle("briefing:get", (_e, sinceMs: number) =>
   buildBriefing({

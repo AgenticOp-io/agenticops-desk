@@ -4,6 +4,7 @@ import { setToolServers } from "./claude";
 import { opsTriage } from "./opsTriage";
 import { describeImage } from "./imageVision";
 import { generateImage } from "./imageGen";
+import { showCanvas } from "./canvas";
 
 // The ops desk tool, available to every chat. It runs ONE read-only git or gh status command and hands the
 // output to the local Ollama model for a short triage summary, so busywork (build status, repo state) is
@@ -14,7 +15,7 @@ let started = false;
 export function initOpsTools() {
   if (started) return;
   started = true;
-  setToolServers(async () => {
+  setToolServers(async (chatId, _signal, cwd) => {
     const { tool, createSdkMcpServer } = await loadAgentSdk();
     const op = tool(
       "ops_triage",
@@ -23,7 +24,7 @@ export function initOpsTools() {
         command: z.string().min(1).max(400).describe("A single read-only command: e.g. 'git status', 'gh run list --limit 3', or 'gh release list'."),
       },
       async (args) => {
-        const r = await opsTriage(args.command);
+        const r = await opsTriage(args.command, cwd);
         if (!r.ok) return { content: [{ type: "text", text: r.raw }], isError: true };
         return {
           content: [
@@ -61,9 +62,22 @@ export function initOpsTools() {
         return { content: [{ type: "text", text: `Image saved to ${r.path}` }] };
       },
     );
+    const canvas = tool(
+      "show_canvas",
+      "Show a document to the user in this chat's Canvas window: a report, network or architecture diagram, chart, table, or one-page summary. It is saved with the chat, and the user can export it as PDF, PNG, HTML, SVG or Markdown. Use html for reports (a full page with inline CSS; inline SVG for diagrams and charts; scripts and outside files do not load, so embed images as data: URLs), svg for a single diagram, markdown for plain text documents. Calling it again replaces what is shown.",
+      {
+        title: z.string().min(1).max(120),
+        kind: z.enum(["html", "svg", "markdown"]),
+        content: z.string().min(1).max(2_000_000),
+      },
+      async (args) => {
+        await showCanvas({ chatId, ...args });
+        return { content: [{ type: "text", text: `Shown in Canvas: ${args.title}` }] };
+      },
+    );
     return {
-      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img, gen] }) },
-      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image", "mcp__ops__generate_image"],
+      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img, gen, canvas] }) },
+      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image", "mcp__ops__generate_image", "mcp__ops__show_canvas"],
     };
   });
 }

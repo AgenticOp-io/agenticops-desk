@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 type PrivacyStatus = ReturnType<typeof import("./privacy").privacyStatus>;
+type CanvasDoc = { chatId: string; title: string; kind: "html" | "svg" | "markdown"; content: string };
 type TeamOrder = { id: string; managerId?: string; title?: string; prompt?: string; model?: string; text?: string };
 
 export type ClaudeEvent = {
@@ -271,6 +272,8 @@ contextBridge.exposeInMainWorld("desk", {
   writeShell: (id: string, text: string) => ipcRenderer.invoke("shell:write", id, text) as Promise<boolean>,
   closeShell: (id: string) => ipcRenderer.invoke("shell:close", id) as Promise<boolean>,
   focusPopout: (name: string) => ipcRenderer.invoke("popout:focus", name) as Promise<boolean>,
+  // Synchronous, so main knows before window.open arrives. Frames inside the page can't call this.
+  expectPopout: (frameName: string) => void ipcRenderer.sendSync("popout:expect", frameName),
   onShellData: (cb: (payload: { cwd: string; chunk: string }) => void) => {
     const listener = (_: unknown, payload: { cwd: string; chunk: string }) => cb(payload);
     ipcRenderer.on("shell:data", listener);
@@ -310,6 +313,14 @@ contextBridge.exposeInMainWorld("desk", {
     ipcRenderer.on("team:retired", h);
     return () => ipcRenderer.removeListener("team:retired", h);
   },
+  onCanvas: (cb: (doc: CanvasDoc | null) => void) => {
+    const h = (_: unknown, doc: CanvasDoc | null) => cb(doc);
+    ipcRenderer.on("canvas:show", h);
+    return () => ipcRenderer.removeListener("canvas:show", h);
+  },
+  canvasOpen: (chatId: string) => ipcRenderer.invoke("canvas:open", chatId) as Promise<void>,
+  canvasGet: (chatId: string) => ipcRenderer.invoke("canvas:get", chatId) as Promise<CanvasDoc | null>,
+  canvasExport: (format: "pdf" | "png", html: string, name: string) => ipcRenderer.invoke("canvas:export", format, html, name) as Promise<boolean>,
   // A manager chat asks the window to start or message a worker chat, so it runs like any chat the user starts.
   onTeam: (cb: (kind: "start" | "send", payload: TeamOrder) => void) => {
     const start = (_: unknown, p: TeamOrder) => cb("start", p);

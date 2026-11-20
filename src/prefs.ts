@@ -21,6 +21,8 @@ export type UiPrefs = {
   summarizer: string;
   // Dollars a run may spend before it is stopped; 0 is off.
   runBudgetUsd: number;
+  // How many of one manager's workers may run at once.
+  maxWorkers: number;
   privacy: "standard" | "protect" | "local";
   /** off leaves Cursor alone. partial archives its chats. full also adds them to Cursor's list. */
   cursorIntegration: "off" | "partial" | "full";
@@ -66,6 +68,7 @@ export const defaultPrefs = (): UiPrefs => ({
   autocomplete: "",
   summarizer: "",
   runBudgetUsd: 0,
+  maxWorkers: 3,
   privacy: "protect",
   cursorIntegration: "off",
   chatStorage: "",

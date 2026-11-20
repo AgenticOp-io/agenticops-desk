@@ -15,7 +15,13 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **AIs checking each other:** with a **Second opinion** model set, a model from another provider reviews every change against your request, and its concerns go back to the agent to fix (up to two rounds).
 
-**Cheaper follow-ups:** every follow-up continues from a short summary written by a local model, plus work already verified in the chat. The earlier transcript is not sent again. **Set up local model** under **Settings → AI models → Summaries**, or the box in the Windows setup, installs Ollama and a free local model. Pick a different Summaries model only if you want one.
+**Cheaper follow-ups:** every follow-up continues from a short summary written by a local model, the last two replies word for word, and work already verified in the chat. The earlier transcript is not sent again. **Set up local model** under **Settings → AI models → Summaries**, or the box in the Windows setup, downloads a small llama.cpp server and a free 7B coding model (about 4.5 GB, no Ollama install). A chat left idle past its cache lifetime warns you that continuing costs more.
+
+**Manager chats:** right-click a chat → **Make manager**, and it can start worker chats, each in its own git worktree, and collect their results. Set how many run at once under **Settings → AI models → Manager chats**. Workers can be moved to cheaper or stronger models as the work needs.
+
+**Canvas:** a window where the agent shows reports, network diagrams, charts and summaries it made. It is saved with the chat and exports as PDF, PNG, HTML, SVG or Markdown.
+
+**Also:** a **Usage** page with plan limits and tokens per model, an **Activity log**, past-chat search and fine-tuning export files in the project's memory folder, an image tool for the agent, and automatic reload if the window crashes or freezes.
 
 **@ symbols:** `@handleLogin` in the message box points the agent at that function's file and line, not just a file.
 
@@ -25,11 +31,18 @@ Each chat runs on one of two engines, picked in the composer's model menu:
 
 **Saved logins** (**Settings → Privacy & logins**) keep passwords, tokens and SSH keys encrypted on this computer. An agent uses them by name for SSH, telnet, git and web services without seeing them, and asks you once per chat first.
 
+## Quick start
+
+1. Install from the latest release (or [run from source](#run)).
+2. **Settings → Engine & sign-in** to sign in.
+3. **Add** a project folder, press **Ctrl+N**, type a request, press **Enter**.
+4. Review changed files on the change bar. **F1** opens Help.
+
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [Features](./docs/FEATURES.md) | Everything the app does and how to use it, including setting up another computer |
+| [Features](./docs/FEATURES.md) | Everything the app does and how to use it, including setting up another computer. The same material is in the app under **Help** (F1) |
 | [Security](./docs/SECURITY.md) | What protects your code and secrets, and where that stops |
 | [Architecture](./docs/ARCHITECTURE.md) | How it is built, data files, key flows, testing and releasing |
 | [`AGENTS.md`](./AGENTS.md) | Rules for agents working in this repo |
