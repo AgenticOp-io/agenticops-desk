@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chatModelIds, globToRegExp, lineDiff, ownerFromRemote } from "./pureFeatures.ts";
+import { chatModelIds, globToRegExp, isCustomProviderId, lineDiff, ownerFromRemote, PROVIDER_CATALOGS } from "./pureFeatures.ts";
 
 test("run capsules: only checked work, dropped once its files change", async () => {
   const { capsuleBrief, gateCommand, gatePassed, makeCapsule } = await import("./pureFeatures.ts");
@@ -236,6 +236,9 @@ test("every Claude API model has a price, or the spending cap never counts its c
 
 test("chat model ids drop embeddings and cap the list", () => {
   const ids = chatModelIds([" deepseek-flash ", "text-embedding-3-small", "whisper-1", "deepseek-flash", "dall-e-3", "gpt-image-1"]);
+  assert.ok(PROVIDER_CATALOGS.openai.some((m) => m.id === "gpt-6.2-sol" && m.name.startsWith("GPT")));
+  assert.equal(isCustomProviderId("uab12c"), true);
+  assert.equal(isCustomProviderId("openai"), false);
   assert.deepEqual(ids, ["deepseek-flash"]);
   assert.equal(chatModelIds(Array.from({ length: 30 }, (_, i) => `m${i}`)).length, 20);
 });
@@ -306,8 +309,8 @@ test("Auto hands over only after a hidden provider error", async () => {
   assert.equal(autoStep(plain, "done", "Done."), "finish");
 
   const last = { queue: [] as string[], failed: undefined, erred: false };
-  assert.equal(autoStep(last, "error", "429 Too Many Requests"), "pass", "nothing left to try, so the user sees it");
-  assert.equal(autoStep(last, "done", "Stopped."), "finish");
+  assert.equal(autoStep(last, "error", "429 Too Many Requests"), "swallow", "the last provider error stays out of the chat");
+  assert.equal(autoStep(last, "done", "Stopped."), "handover");
 });
 
 test("safe sync save writes, overwrites and leaves no temp file", async () => {
@@ -351,18 +354,28 @@ test("symbols from git grep output", async () => {
   assert.deepEqual(parseSymbolHits(out, "handlelogin")[0].name, "handleLogin");
 });
 
-test("Auto order: sticky first, resting last, unknown dropped", async () => {
-  const { autoOrder } = await import("./pureFeatures.ts");
-  const available = ["default", "direct:openai:gpt-5", "direct:ollama:qwen3"];
-  assert.deepEqual(autoOrder({ chosen: [], available, restingUntil: {}, now: 0 }), available);
+test("Auto order: sticky first, used-up models left out, cheap models before strong ones", async () => {
+  const { autoOrder, autoRank, restUntil } = await import("./pureFeatures.ts");
+  const available = ["default", "direct:openai:gpt-6.2-astra", "direct:deepseek:deepseek-flash", "direct:ollama:qwen3"];
+  assert.deepEqual(autoOrder({ chosen: [], available, restingUntil: {}, now: 0 }), [
+    "default",
+    "direct:deepseek:deepseek-flash",
+    "direct:openai:gpt-6.2-astra",
+    "direct:ollama:qwen3",
+  ]);
+  assert.ok(autoRank("direct:deepseek:deepseek-flash") < autoRank("direct:openai:gpt-6.2-astra"));
   assert.deepEqual(
     autoOrder({ chosen: ["direct:ollama:qwen3", "gone", "default"], available, sticky: "default", restingUntil: {}, now: 0 }),
     ["default", "direct:ollama:qwen3"],
   );
   assert.deepEqual(
     autoOrder({ chosen: [], available, sticky: "default", restingUntil: { default: 100 }, now: 50 }),
-    ["direct:openai:gpt-5", "direct:ollama:qwen3", "default"],
+    ["direct:deepseek:deepseek-flash", "direct:openai:gpt-6.2-astra", "direct:ollama:qwen3"],
   );
+  const now = 1_700_000_000_000;
+  const sec = Math.floor(now / 1000) + 3600;
+  assert.equal(restUntil(`Claude AI usage limit reached|${sec}`, now), sec * 1000);
+  assert.equal(restUntil("429 rate limit", now), now + 5 * 60_000);
 });
 
 test("plugin CLI output and command descriptions", async () => {

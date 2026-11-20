@@ -40,7 +40,7 @@ import { generateLocally } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
-import { PRESETS, providerBaseUrl, providerKey, type ProviderId } from "./providers";
+import { providerBaseUrl, providerInfo, providerKey, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { healHistory } from "./healHistory";
 import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
@@ -559,8 +559,23 @@ const PRICES: Record<string, Price> = {
   // Fallbacks the OpenAI-compatible path can reach while a provider's model list is still loading.
   "gpt-4.1-mini": { input: 0.4, output: 1.6, read: 0.1 },
   "gpt-4.1": { input: 2, output: 8, read: 0.5 },
+  // Short-context rates. `long` is the over-272k tier; the meter applies it past 100k tokens.
+  "gpt-6.2-astra": { input: 8, output: 40, read: 0.4, long: { input: 16, output: 60, read: 0.8 } },
+  "gpt-6.2-sol": { input: 2, output: 10, read: 0.1, long: { input: 4, output: 15, read: 0.2 } },
+  "gpt-6.1-terra": { input: 1, output: 5, read: 0.05, long: { input: 2, output: 7.5, read: 0.1 } },
+  "gpt-6-sol": { input: 2, output: 10, read: 0.2, long: { input: 4, output: 15, read: 0.4 } },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, read: 0.03 },
   "gemini-2.5-pro": { input: 2.5, output: 15, read: 0.25 },
+  // Carbon and Argon use the 1 Dec 2026 rate so the cap does not undercount after the intro price ends.
+  "gemini-4-carbon": { input: 4, output: 20, read: 0.2 },
+  "gemini-4-argon": { input: 4, output: 20, read: 0.2 },
+  "gemini-4-neon": { input: 3, output: 15, read: 0.15 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5, read: 0.075 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75, read: 0.075 },
+  "grok-4.7": { input: 2, output: 6, read: 0.5, long: { input: 4, output: 12, read: 1 } },
+  "mistral-large-4": { input: 0.7, output: 2.1, read: 0.07 },
+  "codestral-2508": { input: 0.3, output: 0.9, read: 0.03 },
+  "qwen4-max": { input: 1.5, output: 4.5, read: 0.075 },
 };
 
 // A run never reports $0 just because its model is missing from the table; the cap and meter stay active.
@@ -883,7 +898,7 @@ export function runDirect(opts: {
     return;
   }
   if (session.child || session.query || session.abort) stopClaude(win, chatId);
-  const preset = PRESETS[opts.provider];
+  const preset = providerInfo(opts.provider);
   if (preset.needsKey && !providerKey(opts.provider)) {
     send(win, { kind: "error", text: `Add an API key for ${preset.label} in Settings first.`, chatId, running: false });
     send(win, { kind: "done", text: "Stopped.", chatId, running: false });

@@ -184,7 +184,7 @@ export function autoStep(
   kind: string,
   text = "",
 ): "pass" | "swallow" | "finish" | "handover" {
-  if (kind === "error" && text && !run.failed && run.queue.length && shouldFailOver(text)) {
+  if (kind === "error" && text && !run.failed && shouldFailOver(text)) {
     run.failed = text;
     return "swallow";
   }
@@ -566,8 +566,38 @@ export function coolDownMs(error: string): number {
   return /429|rate.?limit|usage limit|quota|credit balance|too many requests/i.test(error) ? 5 * 60_000 : 60_000;
 }
 
-// The order Auto tries models in: the chat's last good one first (keeps its context), then the user's
-// order. Models resting after a failure go last instead of being dropped, so Auto never has nothing to try.
+// When a used-up AI may be tried again. A reset time in the message (unix seconds or ms after "|") wins.
+export function restUntil(error: string, now: number): number {
+  const stamp = /\|(\d{10,13})\b/.exec(error);
+  if (stamp) {
+    const n = Number(stamp[1]);
+    const ms = n < 1e12 ? n * 1000 : n;
+    if (ms > now && ms < now + 14 * 24 * 60 * 60_000) return ms;
+  }
+  return now + coolDownMs(error);
+}
+
+// Lower runs first when the user has not set an order. One cheap model per lab, then stronger paid
+// models, then whatever the user added, then a model on this computer.
+export function autoRank(model: string): number {
+  const id = model.replace(/^direct:[a-z0-9]+:/, "");
+  if (model === "default") return 0;
+  if (id === "deepseek-flash") return 10;
+  if (/gemini-4-hydrogen|gemini-3\.8-flash|haiku/.test(id)) return 20;
+  if (/^gpt-6\.1-terra$|^gpt-6-sol$|^gpt-6\.2-sol$/.test(id)) return 30;
+  if (/deepseek-v4-pro|mistral-large-4|codestral|qwen4-max/.test(id)) return 40;
+  if (model.startsWith("direct:")) {
+    if (/^direct:(ollama|gpu):/.test(model)) return 100;
+    if (/gemini-4-(carbon|argon|neon)|grok-/.test(id)) return 70;
+    if (/opus|fable|gpt-6\.2-astra/.test(id)) return 90;
+    return 50;
+  }
+  return 95;
+}
+
+// The order Auto tries models in. The user's list wins; otherwise cheaper capable models run before
+// the strong paid ones, and the chat's last good model stays first. A model that is used up is left
+// out until its rest ends.
 export function autoOrder(opts: {
   chosen: string[];
   available: string[];
@@ -576,10 +606,12 @@ export function autoOrder(opts: {
   now: number;
 }): string[] {
   const avail = new Set(opts.available);
-  const base = (opts.chosen.length ? opts.chosen : opts.available).filter((m) => avail.has(m));
-  const list = [...new Set(opts.sticky && base.includes(opts.sticky) ? [opts.sticky, ...base] : base)];
+  let base = (opts.chosen.length ? opts.chosen : opts.available).filter((m) => avail.has(m));
+  if (!opts.chosen.length) base = [...base].sort((a, b) => autoRank(a) - autoRank(b) || a.localeCompare(b));
   const resting = (m: string) => (opts.restingUntil[m] ?? 0) > opts.now;
-  return [...list.filter((m) => !resting(m)), ...list.filter(resting)];
+  const active = [...new Set(base)].filter((m) => !resting(m));
+  if (opts.sticky && active.includes(opts.sticky)) return [opts.sticky, ...active.filter((m) => m !== opts.sticky)];
+  return active;
 }
 
 // The JSON in a `claude plugin ... --json` output, which can have log lines before it.
@@ -1418,7 +1450,7 @@ export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: Rec
 
 // Chat models from a provider's /models list. Drops embeddings, images, audio and the rest.
 // shortcut: first 20 only, raise the cap if the menu needs the long tail.
-export function chatModelIds(ids: string[]): string[] {
+export function chatModelIds(ids: string[], limit = 20): string[] {
   const skip = /embed|whisper|tts|dall-e|moderation|transcri|realtime|\baudio\b|\bimage\b|\bspeech\b|\bsora\b/i;
   const seen = new Set<string>();
   const out: string[] = [];
@@ -1427,9 +1459,36 @@ export function chatModelIds(ids: string[]): string[] {
     if (!id || id.length > 80 || seen.has(id) || skip.test(id)) continue;
     seen.add(id);
     out.push(id);
-    if (out.length >= 20) break;
+    if (out.length >= limit) break;
   }
   return out;
+}
+
+// Names the model menu shows before a provider's own list replaces them.
+export const PROVIDER_CATALOGS: Record<string, Array<{ id: string; name: string }>> = {
+  openai: [
+    { id: "gpt-6.2-astra", name: "GPT-6.2 Astra" },
+    { id: "gpt-6.2-sol", name: "GPT-6.2 Sol" },
+    { id: "gpt-6.1-terra", name: "GPT-6.1 Terra" },
+    { id: "gpt-6-sol", name: "GPT-6 Sol" },
+  ],
+  gemini: [
+    { id: "gemini-4-carbon", name: "Gemini 4 Carbon" },
+    { id: "gemini-4-argon", name: "Gemini 4 Argon" },
+    { id: "gemini-4-neon", name: "Gemini 4 Neon" },
+    { id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" },
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+  ],
+  xai: [{ id: "grok-4.7", name: "Grok 4.7" }],
+  mistral: [
+    { id: "mistral-large-4", name: "Mistral Large 4" },
+    { id: "codestral-2508", name: "Codestral" },
+  ],
+  qwen: [{ id: "qwen4-max", name: "Qwen4 Max" }],
+};
+
+export function isCustomProviderId(id: string): boolean {
+  return /^u[a-z0-9]{4,12}$/.test(id);
 }
 
 // Old DeepSeek turns stored a chain of thought. Sending it back makes every later command slower.

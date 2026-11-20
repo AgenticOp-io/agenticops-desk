@@ -2,12 +2,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app, safeStorage } from "electron";
 import { writeJsonAtomicSync } from "./jsonStore";
-import { chatModelIds } from "./pureFeatures";
+import { chatModelIds, isCustomProviderId, PROVIDER_CATALOGS } from "./pureFeatures";
 
 // AI providers the Direct engine can call without Claude Code. Keys are encrypted with Windows'
 // credential protection (safeStorage) and never leave the main process.
 
-export type ProviderId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "ollama" | "gpu";
+export type BuiltinId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "xai" | "mistral" | "qwen" | "ollama" | "gpu";
+// `u…` ids are OpenAI-compatible services the user added in Settings.
+export type ProviderId = BuiltinId | `u${string}`;
 
 type Preset = {
   label: string;
@@ -20,7 +22,7 @@ type Preset = {
   keyHint: string;
 };
 
-export const PRESETS: Record<ProviderId, Preset> = {
+export const PRESETS: Record<BuiltinId, Preset> = {
   anthropic: {
     label: "Claude API",
     kind: "anthropic",
@@ -51,7 +53,8 @@ export const PRESETS: Record<ProviderId, Preset> = {
     kind: "openai-compatible",
     baseUrl: "https://api.openai.com/v1",
     needsKey: true,
-    keyHint: "API key from platform.openai.com.",
+    catalog: PROVIDER_CATALOGS.openai,
+    keyHint: "API key from platform.openai.com. GPT models are listed below; Test and load checks the key.",
   },
   openrouter: {
     label: "OpenRouter",
@@ -65,7 +68,8 @@ export const PRESETS: Record<ProviderId, Preset> = {
     kind: "openai-compatible",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
     needsKey: true,
-    keyHint: "API key from aistudio.google.com.",
+    catalog: PROVIDER_CATALOGS.gemini,
+    keyHint: "API key from aistudio.google.com. The Gemini API must be enabled on that key's project.",
   },
   deepseek: {
     label: "DeepSeek",
@@ -77,6 +81,30 @@ export const PRESETS: Record<ProviderId, Preset> = {
       { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
     ],
     keyHint: "API key from platform.deepseek.com.",
+  },
+  xai: {
+    label: "xAI Grok",
+    kind: "openai-compatible",
+    baseUrl: "https://api.x.ai/v1",
+    needsKey: true,
+    catalog: PROVIDER_CATALOGS.xai,
+    keyHint: "API key from console.x.ai. Billed per token, separate from a Grok or Cursor subscription.",
+  },
+  mistral: {
+    label: "Mistral",
+    kind: "openai-compatible",
+    baseUrl: "https://api.mistral.ai/v1",
+    needsKey: true,
+    catalog: PROVIDER_CATALOGS.mistral,
+    keyHint: "API key from console.mistral.ai.",
+  },
+  qwen: {
+    label: "Qwen",
+    kind: "openai-compatible",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    needsKey: true,
+    catalog: PROVIDER_CATALOGS.qwen,
+    keyHint: "API key from Alibaba Model Studio. Change the address if your key is for a different region.",
   },
   ollama: {
     label: "Ollama (local)",
@@ -95,7 +123,8 @@ export const PRESETS: Record<ProviderId, Preset> = {
   },
 };
 
-type Stored = Partial<Record<ProviderId, { key?: string; models?: string[]; baseUrl?: string }>>;
+type Row = { key?: string; models?: string[]; baseUrl?: string; label?: string };
+type Stored = Partial<Record<string, Row>>;
 
 export type ProviderStatus = {
   id: ProviderId;
@@ -107,6 +136,7 @@ export type ProviderStatus = {
   editableModels: boolean;
   models: string[];
   ready: boolean;
+  removable: boolean;
 };
 
 export type DirectModelOption = {
@@ -139,8 +169,25 @@ function save() {
   writeJsonAtomicSync(file(), load());
 }
 
-function isProvider(id: string): id is ProviderId {
+function isBuiltin(id: string): id is BuiltinId {
   return Object.prototype.hasOwnProperty.call(PRESETS, id);
+}
+
+function isProvider(id: string): id is ProviderId {
+  return isBuiltin(id) || (isCustomProviderId(id) && Boolean(load()[id]));
+}
+
+// Built-in preset, or the name and address the user saved for an AI they added.
+export function providerInfo(id: ProviderId): Preset {
+  if (isBuiltin(id)) return PRESETS[id];
+  const row = load()[id];
+  return {
+    label: row?.label || "Added AI",
+    kind: "openai-compatible",
+    baseUrl: row?.baseUrl,
+    needsKey: true,
+    keyHint: "OpenAI-compatible address. Test and load fills the model menu.",
+  };
 }
 
 export function providerKey(id: ProviderId): string {
@@ -154,11 +201,11 @@ export function providerKey(id: ProviderId): string {
 }
 
 export function providerBaseUrl(id: ProviderId): string {
-  return load()[id]?.baseUrl || PRESETS[id].baseUrl || "";
+  return load()[id]?.baseUrl || providerInfo(id).baseUrl || "";
 }
 
 function modelsOf(id: ProviderId): string[] {
-  const preset = PRESETS[id];
+  const preset = providerInfo(id);
   const saved = load()[id]?.models ?? [];
   if (preset.models) return preset.models.map((m) => m.id);
   if (saved.length) return saved;
@@ -166,27 +213,31 @@ function modelsOf(id: ProviderId): string[] {
 }
 
 function modelName(id: ProviderId, model: string): string {
-  const preset = PRESETS[id];
+  const preset = providerInfo(id);
   return preset.models?.find((m) => m.id === model)?.name ?? preset.catalog?.find((m) => m.id === model)?.name ?? model;
 }
 
+function statusOf(id: ProviderId): ProviderStatus {
+  const preset = providerInfo(id);
+  const hasKey = Boolean(load()[id]?.key);
+  const models = modelsOf(id);
+  return {
+    id,
+    label: preset.label,
+    hasKey,
+    needsKey: preset.needsKey,
+    keyHint: preset.keyHint,
+    baseUrl: providerBaseUrl(id),
+    editableModels: !preset.models,
+    models,
+    ready: (hasKey || !preset.needsKey) && models.length > 0,
+    removable: isCustomProviderId(id),
+  };
+}
+
 export function providerStatus(): ProviderStatus[] {
-  return (Object.keys(PRESETS) as ProviderId[]).map((id) => {
-    const preset = PRESETS[id];
-    const hasKey = Boolean(load()[id]?.key);
-    const models = modelsOf(id);
-    return {
-      id,
-      label: preset.label,
-      hasKey,
-      needsKey: preset.needsKey,
-      keyHint: preset.keyHint,
-      baseUrl: providerBaseUrl(id),
-      editableModels: !preset.models,
-      models,
-      ready: (hasKey || !preset.needsKey) && models.length > 0,
-    };
-  });
+  const custom = Object.keys(load()).filter(isCustomProviderId).sort();
+  return [...(Object.keys(PRESETS) as BuiltinId[]), ...custom].map((id) => statusOf(id as ProviderId));
 }
 
 export function setProvider(id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) {
@@ -208,6 +259,30 @@ export function setProvider(id: string, patch: { key?: string | null; models?: s
     else delete cur.baseUrl;
   }
   all[id] = cur;
+  save();
+  return providerStatus();
+}
+
+export function addCustomProvider(input: { label?: string; baseUrl?: string }): ProviderStatus[] {
+  const label = String(input.label ?? "").trim().slice(0, 40);
+  if (!label) throw new Error("Name the AI first.");
+  const url = String(input.baseUrl ?? "").trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(url)) throw new Error("The address must start with http:// or https://");
+  const all = load();
+  let id = "";
+  for (let n = 0; n < 5 && !id; n++) {
+    const candidate = `u${Math.random().toString(36).slice(2, 8)}`;
+    if (isCustomProviderId(candidate) && !all[candidate]) id = candidate;
+  }
+  if (!id) throw new Error("Could not add that AI. Try again.");
+  all[id] = { label, baseUrl: url };
+  save();
+  return providerStatus();
+}
+
+export function removeCustomProvider(id: string): ProviderStatus[] {
+  if (!isCustomProviderId(id) || !load()[id]) throw new Error("Only an AI you added can be removed.");
+  delete load()[id];
   save();
   return providerStatus();
 }
@@ -246,7 +321,7 @@ export function directModelOptions(): DirectModelOption[] {
 // Asks the provider for its model list and stores the chat models. Claude's list is fixed.
 export async function pullProviderModels(id: string): Promise<void> {
   if (!isProvider(id)) throw new Error(`Unknown provider ${id}`);
-  const preset = PRESETS[id];
+  const preset = providerInfo(id);
   if (preset.kind === "anthropic") return;
   const key = providerKey(id);
   if (preset.needsKey && !key) throw new Error(`Add an API key for ${preset.label} first.`);
@@ -262,7 +337,9 @@ export async function pullProviderModels(id: string): Promise<void> {
   }
   if (!res.ok) throw new Error(`${preset.label} returned ${res.status} when listing models.`);
   const body = (await res.json()) as { data?: Array<{ id?: string }> };
-  const ids = chatModelIds((body.data ?? []).map((m) => m.id ?? ""));
+  const listed = new Set(chatModelIds((body.data ?? []).map((m) => m.id ?? ""), 80));
+  const prefer = (preset.catalog ?? []).map((m) => m.id).filter((model) => listed.has(model));
+  const ids = [...prefer, ...[...listed].filter((model) => !prefer.includes(model))].slice(0, 30);
   if (!ids.length) throw new Error(`${preset.label} did not list any chat models.`);
   const all = load();
   all[id] = { ...(all[id] ?? {}), models: ids };
@@ -270,7 +347,7 @@ export async function pullProviderModels(id: string): Promise<void> {
 }
 
 export function parseDirectModel(value: string): { provider: ProviderId; model: string } | null {
-  const m = /^direct:([a-z]+):(.+)$/.exec(value);
+  const m = /^direct:([a-z0-9]+):(.+)$/.exec(value);
   if (!m || !isProvider(m[1])) return null;
   return { provider: m[1], model: m[2] };
 }

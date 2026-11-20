@@ -24,7 +24,7 @@ import {
   updateMarketplace,
   updatePlugin,
 } from "./plugins";
-import { parseDirectModel, providerStatus, pullProviderModels, setProvider } from "./providers";
+import { addCustomProvider, parseDirectModel, providerStatus, pullProviderModels, removeCustomProvider, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
 import { recentActivity, flush as flushActivity } from "./activityLog";
 import { chooseLearned } from "./modelLearn";
@@ -1103,6 +1103,8 @@ ipcMain.handle("providers:load", async (_e, id: string) => {
   await pullProviderModels(String(id ?? ""));
   return providerStatus();
 });
+ipcMain.handle("providers:add", (_e, input: { label?: string; baseUrl?: string }) => addCustomProvider(input ?? {}));
+ipcMain.handle("providers:remove", (_e, id: string) => removeCustomProvider(String(id ?? "")));
 ipcMain.handle("localModel:status", () => localModelStatus());
 ipcMain.handle("localModel:setup", () => setupLocalModel(sendLocalModel));
 
