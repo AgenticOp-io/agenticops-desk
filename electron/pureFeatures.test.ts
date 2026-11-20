@@ -276,6 +276,8 @@ test("Auto fails over only on provider trouble", async () => {
   const { shouldFailOver, coolDownMs } = await import("./pureFeatures.ts");
   assert.ok(shouldFailOver("API Error: 429 rate_limit_error"));
   assert.ok(shouldFailOver("Claude AI usage limit reached|1767000000"));
+  assert.ok(shouldFailOver("You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)"));
+  assert.ok(shouldFailOver("Claude Code returned an error result: You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)"));
   assert.ok(shouldFailOver("OpenAI: 429 You exceeded your current quota"));
   assert.ok(shouldFailOver("API Error: 529 Overloaded"));
   assert.ok(shouldFailOver("Google Gemini rejected the API key. Check it in Settings."));
@@ -300,8 +302,16 @@ test("Auto hands over only after a hidden provider error", async () => {
   const run = { queue: ["next"] as string[], failed: undefined as string | undefined, erred: false };
   assert.equal(autoStep(run, "line", "hi"), "pass");
   assert.equal(autoStep(run, "error", "API Error: 429 rate_limit_error"), "swallow");
-  assert.equal(autoStep(run, "error", "API Error: 529 Overloaded"), "pass", "a second error is shown, not hidden");
+  assert.equal(autoStep(run, "error", "API Error: 529 Overloaded"), "swallow", "a second provider error stays out of the chat");
   assert.equal(autoStep(run, "done", "Done."), "handover");
+  const limit = "You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)";
+  const capped = { queue: ["next"], failed: undefined as string | undefined, erred: false };
+  assert.equal(autoStep(capped, "line", limit), "swallow");
+  assert.equal(autoStep(capped, "line", " (America/Mexico_City)"), "swallow");
+  assert.equal(autoStep(capped, "error", `Claude Code returned an error result: ${limit}`), "swallow");
+  assert.equal(autoStep(capped, "done", "Stopped."), "handover");
+  const essay = `${"Explanation. ".repeat(40)}You've hit your 5-hour limit in the docs.`;
+  assert.equal(autoStep({ queue: ["next"], failed: undefined, erred: false }, "line", essay), "pass");
 
   const plain = { queue: ["next"], failed: undefined, erred: false };
   assert.equal(autoStep(plain, "error", "tests failed"), "pass");
@@ -372,10 +382,35 @@ test("Auto order: sticky first, used-up models left out, cheap models before str
     autoOrder({ chosen: [], available, sticky: "default", restingUntil: { default: 100 }, now: 50 }),
     ["direct:deepseek:deepseek-flash", "direct:openai:gpt-6.2-astra", "direct:ollama:qwen3"],
   );
+  assert.deepEqual(autoOrder({ chosen: [], available, sticky: "direct:ollama:qwen3", restingUntil: {}, now: 0 }), [
+    "default",
+    "direct:deepseek:deepseek-flash",
+    "direct:openai:gpt-6.2-astra",
+    "direct:ollama:qwen3",
+  ]);
+  assert.deepEqual(
+    autoOrder({
+      chosen: [],
+      available,
+      restingUntil: { default: 100, "direct:deepseek:deepseek-flash": 100, "direct:openai:gpt-6.2-astra": 100 },
+      now: 50,
+    }),
+    ["direct:ollama:qwen3"],
+  );
   const now = 1_700_000_000_000;
   const sec = Math.floor(now / 1000) + 3600;
   assert.equal(restUntil(`Claude AI usage limit reached|${sec}`, now), sec * 1000);
   assert.equal(restUntil("429 rate limit", now), now + 5 * 60_000);
+  const evening = Date.parse("2026-11-20T01:56:00Z");
+  assert.equal(
+    restUntil("You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)", evening),
+    Date.parse("2026-11-20T03:20:00Z"),
+  );
+  assert.equal(restUntil("You've hit your 5-hour limit · resets 9:20pm (Not/AZone)", evening), evening + 5 * 60_000);
+  const { claudeWindowFull } = await import("./pureFeatures.ts");
+  assert.equal(claudeWindowFull({ percent: 100, resetsAt: evening + 60_000 }, evening), true);
+  assert.equal(claudeWindowFull({ percent: 100, resetsAt: evening }, evening), false);
+  assert.equal(claudeWindowFull({ percent: 40, resetsAt: evening + 60_000 }, evening), false);
 });
 
 test("plugin CLI output and command descriptions", async () => {

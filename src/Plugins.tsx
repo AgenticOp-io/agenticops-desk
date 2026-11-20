@@ -60,9 +60,10 @@ export function AutoSettings({
       <div className="settings-label">Auto model</div>
       <p className="settings-hint">
         Pick "Auto" in the model menu. Each message goes to the first AI that is still on: the signed-in agent, then a cheaper
-        model that can do the work, then a stronger paid model, then one on this computer. Your own order below replaces that.
-        When an AI is used up, down, or rejects its key, it turns off and the same message goes to the next one. The chat does
-        not show that error. The reason is listed here until you press Try it again, or the limit resets.
+        model that can do the work, then a stronger paid model. A model on this computer or your own GPU is used only after
+        those are off. Your list below chooses the hosted models and their order. When an AI is used up, down, or rejects its
+        key, it turns off and the same message goes to the next one. The chat does not show that error. If nothing can run,
+        the chat says no AI models are available. The reason is listed here until you press Try it again, or the limit resets.
       </p>
       <label className="settings-row">
         <span>Use every AI that is set up, in the order of the model menu</span>

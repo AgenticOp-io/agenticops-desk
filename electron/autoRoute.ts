@@ -1,9 +1,10 @@
 import type { BrowserWindow } from "electron";
 import { changedFiles, chatState, listModels, send, setSendFilter } from "./claude";
-import { autoOrder, autoStep, restUntil } from "./pureFeatures";
+import { autoOrder, autoStep, claudeWindowFull, isOwnedModel, restUntil } from "./pureFeatures";
 import { isLocalProvider, privacyMode } from "./privacy";
 import { parseDirectModel } from "./providers";
 import { loadSettings } from "./settings";
+import { fiveHourWindow } from "./usageLog";
 
 // The "Auto" model: one choice that uses every AI the user has enabled (or the ones they picked, in
 // their order). A run goes to the first one that is not resting; when it fails because that AI can't
@@ -36,6 +37,8 @@ const live = new Map<string, Attempt>();
 // The AI that last finished a run for each chat, so the chat keeps its context there.
 const sticky = new Map<string, string>();
 const resting: Record<string, { until: number; reason: string }> = {};
+// Try again now: allow one more sign-in attempt even if the saved window still says full.
+let signInWoken = false;
 let dispatch: Dispatch | null = null;
 
 export function labelOf(model: string): string {
@@ -59,8 +62,25 @@ export function autoAvailable(): string[] {
   });
 }
 
+function noteSignInWindow() {
+  if (signInWoken) return;
+  const now = Date.now();
+  const window = fiveHourWindow(now);
+  if (!claudeWindowFull(window, now) || window?.resetsAt == null) return;
+  const cur = resting[CLAUDE_DEFAULT];
+  if (!cur || cur.until < window.resetsAt) resting[CLAUDE_DEFAULT] = { until: window.resetsAt, reason: "5-hour limit" };
+}
+
 function restingUntil(): Record<string, number> {
+  noteSignInWindow();
   return Object.fromEntries(Object.entries(resting).map(([k, v]) => [k, v.until]));
+}
+
+// Ollama, the user's GPU, and a service they added on this computer.
+function modelOwned(model: string): boolean {
+  if (isOwnedModel(model)) return true;
+  const direct = parseDirectModel(model);
+  return Boolean(direct && isLocalProvider(direct.provider));
 }
 
 async function currentOrder(chatId?: string): Promise<string[]> {
@@ -71,6 +91,7 @@ async function currentOrder(chatId?: string): Promise<string[]> {
     sticky: chatId ? sticky.get(chatId) : undefined,
     restingUntil: restingUntil(),
     now: Date.now(),
+    owned: modelOwned,
   });
 }
 
@@ -97,12 +118,21 @@ export async function autoStatus(): Promise<AutoStatus> {
 
 // Lets a resting AI (or all of them) be tried again at once, e.g. after topping up credit.
 export function wakeAuto(model?: string) {
+  if (!model || model === CLAUDE_DEFAULT) signInWoken = true;
   if (model) delete resting[model];
   else for (const k of Object.keys(resting)) delete resting[k];
 }
 
+const NO_MODELS = "No AI models available.";
+
 function announce(win: BrowserWindow | null, chatId: string, model: string) {
   send(win, { kind: "route", chatId, model, text: labelOf(model), running: true });
+}
+
+function reportNone(win: BrowserWindow | null, chatId: string) {
+  send(win, { kind: "note", chatId, text: NO_MODELS, running: false });
+  send(win, { kind: "route", chatId, model: AUTO, text: NO_MODELS, running: false });
+  send(win, { kind: "done", chatId, running: false, text: "Stopped." });
 }
 
 // When an AI fails partway through, the next one is told what may already have changed.
@@ -141,7 +171,7 @@ export function initAuto(fn: Dispatch) {
     const next = run.queue.shift();
     if (!next) {
       live.delete(chatId);
-      send(win, { kind: "done", chatId, running: false, text: "Stopped." });
+      reportNone(win, chatId);
       return true;
     }
     const payload = handover(run, failedLabel);
@@ -175,12 +205,7 @@ export async function runAuto(win: BrowserWindow | null, payload: AutoPayload) {
   }
   const order = await currentOrder(chatId);
   if (!order.length) {
-    const available = autoAvailable();
-    const text = available.length
-      ? "Every AI Auto can use is off until it resets. See Settings › Auto model."
-      : "Auto has no AI it may use. See Settings › Auto model.";
-    send(win, { kind: "route", chatId, model: AUTO, text, running: false });
-    send(win, { kind: "done", chatId, running: false, text: "Stopped." });
+    reportNone(win, chatId);
     return;
   }
   const [first, ...queue] = order;

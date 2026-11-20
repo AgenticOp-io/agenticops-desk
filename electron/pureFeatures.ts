@@ -171,7 +171,7 @@ export function lineDiff(before: string, after: string): string {
 // Auto model: errors that mean "this AI can't take the job right now", so the next one should try.
 // Anything else (a tool failing, a bad request in the chat itself) stays with the user.
 const FAILOVER =
-  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|overloaded|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
+  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|5-hour limit|you've hit your|overloaded|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
 
 export function shouldFailOver(error: string): boolean {
   return FAILOVER.test(error);
@@ -179,15 +179,23 @@ export function shouldFailOver(error: string): boolean {
 
 // What Auto does with one event of a run it routes: let it through, hide a provider error so the next AI
 // can try, end the run, or hand the message over (the run ended after a hidden error).
+// Claude Code prints the 5-hour limit as a normal reply, then again as an error. A short line that is
+// only that notice is hidden. A long reply that merely mentions a limit is not.
+const LIMIT_LINE = /you've hit your|5-hour limit|usage limit reached/i;
+
 export function autoStep(
   run: { queue: string[]; failed?: string; erred?: boolean },
   kind: string,
   text = "",
 ): "pass" | "swallow" | "finish" | "handover" {
-  if (kind === "error" && text && !run.failed && shouldFailOver(text)) {
-    run.failed = text;
+  const notice = text.trim();
+  const limitLine = kind === "line" && notice.length <= 500 && LIMIT_LINE.test(notice) && shouldFailOver(notice);
+  if ((kind === "error" && notice && shouldFailOver(notice)) || limitLine) {
+    if (!run.failed) run.failed = notice;
     return "swallow";
   }
+  // The engine reports the same limit twice, sometimes in pieces. Later copies stay out of the chat.
+  if (run.failed && (kind === "error" || kind === "line" || kind === "thinking")) return "swallow";
   if (kind === "error") run.erred = true;
   if (kind !== "done") return "pass";
   return run.failed ? "handover" : "finish";
@@ -563,10 +571,57 @@ export function latestContextTokens(transcript: string): number | undefined {
 
 // Rate limits and quota errors last a while; anything else gets a short rest.
 export function coolDownMs(error: string): number {
-  return /429|rate.?limit|usage limit|quota|credit balance|too many requests/i.test(error) ? 5 * 60_000 : 60_000;
+  return /429|rate.?limit|usage limit|5-hour limit|you've hit your|quota|credit balance|too many requests/i.test(error) ? 5 * 60_000 : 60_000;
 }
 
-// When a used-up AI may be tried again. A reset time in the message (unix seconds or ms after "|") wins.
+// "resets 9:20pm (America/Mexico_City)" → the next time that clock shows, in ms. Null if it cannot be read.
+function clockResetMs(error: string, now: number): number | null {
+  const m = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+\(([^)]+)\)/i.exec(error);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = Number(m[2] ?? "0");
+  const ap = m[3].toLowerCase();
+  const zone = m[4].trim();
+  if (ap === "pm" && hour < 12) hour += 12;
+  if (ap === "am" && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59) return null;
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return null;
+  }
+  const parts = (ms: number) => {
+    const o: Record<string, string> = {};
+    for (const p of fmt.formatToParts(new Date(ms))) if (p.type !== "literal") o[p.type] = p.value;
+    return o;
+  };
+  const wall = (p: Record<string, string>, h: number, min: number) => Date.UTC(+p.year, +p.month - 1, +p.day, h, min, 0);
+  const p = parts(now);
+  let guess = now + (wall(p, hour, minute) - wall(p, +p.hour, +p.minute) - +p.second * 1000);
+  if (guess <= now) guess += 86_400_000;
+  const g = parts(guess);
+  guess += wall(g, hour, minute) - wall(g, +g.hour, +g.minute);
+  if (guess <= now) guess += 86_400_000;
+  if (!(guess > now && guess < now + 14 * 24 * 60 * 60_000)) return null;
+  return guess;
+}
+
+// The signed-in agent's 5-hour window is already full, so Auto should not start it.
+export function claudeWindowFull(window: { percent: number; resetsAt: number | null } | null, now: number): boolean {
+  return window != null && window.percent >= 100 && window.resetsAt != null && window.resetsAt > now;
+}
+
+// When a used-up AI may be tried again. A reset time in the message (unix seconds or ms after "|", or a clock) wins.
 export function restUntil(error: string, now: number): number {
   const stamp = /\|(\d{10,13})\b/.exec(error);
   if (stamp) {
@@ -574,7 +629,7 @@ export function restUntil(error: string, now: number): number {
     const ms = n < 1e12 ? n * 1000 : n;
     if (ms > now && ms < now + 14 * 24 * 60 * 60_000) return ms;
   }
-  return now + coolDownMs(error);
+  return clockResetMs(error, now) ?? now + coolDownMs(error);
 }
 
 // Lower runs first when the user has not set an order. One cheap model per lab, then stronger paid
@@ -595,23 +650,33 @@ export function autoRank(model: string): number {
   return 95;
 }
 
-// The order Auto tries models in. The user's list wins; otherwise cheaper capable models run before
-// the strong paid ones, and the chat's last good model stays first. A model that is used up is left
-// out until its rest ends.
+// A model on this computer, or the user's own GPU. Auto uses these only after the other models are off.
+export function isOwnedModel(model: string): boolean {
+  return /^direct:(ollama|gpu):/.test(model);
+}
+
+// The order Auto tries models in. The user's list wins among the hosted models; otherwise cheaper
+// capable models run before the strong paid ones, and the chat's last good hosted model stays first.
+// An owned model waits until every hosted model is off. A model that is used up is left out until its rest ends.
 export function autoOrder(opts: {
   chosen: string[];
   available: string[];
   sticky?: string;
   restingUntil: Record<string, number>;
   now: number;
+  owned?: (model: string) => boolean;
 }): string[] {
+  const isOwned = opts.owned ?? isOwnedModel;
   const avail = new Set(opts.available);
-  let base = (opts.chosen.length ? opts.chosen : opts.available).filter((m) => avail.has(m));
-  if (!opts.chosen.length) base = [...base].sort((a, b) => autoRank(a) - autoRank(b) || a.localeCompare(b));
   const resting = (m: string) => (opts.restingUntil[m] ?? 0) > opts.now;
-  const active = [...new Set(base)].filter((m) => !resting(m));
-  if (opts.sticky && active.includes(opts.sticky)) return [opts.sticky, ...active.filter((m) => m !== opts.sticky)];
-  return active;
+  let pool = (opts.chosen.length ? opts.chosen : opts.available).filter((m) => avail.has(m));
+  if (!opts.chosen.length) pool = [...pool].sort((a, b) => autoRank(a) - autoRank(b) || a.localeCompare(b));
+  const active = [...new Set(pool)].filter((m) => !resting(m));
+  let hosted = active.filter((m) => !isOwned(m));
+  let owned = active.filter(isOwned);
+  if (opts.sticky && hosted.includes(opts.sticky)) hosted = [opts.sticky, ...hosted.filter((m) => m !== opts.sticky)];
+  else if (!hosted.length && opts.sticky && owned.includes(opts.sticky)) owned = [opts.sticky, ...owned.filter((m) => m !== opts.sticky)];
+  return [...hosted, ...owned];
 }
 
 // The JSON in a `claude plugin ... --json` output, which can have log lines before it.
