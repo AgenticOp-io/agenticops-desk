@@ -38,6 +38,8 @@ export type UiPrefs = {
   previewMode: "inline" | "browser";
   // Never ask before commands or edits. Questions and plan approvals still ask.
   allowAll?: boolean;
+  // Show the small file preview beside the editor's scrollbar.
+  minimap?: boolean;
 };
 
 export type PanelKey = "chats" | "files" | "inbox" | "status" | "help" | "settings";

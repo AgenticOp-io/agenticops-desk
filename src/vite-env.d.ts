@@ -176,6 +176,7 @@ declare global {
       openFolder: () => Promise<string>;
       setWorkspace: (dir: string) => Promise<string>;
       listDir: (dir: string) => Promise<Array<{ name: string; path: string; isDir: boolean }>>;
+      openWork: (workspace: string) => Promise<string[]>;
       readFile: (filePath: string) => Promise<string>;
       writeFile: (filePath: string, contents: string) => Promise<boolean>;
       searchFiles: (query: string) => Promise<Array<{ name: string; path: string; rel: string }>>;
@@ -285,6 +286,33 @@ declare global {
       gitHistory: (cwd: string) => Promise<{ ok: boolean; output: string }>;
       gitCheckout: (cwd: string, branch: string) => Promise<{ ok: boolean; output: string }>;
       gitPullRequest: (cwd: string, title: string, body: string) => Promise<{ ok: boolean; output: string }>;
+      gitChanges: (cwd: string) => Promise<{
+        ok: boolean;
+        output: string;
+        repo: boolean;
+        branch?: string;
+        upstream?: string;
+        ahead?: number;
+        behind?: number;
+        head?: string;
+        root?: string;
+        files?: import("../electron/pureFeatures").GitFile[];
+        remote?: import("../electron/pureFeatures").RemoteHost | null;
+      }>;
+      gitStage: (cwd: string, paths: string[]) => Promise<{ ok: boolean; output: string }>;
+      gitUnstage: (cwd: string, paths: string[]) => Promise<{ ok: boolean; output: string }>;
+      gitResolve: (cwd: string, paths: string[], side: "ours" | "theirs") => Promise<{ ok: boolean; output: string }>;
+      gitDiscard: (cwd: string, paths: string[], untracked: boolean) => Promise<{ ok: boolean; output: string }>;
+      gitShowHead: (cwd: string, file: string) => Promise<string>;
+      gitBranches: (cwd: string) => Promise<{ name: string; remote: boolean; upstream: string; current: boolean }[]>;
+      gitLog: (cwd: string) => Promise<{ sha: string; short: string; author: string; when: string; refs: string; subject: string }[]>;
+      gitCommitWith: (cwd: string, message: string, opts: { all?: boolean; amend?: boolean }) => Promise<{ ok: boolean; output: string }>;
+      gitPublish: (cwd: string) => Promise<{ ok: boolean; output: string }>;
+      gitNewBranch: (cwd: string, name: string) => Promise<{ ok: boolean; output: string }>;
+      gitPrs: (cwd: string, kind: string) => Promise<{ ok: boolean; output: string; prs: { number: number; title: string; branch: string; author: string; url: string }[] }>;
+      gitPrCheckout: (cwd: string, kind: string, num: number) => Promise<{ ok: boolean; output: string }>;
+      gitRepos: () => Promise<{ nameWithOwner: string; url: string; description: string }[]>;
+      gitClone: (remote: string) => Promise<{ ok: boolean; output: string; path?: string }>;
       syncStatus: () => Promise<{
         url: string;
         ok: boolean;
@@ -381,6 +409,14 @@ declare global {
       onWorkerRetired: (cb: (id: string) => void) => () => void;
       onCanvas: (cb: (doc: CanvasDoc | null) => void) => () => void;
       canvasOpen: (chatId: string) => Promise<void>;
+      codeOpen: (file?: string) => Promise<void>;
+      codePush: (s: unknown) => void;
+      codeState: () => Promise<unknown>;
+      onCodeState: (cb: (s: unknown) => void) => () => void;
+      codeAct: (a: unknown) => void;
+      onCodeAct: (cb: (a: unknown) => void) => () => void;
+      codeTake: () => Promise<string>;
+      onCodeFile: (cb: (p: string) => void) => () => void;
       canvasGet: (chatId: string) => Promise<CanvasDoc | null>;
       canvasExport: (format: "pdf" | "png", html: string, name: string) => Promise<boolean>;
       onTeam: (cb: (kind: "start" | "send", order: TeamOrder) => void) => () => void;

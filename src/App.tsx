@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChangesBar } from "./ChangesBar";
@@ -8,7 +8,6 @@ import { Windowed } from "./Windowed";
 import { PopOut, type Look } from "./PopOut";
 import { WorkerWatch } from "./WorkerWatch";
 
-const CodePane = lazy(() => import("./CodePane").then((m) => ({ default: m.CodePane })));
 import { Composer, type ComposerHandle } from "./Composer";
 import { Explorer } from "./Explorer";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
@@ -26,9 +25,8 @@ import { SyncSettings } from "./SyncSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
 import { ActivityLog } from "./ActivityLog";
-import { extractCodeBlocks } from "./codeBlocks";
 import { LOCAL_MODEL_CHOICES } from "../electron/localChoices";
-import { clamp, defaultPrefs, moveKey, PANELS, type PanelKey, type UiPrefs } from "./prefs";
+import { defaultPrefs, moveKey, PANELS, type PanelKey, type UiPrefs } from "./prefs";
 import type { ApprovalRequest, BriefingItem, Team, ClaudeEvent, CursorChat, CursorProject, ImageAttachment, ModelOption, PluginCommand, RunPhase, UsageInfo, WatchInfo } from "./vite-env";
 
 // host is the popped-out window's root when the menu was opened there.
@@ -67,7 +65,6 @@ function sideRowHeight(row: SideRow, font: number) {
   if (row.kind === "project") return Math.ceil(font * 1.35) + 18;
   return 32;
 }
-type Tab = { path: string; name: string; contents: string; dirty: boolean };
 type RunProgress = { status: string; steps: string[]; phase?: RunPhase };
 
 function phaseWord(progress?: RunProgress) {
@@ -218,13 +215,10 @@ function PermissionDialog({
 export function App() {
   const [workspace, setWorkspace] = useState("");
   const [roots, setRoots] = useState<Entry[]>([]);
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activePath, setActivePath] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<CursorChat | null>(null);
   const [threads, setThreads] = useState<Record<string, Msg[]>>({});
   const [runningByChat, setRunningByChat] = useState<Record<string, boolean>>({});
   const [progressByChat, setProgressByChat] = useState<Record<string, RunProgress>>({});
-  const [snippetId, setSnippetId] = useState<string | null>(null);
   const [cli, setCli] = useState<{ found: boolean; path: string; bundled?: boolean } | null>(null);
   const [authOk, setAuthOk] = useState<boolean | null>(null);
   // The result of something the user just did, shown briefly in the title bar. A chat's progress stays in the chat.
@@ -305,11 +299,11 @@ export function App() {
   // Projects whose "older chats" row is open, for this session.
   const [olderOpen, setOlderOpen] = useState<Set<string>>(() => new Set());
   const [hiddenOpen, setHiddenOpen] = useState(false);
-  const [sideView, setSideView] = useState<"chats" | "files">(() =>
+  const [sideView] = useState<"chats" | "files">(() =>
     localStorage.getItem("desk.sideView") === "files" ? "files" : "chats",
   );
   // Popped-out Chats/Files windows are open unless closed here; the topbar button toggles them.
-  const [winClosed, setWinClosed] = useState<Partial<Record<"chats" | "files", boolean>>>({});
+  const [winClosed, setWinClosed] = useState<Partial<Record<"chats" | "files", boolean>>>({ files: true });
   const [mode, setMode] = useState(() => localStorage.getItem("desk.mode") || "default");
   const [model, setModel] = useState(() => localStorage.getItem("desk.model") || "");
   const [keyAsk, setKeyAsk] = useState<{ id: string; label: string; pick: string; hint: string; key: string; busy: boolean; error: string } | null>(null);
@@ -332,7 +326,15 @@ export function App() {
       void window.desk.getSettings().then((p) => setPrefs((cur) => ({ ...cur, summarizer: p.summarizer })));
     });
   }, []);
-  const [usageByChat, setUsageByChat] = useState<Record<string, UsageInfo>>({});
+  // Cost totals survive restarts (context size does not: it is per run).
+  const [usageByChat, setUsageByChat] = useState<Record<string, UsageInfo>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("chatCostUsd") || "{}") as Record<string, number>;
+      return Object.fromEntries(Object.entries(saved).map(([id, costUsd]) => [id, { costUsd, contextTokens: 0, contextWindow: 0 } as UsageInfo]));
+    } catch {
+      return {};
+    }
+  });
   const [changesByChat, setChangesByChat] = useState<Record<string, string[]>>({});
   const [diff, setDiff] = useState<DiffView | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -343,9 +345,7 @@ export function App() {
   const composerRef = useRef<ComposerHandle>(null);
   const quickRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
-  const tabsRef = useRef(tabs);
   const workspaceRef = useRef(workspace);
-  const activeRef = useRef(activePath);
   const autoOpenRef = useRef<string | null>(null);
   const activeChatRef = useRef<CursorChat | null>(null);
   const threadsRef = useRef(threads);
@@ -359,9 +359,7 @@ export function App() {
   const persistIds = useRef(new Set<string>());
   // The thread array last sent to disk per chat, so the debounced save skips chats that did not change.
   const savedThreads = useRef(new Map<string, Msg[]>());
-  tabsRef.current = tabs;
   workspaceRef.current = workspace;
-  activeRef.current = activePath;
   activeChatRef.current = activeChat;
   threadsRef.current = threads;
   runningByChatRef.current = runningByChat;
@@ -369,15 +367,6 @@ export function App() {
   const msgs = activeChat ? threads[activeChat.id] ?? [] : [];
   const running = Boolean(activeChat && runningByChat[activeChat.id]);
   const runProgress = activeChat ? progressByChat[activeChat.id] : undefined;
-  // Code blocks are only needed while the code pane is open; skip the scan of every message otherwise.
-  const snippets = useMemo(
-    () =>
-      prefs.showCode
-        ? msgs.flatMap((m, i) => (m.role === "assistant" ? extractCodeBlocks(m.text, `reply${i + 1}`) : []))
-        : [],
-    [msgs, prefs.showCode],
-  );
-
   const refreshTree = async (dir: string) => {
     setRoots(await window.desk.listDir(dir));
     setTreeKey((n) => n + 1);
@@ -386,15 +375,6 @@ export function App() {
   const reloadCursor = async () => {
     setProjects(await window.desk.listCursorProjects());
     return window.desk.listCursorChats();
-  };
-
-  const reloadOpenFile = async () => {
-    const current = tabsRef.current.find((t) => t.path === activeRef.current);
-    if (!current || current.dirty) return;
-    // The file may have been moved or deleted outside the editor; keep the tab as it was.
-    const text = await window.desk.readFile(current.path).catch(() => null);
-    if (text === null) return;
-    setTabs((all) => all.map((t) => (t.path === current.path ? { ...t, contents: text } : t)));
   };
 
   const markUsed = (chatId: string, projectPath?: string | null) => {
@@ -419,7 +399,8 @@ export function App() {
     if (ws) await refreshTree(ws);
   };
 
-  const popped = (k: PanelKey) => prefs.popOut.includes(k);
+  // Files always opens as a popup window; the sidebar is just Chats.
+  const popped = (k: PanelKey) => k === "files" || prefs.popOut.includes(k);
   // Brings an already-open pop-out window to the front. The main process tracks the child
   // window by its name and restores/focuses it in place.
   const focusPopout = (name: string) => {
@@ -565,7 +546,7 @@ export function App() {
         setUsageByChat((u) => {
           const prev = u[chatId];
           const add = ev.usage!;
-          return {
+          const next = {
             ...u,
             [chatId]: {
               ...prev,
@@ -575,6 +556,10 @@ export function App() {
               contextWindow: add.contextWindow || prev?.contextWindow || 0,
             },
           };
+          try {
+            localStorage.setItem("chatCostUsd", JSON.stringify(Object.fromEntries(Object.entries(next).map(([id, v]) => [id, v.costUsd]))));
+          } catch {}
+          return next;
         });
       }
       if (ev.kind === "approval_done") {
@@ -647,7 +632,6 @@ export function App() {
         }));
         const ws = workspaceRef.current;
         if (ws) void refreshTree(ws);
-        void reloadOpenFile();
         const pendingSave = threadTimers.current.get(chatId);
         if (pendingSave) {
           window.clearTimeout(pendingSave);
@@ -665,7 +649,6 @@ export function App() {
     const offWatch = window.desk.onWorkspaceChanged(() => {
       const ws = workspaceRef.current;
       if (ws) void refreshTree(ws);
-      void reloadOpenFile();
     });
     return () => {
       offClaude();
@@ -807,7 +790,7 @@ export function App() {
       }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
-        setSideView((v) => (v === "files" ? "chats" : "files"));
+        setWinClosed((c) => ({ ...c, files: !c.files }));
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -836,65 +819,14 @@ export function App() {
   }, []);
 
   const openFilePath = async (filePath: string) => {
-    const existing = tabsRef.current.find((t) => t.path === filePath);
-    patchPrefs({ showCode: true });
-    setSnippetId(null);
     setDiff(null);
-    if (existing) {
-      setActivePath(filePath);
-      return;
-    }
-    const text = await window.desk.readFile(filePath);
-    const tab: Tab = { path: filePath, name: baseName(filePath), contents: text, dirty: false };
-    setTabs((all) => [...all.filter((t) => t.path !== filePath), tab]);
-    setActivePath(filePath);
+    await window.desk.codeOpen(filePath);
   };
 
-
-  const saveTab = async (filePath: string) => {
-    const tab = tabsRef.current.find((t) => t.path === filePath);
-    if (!tab) return;
-    const contents = tab.contents;
-    await window.desk.writeFile(filePath, contents);
-    // Only clear the dot if nothing was typed while the save was in flight.
-    setTabs((all) => all.map((t) => (t.path === filePath && t.contents === contents ? { ...t, dirty: false } : t)));
-    setStatus(`Saved ${baseName(filePath)}`);
-  };
-
-  const [chatWidth, setChatWidth] = useState(() => {
+  const [chatWidth] = useState(() => {
     const saved = Number(localStorage.getItem("desk.chatWidth"));
     return saved >= 320 && saved <= 1200 ? saved : 460;
   });
-
-  const startChatResize = (e: ReactMouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = chatWidth;
-    let latest = startW;
-    const move = (ev: MouseEvent) => {
-      latest = clamp(startW - (ev.clientX - startX), 320, Math.max(320, window.innerWidth - 700));
-      setChatWidth(latest);
-    };
-    const up = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      document.body.classList.remove("resizing");
-      localStorage.setItem("desk.chatWidth", String(latest));
-    };
-    document.body.classList.add("resizing");
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  };
-
-  const closeTab = (filePath: string) => {
-    const tab = tabsRef.current.find((t) => t.path === filePath);
-    if (tab?.dirty && !window.confirm(`${tab.name} has unsaved changes. Close it anyway?`)) return;
-    setTabs((all) => {
-      const next = all.filter((t) => t.path !== filePath);
-      if (activePath === filePath) setActivePath(next.at(-1)?.path ?? null);
-      return next;
-    });
-  };
 
   const newAgent = () => {
     const id = crypto.randomUUID();
@@ -1046,6 +978,12 @@ export function App() {
     [],
   );
   const [workerList, setWorkerList] = useState(false);
+  const [openWork, setOpenWork] = useState<string[]>([]);
+  const [openWorkHidden, setOpenWorkHidden] = useState(false);
+  const openWorkFolder = activeChat?.projectPath || workspace;
+  useEffect(() => {
+    if (openWorkFolder) void window.desk.openWork(openWorkFolder).then(setOpenWork).catch(() => setOpenWork([]));
+  }, [openWorkFolder]);
   const [watchWorker, setWatchWorker] = useState<string | null>(null);
   const watchWorkerChat = (id: string) => {
     setWorkerList(false);
@@ -1074,8 +1012,8 @@ export function App() {
     if (!chat) return;
     const before = await window.desk.changeBase(chat.id, filePath);
     const after = await window.desk.readFile(filePath).catch(() => "");
-    patchPrefs({ showCode: true });
     setDiff({ path: filePath, before: before ?? "", after, created: before === null });
+    await window.desk.codeOpen();
   };
 
   const afterChangeAction = async (chatId: string, remaining: string[]) => {
@@ -1085,12 +1023,6 @@ export function App() {
     if (diff && !keep.has(diff.path.toLowerCase())) setDiff(null);
     const ws = workspaceRef.current;
     if (ws) void refreshTree(ws);
-    // Reload clean tabs so an undo shows up in the editor right away.
-    for (const t of tabsRef.current) {
-      if (t.dirty) continue;
-      const text = await window.desk.readFile(t.path).catch(() => null);
-      if (text !== null) setTabs((all) => all.map((x) => (x.path === t.path && !x.dirty ? { ...x, contents: text } : x)));
-    }
   };
 
   const keepChanges = async (paths?: string[]) => {
@@ -1105,6 +1037,26 @@ export function App() {
     await afterChangeAction(chat.id, await window.desk.revertChanges(chat.id, paths));
     setStatus(paths?.length === 1 ? `Undid the agent's changes to ${baseName(paths[0])}` : "Undid the agent's changes");
   };
+
+  const mention = (p: string) => {
+    const rel = workspace && p.toLowerCase().startsWith(workspace.toLowerCase()) ? p.slice(workspace.length).replace(/^[\/]+/, "") : p;
+    composerRef.current?.addMention(p, rel);
+  };
+
+  // Feed the Code window what only this window knows. Chat replies never go there: it edits files only.
+  useEffect(() => {
+    window.desk.codePush({ diff, changed: activeChanges });
+  }, [diff, activeChanges]);
+
+  // Keep, Undo and @-mention clicks made in the Code window. A ref keeps the listener on the newest closures.
+  const codeActRef = useRef<(a: { kind: string; path?: string }) => void>(() => {});
+  codeActRef.current = (a) => {
+    if (a.kind === "keep" && a.path) void keepChanges([a.path]);
+    else if (a.kind === "undo" && a.path) void undoChanges([a.path]);
+    else if (a.kind === "closeDiff") setDiff(null);
+    else if (a.kind === "mention" && a.path) mention(a.path);
+  };
+  useEffect(() => window.desk.onCodeAct((a) => codeActRef.current(a as { kind: string; path?: string })), []);
 
   const catchUp = async () => {
     if (!activeChat || runningByChat[activeChat.id]) return;
@@ -1644,13 +1596,6 @@ export function App() {
     if (result.ok) markArchive(g.key, "in");
     setStatus(result.note);
     if (!result.ok) return;
-    const under = (p: string) => {
-      const file = p.toLowerCase();
-      const dir = g.path.toLowerCase();
-      return file === dir || file.startsWith(`${dir}\\`) || file.startsWith(`${dir}/`);
-    };
-    setTabs((all) => all.filter((t) => !under(t.path)));
-    setActivePath((cur) => (cur && under(cur) ? null : cur));
     if (activeChat && g.chats.some((c) => c.id === activeChat.id)) setActiveChat(null);
     setWorkspace(await window.desk.getWorkspace());
     setProjects(await window.desk.listCursorProjects());
@@ -1689,15 +1634,6 @@ export function App() {
   const otherView = sideView === "files" ? "chats" : "files";
   // The sidebar shows whichever of Chats/Files isn't in its own window; neither if both are.
   const inSide = !popped(sideView) ? sideView : !popped(otherView) ? otherView : null;
-  const showSide = (view: "chats" | "files") => {
-    if (popped(view)) {
-      // A click on the item when the window is already open brings it to the foreground;
-      // when it is closed it reopens it. window.open with the same name focuses the existing window.
-      if (winClosed[view]) setWinClosed((c) => ({ ...c, [view]: false }));
-      else focusPopout(view);
-    } else setSideView(view);
-  };
-  const sideOn = (view: "chats" | "files") => (popped(view) ? winShown(view) : inSide === view);
 
   return (
     <div className="app" data-theme={look.theme} style={look.style}>
@@ -1707,34 +1643,14 @@ export function App() {
         </div>
       )}
       <nav className="topbar" aria-label="Main">
-        <div className="topbar-group" role="tablist" aria-label="Sidebar shows">
+        <div className="topbar-group">
           <button
             type="button"
-            role="tab"
-            aria-selected={sideOn("chats")}
-            className={sideOn("chats") ? "on" : ""}
-            title="Show your projects and chats"
-            onClick={() => showSide("chats")}
-          >
-            <Glyph name="chats" />
-            <span>Chats</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={sideOn("files")}
-            className={sideOn("files") ? "on" : ""}
-            title="Show the project's files (Ctrl+Shift+E)"
-            onClick={() => showSide("files")}
+            title="Open the code editor in its own window"
+            onClick={() => void window.desk.codeOpen()}
           >
             <Glyph name="files" />
             <span>Files</span>
-          </button>
-        </div>
-        <div className="topbar-group">
-          <button type="button" title="Where every recent chat stands" onClick={() => (popped("status") && briefing ? focusPopout("status") : showBriefing())}>
-            <Glyph name="briefing" />
-            <span>Chat status</span>
           </button>
           <button type="button" title="Help (F1)" onClick={() => (popped("help") && showHelp ? focusPopout("help") : setShowHelp(true))}>
             <Glyph name="help" />
@@ -1753,30 +1669,12 @@ export function App() {
             <Explorer
               root={workspace}
               roots={roots}
-              active={activePath}
+              active={null}
               changed={activeChanges}
               refreshKey={treeKey}
               onRefresh={() => void refreshTree(workspace)}
               onOpen={(p) => void openFilePath(p)}
-              onMoved={(from, to) => {
-                const under = (p: string) => {
-                  const a = p.toLowerCase();
-                  const b = from.toLowerCase();
-                  return a === b || a.startsWith(`${b}\\`) || a.startsWith(`${b}/`);
-                };
-                setTabs((all) =>
-                  to === null
-                    ? all.filter((t) => !under(t.path))
-                    : all.map((t) => {
-                        if (!under(t.path)) return t;
-                        const moved = to + t.path.slice(from.length);
-                        return { ...t, path: moved, name: baseName(moved) };
-                      }),
-                );
-                setActivePath((cur) =>
-                  cur && under(cur) ? (to === null ? null : to + cur.slice(from.length)) : cur,
-                );
-              }}
+              onMoved={() => {}}
               onMention={(p) => {
                 const rel = workspace && p.toLowerCase().startsWith(workspace.toLowerCase())
                   ? p.slice(workspace.length).replace(/^[\\/]+/, "")
@@ -2089,44 +1987,15 @@ export function App() {
         })()}
 
         <section
-          className={`agent ${prefs.showCode ? "with-code" : ""}`}
+          className="agent"
           style={{ "--chat-width": `${chatWidth}px` } as CSSProperties}
         >
-          {prefs.showCode && (
-            <Suspense fallback={<div className="editor-wait">Opening the editor…</div>}>
-            <CodePane
-              files={tabs}
-              activePath={activePath}
-              snippets={snippets}
-              snippetId={snippetId}
-              workspace={workspace}
-              diff={diff}
-              onDiffKeep={(p) => void keepChanges([p])}
-              onDiffUndo={(p) => void undoChanges([p])}
-              onDiffClose={() => setDiff(null)}
-              onSelectFile={(p) => {
-                setDiff(null);
-                setSnippetId(null);
-                setActivePath(p);
-              }}
-              onSelectSnippet={(id) => {
-                setDiff(null);
-                setSnippetId(id);
-              }}
-              onCloseFile={closeTab}
-              onChangeFile={(p, contents) =>
-                setTabs((all) => all.map((t) => (t.path === p ? { ...t, contents, dirty: true } : t)))
-              }
-              onSaveFile={(p) => void saveTab(p)}
-              onHide={() => patchPrefs({ showCode: false })}
-              onOpenChat={openChatById}
-              autocomplete={prefs.autocomplete}
-            />
-            </Suspense>
-          )}
-          {prefs.showCode && <div className="split" onMouseDown={startChatResize} title="Drag to resize" />}
-
           <div className="chat">
+            {briefing && (
+              <div style={{ maxHeight: "45%", overflow: "auto" }}>
+                <Briefing items={briefing} onOpen={(id) => { openChatById(id); setBriefing(null); }} onClose={() => setBriefing(null)} />
+              </div>
+            )}
             <div className="pane-head chat-head">
               <span className="chat-title">{activeChat?.title ?? "New agent"}</span>
               {activeChat && !hiddenChatSet.has(activeChat.id) && (
@@ -2199,7 +2068,7 @@ export function App() {
               {activeChat && (
                 <WorktreeChip chatId={activeChat.id} folder={activeChat.projectPath ?? ""} running={running} onNote={setStatus} />
               )}
-              {(["terminal", "git", "preview", "notes", "rules"] as DockTab[]).map((tab) => (
+              {(["terminal", "git", "preview"] as DockTab[]).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -2210,23 +2079,33 @@ export function App() {
                     else setDock((cur) => (cur === tab ? null : tab));
                   }}
                 >
-                  {tab === "notes" ? "Instructions" : tab[0].toUpperCase() + tab.slice(1)}
+                  {tab[0].toUpperCase() + tab.slice(1)}
                 </button>
               ))}
               <button type="button" className="ghost" onClick={openCanvas} title="Open this chat's Canvas in its own window">
                 Canvas
               </button>
+              <button type="button" className="ghost" title="Where every recent chat stands" onClick={() => (briefing ? setBriefing(null) : showBriefing())}>
+                Status
+              </button>
               <span className="grow" />
               <button
                 className="ghost"
-                onClick={() => patchPrefs({ showCode: !prefs.showCode })}
+                title="Open the code editor in its own window"
+                onClick={() => void window.desk.codeOpen()}
               >
-                {prefs.showCode ? "Hide code" : "Code"}
+                Code
               </button>
             </div>
             <div
               className="messages"
               ref={messagesRef}
+              onContextMenu={(e) => {
+                // Keep the normal menu on selected text so Copy still works.
+                if (window.getSelection()?.toString()) return;
+                e.preventDefault();
+                void composerRef.current?.pasteImages();
+              }}
               onScroll={() => {
                 const el = messagesRef.current;
                 if (!el) return;
@@ -2282,6 +2161,17 @@ export function App() {
             />
             <Composer
               ref={composerRef}
+              leading={openWork.length > 0 && !openWorkHidden ? (
+                <details className="open-work" style={{ position: "relative", fontSize: 12 }}>
+                  <summary className="btn" style={{ cursor: "pointer" }}>
+                    Open work · {openWork.length}
+                  </summary>
+                  <div style={{ position: "absolute", bottom: "100%", left: 0, zIndex: 20, width: 340, maxHeight: 260, overflow: "auto", padding: "6px 10px", borderRadius: 12, background: "var(--bg-2, #2a2a2a)", boxShadow: "0 4px 16px #0006" }}>
+                    <button type="button" className="ghost" style={{ float: "right" }} onClick={() => setOpenWorkHidden(true)} title="Hide until restart">×</button>
+                    <ul style={{ margin: "4px 0", paddingLeft: 16 }}>{openWork.map((l) => <li key={l}>{l.replace(/^\d+\. /, "")}</li>)}</ul>
+                  </div>
+                </details>
+              ) : undefined}
               value={prompt}
               onChange={setPrompt}
               running={running}
@@ -2547,26 +2437,6 @@ export function App() {
         </PopOut>
       )}
 
-      {briefing && (
-        <PopOut
-          name="status"
-          title="Chat status — AgenticOps Desk"
-          width={760}
-          height={760}
-          look={look}
-          windowed={popped("status")}
-          onClose={() => setBriefing(null)}
-        >
-          <Briefing
-            items={briefing}
-            onOpen={(id) => {
-              openChatById(id);
-              if (!popped("status")) setBriefing(null);
-            }}
-            onClose={() => setBriefing(null)}
-          />
-        </PopOut>
-      )}
 
       {watchWorker && (
         <PopOut
@@ -2796,6 +2666,12 @@ export function App() {
                         onChange={(e) => patchPrefs({ allowAll: e.target.checked })}
                       />
                       Allow everything without asking
+                    </label>
+
+                    <div className="settings-label">Code editor</div>
+                    <label className="settings-check">
+                      <input type="checkbox" checked={prefs.minimap === true} onChange={(e) => patchPrefs({ minimap: e.target.checked })} />
+                      Show the minimap (small file preview by the scrollbar). Applies to editors opened afterwards.
                     </label>
 
                     <div className="settings-label">Preview</div>

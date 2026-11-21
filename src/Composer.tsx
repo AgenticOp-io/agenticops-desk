@@ -45,7 +45,7 @@ const SLASH = [
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 // A file, or a declaration inside one (line and kind set) found by name.
 type Hit = { name: string; path: string; rel: string; line?: number; kind?: string };
-export type ComposerHandle = { focus: () => void; addMention: (abs: string, rel: string) => void };
+export type ComposerHandle = { focus: () => void; pasteImages: () => Promise<void>;addMention: (abs: string, rel: string) => void };
 
 function compact(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -131,6 +131,8 @@ export const Composer = forwardRef<
     activeChatId?: string;
     chatTitle?: (id: string) => string | undefined;
     onOpenChat?: (id: string) => void;
+    // Rendered first in the button row (the Open work pulldown).
+    leading?: React.ReactNode;
   }
 >(function Composer(props, ref) {
   const { value, onChange, running } = props;
@@ -154,7 +156,6 @@ export const Composer = forwardRef<
     // Next frame: a cursor set during this commit did not hold, and came back at the start of the draft.
     requestAnimationFrame(() => el.setSelectionRange(el.value.length, el.value.length));
   }, [props.value, props.activeChatId]);
-  const fileRef = useRef<HTMLInputElement>(null);
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [mentions, setMentions] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<string | null>(null);
@@ -173,6 +174,18 @@ export const Composer = forwardRef<
     ref,
     () => ({
       focus: () => areaRef.current?.focus(),
+      pasteImages: async () => {
+        try {
+          const files: File[] = [];
+          for (const item of await navigator.clipboard.read()) {
+            const type = item.types.find((t) => t.startsWith("image/"));
+            if (type) files.push(new File([await item.getType(type)], "pasted.png", { type }));
+          }
+          await addFiles(files);
+        } catch {
+          setNote("No image on the clipboard.");
+        }
+      },
       addMention: (abs: string, rel: string) => {
         const r = rel.replace(/\\/g, "/");
         const cur = valueRef.current;
@@ -426,26 +439,12 @@ export const Composer = forwardRef<
             → {props.routedTo}
           </span>
         )}
-        <button type="button" className="pill" title="Attach images" onClick={() => fileRef.current?.click()}>
-          Image
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onChange={(e) => {
-            if (e.target.files) void addFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
         {note && <span className="hint">{note}</span>}
         <span className="grow" />
         {props.usage && (
           <span
             className="usage"
-            title={`Context: ${props.usage.contextTokens.toLocaleString()} of ${props.usage.contextWindow.toLocaleString()} tokens${props.usage.model ? ` · ${props.usage.model}` : ""}${sessionPct != null ? `\n5-hour allowance: ${Math.round(sessionPct)}%${sessionReset ? ` · resets ${sessionReset}` : ""}` : ""}\nEstimated cost of this chat since AgenticOps Desk started: $${props.usage.costUsd.toFixed(4)}`}
+            title={`Context: ${props.usage.contextTokens.toLocaleString()} of ${props.usage.contextWindow.toLocaleString()} tokens${props.usage.model ? ` · ${props.usage.model}` : ""}${sessionPct != null ? `\n5-hour allowance: ${Math.round(sessionPct)}%${sessionReset ? ` · resets ${sessionReset}` : ""}` : ""}\nEstimated cost of this chat in total: $${props.usage.costUsd.toFixed(4)}`}
           >
             <span className="usage-meter">
               <span style={{ width: `${ctxPct}%` }} className={sessionHot || ctxPct > 80 ? "hot" : ""} />
@@ -453,7 +452,9 @@ export const Composer = forwardRef<
             {sessionPct != null && <span className={sessionHot ? "session-hot" : ""}>5h {Math.round(sessionPct)}%</span>}
             {props.usage.contextWindow
               ? `${compact(props.usage.contextTokens)} / ${compact(props.usage.contextWindow)} · $${props.usage.costUsd.toFixed(2)}`
-              : `${compact(props.usage.contextTokens)} tokens`}
+              : props.usage.contextTokens
+                ? `${compact(props.usage.contextTokens)} tokens`
+                : `$${props.usage.costUsd.toFixed(2)} spent`}
           </span>
         )}
       </div>
@@ -469,6 +470,7 @@ export const Composer = forwardRef<
         </div>
       )}
       <div className="row">
+        {props.leading}
         <button className="btn" disabled={running} onClick={props.onCatchUp}>
           {running ? "Running…" : "Catch up"}
         </button>

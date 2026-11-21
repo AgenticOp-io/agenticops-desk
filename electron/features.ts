@@ -7,7 +7,7 @@ import { app } from "electron";
 import { recordActivity } from "./activityLog";
 import { realStorePwsh } from "./claude";
 import { quietThreads } from "./resourceGuard";
-import { isNewerVersion, isReleaseTag, newestTag } from "./pureFeatures";
+import { isNewerVersion, isReleaseTag, newestTag, parsePorcelain, remoteWeb } from "./pureFeatures";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
@@ -98,6 +98,152 @@ export function gitPullRequest(cwd: string, title: string, body: string) {
   const heading = title.trim();
   if (!heading) return Promise.resolve({ ok: false, output: "Write a pull request title first." });
   return run("gh", ["pr", "create", "--title", heading, "--body", body.trim() || heading], cwd).then((r) => gitActivity("pull-request", r));
+}
+
+// Source control for the Code window. Paths arrive from the window, so each must stay inside the repo.
+function relPaths(paths: unknown): string[] | null {
+  if (!Array.isArray(paths) || !paths.length) return null;
+  const ok = paths.every((p) => typeof p === "string" && p && !path.isAbsolute(p) && !p.startsWith("-") && !p.split(/[\\/]/).includes(".."));
+  // Status paths are relative to the repo root, which may sit above the open folder.
+  return ok ? (paths as string[]).map((p) => `:(top)${p}`) : null;
+}
+const badPaths = { ok: false, output: "Those paths are not in this repository." };
+
+// stdout only, untrimmed: run() appends stderr warnings (line endings) that would read as files.
+function gitOut(cwd: string, args: string[]) {
+  return new Promise<string | null>((resolve) =>
+    execFile("git", args, { cwd, windowsHide: true, timeout: 60_000, maxBuffer: 20_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }, (err, stdout) => resolve(err ? null : stdout)),
+  );
+}
+
+export async function gitChanges(cwd: string) {
+  const [status, remote, head, top] = await Promise.all([
+    gitOut(cwd, ["status", "--porcelain=v1", "-b", "-z", "-uall"]),
+    gitOut(cwd, ["remote", "get-url", "origin"]),
+    gitOut(cwd, ["rev-parse", "HEAD"]),
+    gitOut(cwd, ["rev-parse", "--show-toplevel"]),
+  ]);
+  if (status === null) return { ok: false, output: "", repo: false };
+  return { ok: true, output: "", repo: true, ...parsePorcelain(status), head: head?.trim() ?? "", root: top?.trim() ?? "", remote: remote ? remoteWeb(remote) : null };
+}
+
+export function gitStage(cwd: string, paths: unknown) {
+  const list = relPaths(paths);
+  return list ? runGit(cwd, ["add", "-A", "--", ...list]) : Promise.resolve(badPaths);
+}
+
+export async function gitUnstage(cwd: string, paths: unknown) {
+  const list = relPaths(paths);
+  if (!list) return badPaths;
+  const r = await runGit(cwd, ["reset", "-q", "HEAD", "--", ...list]);
+  // No commits yet: there is no HEAD to reset to.
+  return r.ok ? r : runGit(cwd, ["rm", "--cached", "-q", "-r", "--", ...list]);
+}
+
+// Throws away edits. The window asks first.
+export async function gitDiscard(cwd: string, paths: unknown, untracked: unknown) {
+  const list = relPaths(paths);
+  if (!list) return badPaths;
+  const r = untracked === true ? await runGit(cwd, ["clean", "-f", "-q", "--", ...list]) : await runGit(cwd, ["checkout", "-q", "HEAD", "--", ...list]);
+  return gitActivity("discard", r);
+}
+
+// Settle a merge conflict by keeping our side or theirs for whole files, then stage the result.
+export async function gitResolve(cwd: string, paths: unknown, side: unknown) {
+  const list = relPaths(paths);
+  if (!list || (side !== "ours" && side !== "theirs")) return badPaths;
+  const r = await runGit(cwd, ["checkout", `--${side}`, "--", ...list]);
+  return r.ok ? gitActivity("resolve", await runGit(cwd, ["add", "--", ...list])) : r;
+}
+
+// The file as committed at HEAD; empty for a new file.
+export async function gitShowHead(cwd: string, file: unknown) {
+  if (!relPaths([file])) return "";
+  // Untrimmed, or a lost final newline would show as a change.
+  return (await gitOut(cwd, ["show", `HEAD:${String(file).replace(/\\/g, "/")}`])) ?? "";
+}
+
+export async function gitBranches(cwd: string) {
+  const out = await gitOut(cwd, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)%09%(upstream:short)%09%(HEAD)", "refs/heads", "refs/remotes"]);
+  return (out ?? "")
+    .split("\n")
+    .map((l) => l.split("\t"))
+    .filter(([ref]) => ref && !ref.endsWith("/HEAD"))
+    .map(([ref, upstream = "", head = ""]) => ({ name: ref.replace(/^refs\/(heads|remotes)\//, ""), remote: ref.startsWith("refs/remotes/"), upstream, current: head === "*" }));
+}
+
+export async function gitLog(cwd: string) {
+  const out = await gitOut(cwd, ["log", "-60", "--format=%H%x09%h%x09%an%x09%ar%x09%D%x09%s"]);
+  return out
+    ? out.split("\n").filter(Boolean).map((l) => { const [sha, short, author, when, refs, ...s] = l.split("\t"); return { sha, short, author, when, refs, subject: s.join("\t") }; })
+    : [];
+}
+
+export async function gitCommitWith(cwd: string, message: string, opts: { all?: boolean; amend?: boolean }) {
+  const text = message.trim();
+  if (!text && !opts.amend) return { ok: false, output: "Write a commit message first." };
+  if (opts.all) {
+    const added = await run("git", ["add", "-A"], cwd);
+    if (!added.ok) return gitActivity("commit", added);
+  }
+  const args = ["commit", ...(opts.amend ? ["--amend"] : []), ...(text ? ["-m", text] : ["--no-edit"])];
+  return gitActivity("commit", await run("git", args, cwd));
+}
+
+// A branch with no upstream yet is published to origin.
+export function gitPublish(cwd: string) {
+  return runGit(cwd, ["push", "-u", "origin", "HEAD"], 120_000).then((r) => gitActivity("push", r));
+}
+
+export function gitNewBranch(cwd: string, branch: string) {
+  const name = branchName(branch);
+  if (!name) return Promise.resolve({ ok: false, output: "Branch name is not valid." });
+  return runGit(cwd, ["checkout", "-b", name]).then((r) => gitActivity("branch", r));
+}
+
+// Pull and merge requests through the host's own CLI (gh, glab) when it is installed and signed in.
+function cliJson<T>(cmd: string, args: string[], cwd: string) {
+  return new Promise<{ rows: T[] | null; error: string }>((resolve) =>
+    execFile(cmd, args, { cwd, windowsHide: true, timeout: 30_000, maxBuffer: 20_000_000 }, (err, stdout, stderr) => {
+      try {
+        resolve(err ? { rows: null, error: (stderr || err.message).trim() } : { rows: JSON.parse(stdout) as T[], error: "" });
+      } catch {
+        resolve({ rows: null, error: "Could not read the list." });
+      }
+    }),
+  );
+}
+
+export async function gitPullRequests(cwd: string, kind: string) {
+  if (kind === "github") {
+    type Row = { number: number; title: string; headRefName: string; author?: { login?: string }; url: string };
+    const { rows, error } = await cliJson<Row>("gh", ["pr", "list", "--limit", "30", "--json", "number,title,headRefName,author,url"], cwd);
+    return { ok: !!rows, output: error, prs: (rows ?? []).map((p) => ({ number: p.number, title: p.title, branch: p.headRefName, author: p.author?.login ?? "", url: p.url })) };
+  }
+  if (kind === "gitlab") {
+    type Row = { iid: number; title: string; source_branch: string; author?: { username?: string }; web_url: string };
+    const { rows, error } = await cliJson<Row>("glab", ["mr", "list", "-F", "json"], cwd);
+    return { ok: !!rows, output: error, prs: (rows ?? []).map((p) => ({ number: p.iid, title: p.title, branch: p.source_branch, author: p.author?.username ?? "", url: p.web_url })) };
+  }
+  if (kind === "azure") {
+    type Row = { pullRequestId: number; title: string; sourceRefName: string; createdBy?: { uniqueName?: string }; repository?: { webUrl?: string } };
+    const { rows, error } = await cliJson<Row>("az", ["repos", "pr", "list", "--output", "json"], cwd);
+    return { ok: !!rows, output: error, prs: (rows ?? []).map((p) => ({ number: p.pullRequestId, title: p.title, branch: p.sourceRefName.replace(/^refs\/heads\//, ""), author: p.createdBy?.uniqueName ?? "", url: `${p.repository?.webUrl ?? ""}/pullrequest/${p.pullRequestId}` })) };
+  }
+  return { ok: false, output: "Bitbucket has no command-line tool for this; open the list on the web.", prs: [] };
+}
+
+export function gitPrCheckout(cwd: string, kind: string, num: unknown) {
+  const n = Number(num);
+  if (!Number.isInteger(n) || n <= 0) return Promise.resolve({ ok: false, output: "Not a pull request number." });
+  const cmd = kind === "gitlab" ? ["glab", ["mr", "checkout", String(n)]] as const : kind === "azure" ? ["az", ["repos", "pr", "checkout", "--id", String(n)]] as const : ["gh", ["pr", "checkout", String(n)]] as const;
+  return run(cmd[0], [...cmd[1]], cwd, 120_000).then((r) => gitActivity("pr-checkout", r));
+}
+
+// Your repositories on GitHub, for the clone picker.
+export async function githubRepos() {
+  const { rows } = await cliJson<{ nameWithOwner: string; url: string; description: string }>("gh", ["repo", "list", "--limit", "100", "--json", "nameWithOwner,url,description"], app.getPath("home"));
+  return rows ?? [];
 }
 
 export async function readProjectDoc(cwd: string, name: string) {

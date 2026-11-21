@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld("desk", {
     ipcRenderer.invoke("fs:list", dir) as Promise<
       Array<{ name: string; path: string; isDir: boolean }>
     >,
+  openWork: (workspace: string) => ipcRenderer.invoke("openWork:read", workspace) as Promise<string[]>,
   readFile: (filePath: string) => ipcRenderer.invoke("fs:read", filePath) as Promise<string>,
   writeFile: (filePath: string, contents: string) =>
     ipcRenderer.invoke("fs:write", filePath, contents) as Promise<boolean>,
@@ -211,6 +212,22 @@ contextBridge.exposeInMainWorld("desk", {
     ipcRenderer.invoke("git:checkout", cwd, branch) as Promise<{ ok: boolean; output: string }>,
   gitPullRequest: (cwd: string, title: string, body: string) =>
     ipcRenderer.invoke("git:pr", cwd, title, body) as Promise<{ ok: boolean; output: string }>,
+  // Types for these live in src/vite-env.d.ts.
+  gitChanges: (cwd: string) => ipcRenderer.invoke("git:changes", cwd),
+  gitStage: (cwd: string, paths: string[]) => ipcRenderer.invoke("git:stage", cwd, paths),
+  gitUnstage: (cwd: string, paths: string[]) => ipcRenderer.invoke("git:unstage", cwd, paths),
+  gitResolve: (cwd: string, paths: string[], side: "ours" | "theirs") => ipcRenderer.invoke("git:resolve", cwd, paths, side),
+  gitDiscard: (cwd: string, paths: string[], untracked: boolean) => ipcRenderer.invoke("git:discard", cwd, paths, untracked),
+  gitShowHead: (cwd: string, file: string) => ipcRenderer.invoke("git:show-head", cwd, file),
+  gitBranches: (cwd: string) => ipcRenderer.invoke("git:branches", cwd),
+  gitLog: (cwd: string) => ipcRenderer.invoke("git:log", cwd),
+  gitCommitWith: (cwd: string, message: string, opts: { all?: boolean; amend?: boolean }) => ipcRenderer.invoke("git:commit-with", cwd, message, opts),
+  gitPublish: (cwd: string) => ipcRenderer.invoke("git:publish", cwd),
+  gitNewBranch: (cwd: string, name: string) => ipcRenderer.invoke("git:new-branch", cwd, name),
+  gitPrs: (cwd: string, kind: string) => ipcRenderer.invoke("git:prs", cwd, kind),
+  gitPrCheckout: (cwd: string, kind: string, num: number) => ipcRenderer.invoke("git:pr-checkout", cwd, kind, num),
+  gitRepos: () => ipcRenderer.invoke("git:repos"),
+  gitClone: (remote: string) => ipcRenderer.invoke("git:clone", remote),
   syncStatus: () =>
     ipcRenderer.invoke("sync:status") as Promise<{
       url: string;
@@ -321,6 +338,26 @@ contextBridge.exposeInMainWorld("desk", {
     return () => ipcRenderer.removeListener("canvas:show", h);
   },
   canvasOpen: (chatId: string) => ipcRenderer.invoke("canvas:open", chatId) as Promise<void>,
+  codeOpen: (file?: string) => ipcRenderer.invoke("code:open", file) as Promise<void>,
+  codePush: (s: unknown) => ipcRenderer.send("code:push", s),
+  codeState: () => ipcRenderer.invoke("code:state") as Promise<unknown>,
+  onCodeState: (cb: (s: unknown) => void) => {
+    const h = (_e: unknown, s: unknown) => cb(s);
+    ipcRenderer.on("code:state", h);
+    return () => ipcRenderer.removeListener("code:state", h);
+  },
+  codeAct: (a: unknown) => ipcRenderer.send("code:act", a),
+  onCodeAct: (cb: (a: unknown) => void) => {
+    const h = (_e: unknown, a: unknown) => cb(a);
+    ipcRenderer.on("code:act", h);
+    return () => ipcRenderer.removeListener("code:act", h);
+  },
+  codeTake: () => ipcRenderer.invoke("code:take") as Promise<string>,
+  onCodeFile: (cb: (p: string) => void) => {
+    const h = (_e: unknown, p: string) => cb(p);
+    ipcRenderer.on("code:file", h);
+    return () => ipcRenderer.removeListener("code:file", h);
+  },
   canvasGet: (chatId: string) => ipcRenderer.invoke("canvas:get", chatId) as Promise<CanvasDoc | null>,
   canvasExport: (format: "pdf" | "png", html: string, name: string) => ipcRenderer.invoke("canvas:export", format, html, name) as Promise<boolean>,
   // A manager chat asks the window to start or message a worker chat, so it runs like any chat the user starts.

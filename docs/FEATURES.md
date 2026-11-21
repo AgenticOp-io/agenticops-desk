@@ -41,11 +41,11 @@ Stuck? **F1** opens Help, and **Ctrl+Shift+P** searches every action.
 ## The window
 
 - **Messages:** a short note pops up after something you did, such as "Saved CLAUDE.md", and clears after 8 seconds. First-launch download progress shows the same way and stays until the download ends.
-- **Top bar:** **Chats** and **Files** switch the sidebar between projects and chats and the folder tree. On the right are **Waiting on you** (the inbox, with a count when something waits on you), **Chat status** (the briefing), **Help** and **Settings**.
+- **Top bar:** **Files** opens the Code window. On the right are **Waiting on you** (the inbox, with a count when something waits on you), **Help** and **Settings**. The sidebar is the projects and chats list.
 - **Separate windows:** under Settings › Appearance › **Open in their own window**, tick any of Chats, Files, Waiting on you, Chat status, Help and Settings. A ticked panel opens as its own window, which you can move beside the chat, and it stays in sync with the main window. Its top-bar button opens or closes that window. Help and Settings are ticked to start with. When both Chats and Files are ticked, the sidebar goes away and the chat uses the full width. If a window can't open, the panel shows inside the main window instead.
 - **Left side:** projects and chats, or the folder tree.
-- **Right side:** the conversation and message box. **Code** opens the editor beside it.
-- **Under the message box:** Terminal, Git, Preview, Instructions and Rules. **Canvas** opens in its own window.
+- **Right side:** the conversation and message box. **Code** (under the message box) opens the Code window.
+- **Under the message box:** Terminal, Git and Preview. **Canvas** opens in its own window, **Status** shows the chat briefing, and **Open work** lists what the project still has open.
 
 There is no status bar. Sign-in state and the agent engine's state are in **Settings → Engine & sign-in**. If you are signed out, sending a message shows the error in the chat.
 
@@ -55,7 +55,7 @@ There is no status bar. Sign-in state and the agent engine's state are in **Sett
 
 | Section | What is in it |
 |---|---|
-| **Appearance** | Theme, window font size, agent list font size |
+| **Appearance** | Theme, window font size, agent list font size, Code editor (Show the minimap, off by default; applies to editors opened afterwards) |
 | **Privacy & logins** | Privacy Mode, Always hide these values, Saved logins |
 | **Sync** | The sync repository, and what Cursor chats do |
 | **Chats & projects** | Hidden items, Project cleanup, Where chats live, Import from other tools, Older chats, and Cursor folders in Git mode |
@@ -313,8 +313,11 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 
 ## Files and the editor
 
-- **Files** in the sidebar is the folder tree. **Ctrl+P** opens a file by name.
-- **Code** shows the editor, which loads the first time you open it. **Ctrl+S** saves. A dot on a tab means unsaved changes; middle-click closes a tab. Code blocks in a reply open as read-only tabs.
+- **Files** and **Code** open the **Code window**: its own window with the project's folder tree and the editor. Click the folder name at the top of the tree to switch folders. Clicking a file path or a changed file in the chat opens it there. A file's changes from the agent open as a Keep/Undo diff. Right-click a file and pick the @ entry to mention it in the chat.
+- **Source control** (the tab next to **Files** in the Code window) works like VS Code's. Changed files are listed under **Staged changes** and **Changes**. Hover a file to open it, stage it (+), unstage it (−) or discard it (↶; it asks first). Click a file to see its diff against the last commit, with **Stage** and **Discard** buttons. Write a message and press **Commit**, or Ctrl+Enter. With nothing staged, the button reads **Commit all**. **Amend** rewrites the last commit. The branch menu switches branches, checks out a remote branch, or makes a new one. The ↓/↑ button pulls and then pushes, and a branch with no upstream shows **Publish**. ⟳ fetches. **History** lists the last 60 commits.
+- **Remote hosts:** for GitHub, GitLab, Bitbucket and Azure DevOps remotes, buttons open the repository, the branch, the open file, a new pull request, or the list of pull requests on the web. For GitHub and GitLab, **Show open pull requests** lists them in the app and lets you check one out. This needs the GitHub CLI (`gh`) or GitLab CLI (`glab`), installed and signed in. **Clone another repository** takes any https or ssh address, or lists your GitHub repositories, then opens the clone.
+- **Ctrl+P** opens a file by name.
+- The editor loads the first time you open it. **Ctrl+S** saves. A dot on a tab means unsaved changes; middle-click closes a tab. Code blocks in a reply open as read-only tabs.
 - A file you pick yourself outside the project can be opened and revealed; other paths outside it are refused.
 - Right-click a file to create, rename, delete, copy its path, reveal it, or add it to the chat.
 - **Quick edit (Ctrl+I):** select code, say what to change, and a small fast model rewrites that part. Ctrl+Z undoes it.

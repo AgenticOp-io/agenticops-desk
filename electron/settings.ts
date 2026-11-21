@@ -49,6 +49,8 @@ export type UiPrefs = {
   previewMode?: "inline" | "browser";
   /** Never ask before commands or edits. Questions and plan approvals still ask. Per computer. */
   allowAll?: boolean;
+  /** Show the small file preview beside the editor's scrollbar. */
+  minimap?: boolean;
 };
 
 const PANEL_KEYS = ["chats", "files", "inbox", "status", "help", "settings"] as const;
@@ -153,6 +155,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
       : base.popOut,
     previewMode: r.previewMode === "browser" ? "browser" : "inline",
     allowAll: r.allowAll === true,
+    minimap: r.minimap === true,
   };
 }
 

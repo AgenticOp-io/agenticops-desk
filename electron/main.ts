@@ -90,7 +90,7 @@ import {
 import { ensureClaudeBinary } from "./claudeBinary";
 import { localModelStatus, pendingSetupFile, relievePressure, setupLocalModel, type LocalModelStatus } from "./localModel";
 import { stopPythons, watchPythons } from "./resourceGuard";
-import { carryProjectMemory } from "./memory";
+import { carryProjectMemory, memoryDirs } from "./memory";
 import { convertCursorChats, readConvertReport, removeCursorFolders, reviewCursorRemoval, type ConvertReport } from "./cursorConvert";
 import { canInstallUpdate, confirmPatch, installFullUpdate, updateCode } from "./patcher";
 import { createWorktree, mergeWorktree, removeWorktree, worktreeCwd, worktreeFor } from "./worktrees";
@@ -123,6 +123,20 @@ import {
   gitPullRequest,
   gitPush,
   gitStatus,
+  gitBranches,
+  gitChanges,
+  gitCommitWith,
+  gitDiscard,
+  gitResolve,
+  gitLog,
+  gitNewBranch,
+  gitPrCheckout,
+  gitPublish,
+  gitPullRequests,
+  gitShowHead,
+  gitStage,
+  gitUnstage,
+  githubRepos,
   run,
   runGit,
   openShell,
@@ -214,7 +228,7 @@ function watchWorkspace() {
       // Build output and dependency folders change constantly during builds; reloading on them is wasted work.
       if (rel.split(/[\\/]/).some((part) => IGNORED_DIRS.has(part))) return;
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => win?.webContents.send("workspace:changed"), 250);
+      timer = setTimeout(() => { win?.webContents.send("workspace:changed"); if (codeWindow && !codeWindow.isDestroyed()) codeWindow.webContents.send("workspace:changed"); }, 250);
     });
   } catch {
     watcher = null;
@@ -728,6 +742,7 @@ ipcMain.handle("workspace:get", () => workspace);
 function setWorkspace(dir: string) {
   workspace = dir;
   watchWorkspace();
+  if (codeWindow && !codeWindow.isDestroyed()) codeWindow.webContents.send("workspace:changed");
   void patchSettings({ lastWorkspace: dir });
   return workspace;
 }
@@ -1050,11 +1065,19 @@ ipcMain.handle("fs:list", async (_e, dir: string) => {
 
 ipcMain.handle("fs:read", async (_e, filePath: string) => {
   if (!canTouch(filePath)) throw new Error("Only files inside the open folder can be read.");
-  const st = await fs.stat(filePath);
-  if (st.size > 2_000_000) return `[[ file too large to open here: ${st.size} bytes ]]`;
   const buf = await fs.readFile(filePath);
   if (buf.includes(0)) return "[[ binary file ]]";
   return buf.toString("utf8");
+});
+
+// The "Open work" bubble: the numbered items of the project's open-work-plan.md note, if it has one.
+ipcMain.handle("openWork:read", async (_e, workspace: string) => {
+  try {
+    const txt = await fs.readFile(path.join(memoryDirs(workspace).project, "open-work-plan.md"), "utf8");
+    return txt.split(String.fromCharCode(10)).filter((l) => /^\d+\. /.test(l)).map((l) => l.replace(/\*\*/g, "").slice(0, 160));
+  } catch {
+    return [];
+  }
 });
 
 ipcMain.handle("fs:write", async (_e, filePath: string, contents: string) => {
@@ -1412,6 +1435,31 @@ ipcMain.handle("git:push", (_e, cwd: string) => gitPush(realDir(cwd)));
 ipcMain.handle("git:history", (_e, cwd: string) => gitHistory(realDir(cwd)));
 ipcMain.handle("git:checkout", (_e, cwd: string, branch: string) => gitCheckout(realDir(cwd), branch));
 ipcMain.handle("git:pr", (_e, cwd: string, title: string, body: string) => gitPullRequest(realDir(cwd), title, body));
+ipcMain.handle("git:changes", (_e, cwd: string) => gitChanges(realDir(cwd)));
+ipcMain.handle("git:stage", (_e, cwd: string, paths: unknown) => gitStage(realDir(cwd), paths));
+ipcMain.handle("git:unstage", (_e, cwd: string, paths: unknown) => gitUnstage(realDir(cwd), paths));
+ipcMain.handle("git:resolve", (_e, cwd: string, paths: unknown, side: unknown) => gitResolve(realDir(cwd), paths, side));
+ipcMain.handle("git:discard", (_e, cwd: string, paths: unknown, untracked: unknown) => gitDiscard(realDir(cwd), paths, untracked));
+ipcMain.handle("git:show-head", (_e, cwd: string, file: unknown) => gitShowHead(realDir(cwd), file));
+ipcMain.handle("git:branches", (_e, cwd: string) => gitBranches(realDir(cwd)));
+ipcMain.handle("git:log", (_e, cwd: string) => gitLog(realDir(cwd)));
+ipcMain.handle("git:commit-with", (_e, cwd: string, message: string, opts: { all?: unknown; amend?: unknown }) =>
+  gitCommitWith(realDir(cwd), String(message ?? ""), { all: opts?.all === true, amend: opts?.amend === true }),
+);
+ipcMain.handle("git:publish", (_e, cwd: string) => gitPublish(realDir(cwd)));
+ipcMain.handle("git:new-branch", (_e, cwd: string, name: string) => gitNewBranch(realDir(cwd), String(name ?? "")));
+ipcMain.handle("git:prs", (_e, cwd: string, kind: string) => gitPullRequests(realDir(cwd), String(kind ?? "")));
+ipcMain.handle("git:pr-checkout", (_e, cwd: string, kind: string, num: unknown) => gitPrCheckout(realDir(cwd), String(kind ?? ""), num));
+ipcMain.handle("git:repos", () => githubRepos());
+// Clone any remote into a folder you pick, then open it.
+ipcMain.handle("git:clone", async (e, remote: string) => {
+  const owner = BrowserWindow.fromWebContents(e.sender) ?? win!;
+  const result = await dialog.showOpenDialog(owner, { title: "Folder to clone into", properties: ["openDirectory", "createDirectory"] });
+  if (result.canceled || !result.filePaths[0]) return { ok: false, output: "Clone cancelled." };
+  const cloned = await cloneSyncedProject(String(remote ?? ""), result.filePaths[0]);
+  if (cloned.ok && cloned.path) setWorkspace(cloned.path);
+  return cloned;
+});
 ipcMain.handle("sync:status", () => syncStatus());
 ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
 ipcMain.handle("sync:create", () => createSyncRepo());
@@ -1591,6 +1639,50 @@ setCanvasShown(async (doc) => {
   await openCanvasWindow(doc.chatId, false);
 });
 ipcMain.handle("canvas:open", (_e, chatId: string) => openCanvasWindow(String(chatId ?? ""), true));
+// Code: one independent window with the file tree and editor (the same page with ?code=1). Not a child, so it can sit on another screen.
+let codeWindow: BrowserWindow | null = null;
+let pendingCodeFile = "";
+// The main window pushes what only it knows (reply code blocks, the diff under review, changed files); the Code window
+// sends Keep/Undo/@-mention back through here. The last push is kept for a window that opens later.
+let codeState: unknown = null;
+ipcMain.on("code:push", (_e, s: unknown) => {
+  codeState = s;
+  if (codeWindow && !codeWindow.isDestroyed()) codeWindow.webContents.send("code:state", s);
+});
+ipcMain.handle("code:state", () => codeState);
+ipcMain.on("code:act", (_e, a: unknown) => { if (win && !win.isDestroyed()) win.webContents.send("code:act", a); });
+ipcMain.handle("code:take", () => { const p = pendingCodeFile; pendingCodeFile = ""; return p; });
+ipcMain.handle("code:open", (_e, file?: string) => {
+  pendingCodeFile = typeof file === "string" ? file : "";
+  if (codeWindow && !codeWindow.isDestroyed()) {
+    if (pendingCodeFile) { codeWindow.webContents.send("code:file", pendingCodeFile); pendingCodeFile = ""; }
+    if (codeWindow.isMinimized()) codeWindow.restore();
+    codeWindow.focus();
+    return;
+  }
+  const w = new BrowserWindow({
+    width: 1200,
+    height: 820,
+    minWidth: 600,
+    minHeight: 400,
+    backgroundColor: "#181818",
+    title: "Code",
+    icon: path.join(__dirname, "../build/icon.png"),
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: existsSync(path.join(__dirname, "preload.mjs")) ? path.join(__dirname, "preload.mjs") : path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  codeWindow = w;
+  w.setMenuBarVisibility(false);
+  guardNavigation(w);
+  w.once("closed", () => { codeWindow = null; });
+  if (process.env.VITE_DEV_SERVER_URL) void w.loadURL(`${process.env.VITE_DEV_SERVER_URL}?code=1`);
+  else void w.loadFile(path.join(__dirname, "../dist/index.html"), { query: { code: "1" } });
+});
 ipcMain.handle("canvas:get", (_e, chatId: string) => loadCanvas(String(chatId ?? "")));
 // Canvas PDF and PNG: lay the page out in a hidden window with no network and print or capture it.
 // Scripts are already blocked by the page's own policy; the request filter stops anything loading from outside.

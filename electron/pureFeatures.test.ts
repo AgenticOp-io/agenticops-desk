@@ -958,3 +958,30 @@ test("the newest tag is the highest release", async () => {
   assert.equal(newestTag(["refs/tags/v0.1.18", "refs/tags/v0.1.19-beta"], "0.1.17"), "v0.1.18");
 });
 
+
+test("git status parse and host web links", async () => {
+  const { parsePorcelain, remoteWeb } = await import("./pureFeatures.ts");
+  const { webLink } = await import("./gitHosts.ts");
+  const s = parsePorcelain("## main...origin/main [ahead 2, behind 1]\0M  a.ts\0 M b.ts\0R  new.ts\0old.ts\0?? c.ts\0");
+  assert.equal(s.branch, "main");
+  assert.equal(s.upstream, "origin/main");
+  assert.equal(s.ahead, 2);
+  assert.equal(s.behind, 1);
+  assert.deepEqual(s.files, [
+    { path: "a.ts", staged: "M", unstaged: "" },
+    { path: "b.ts", staged: "", unstaged: "M" },
+    { path: "new.ts", staged: "R", unstaged: "", from: "old.ts" },
+    { path: "c.ts", staged: "", unstaged: "?" },
+  ]);
+  assert.equal(parsePorcelain("## No commits yet on dev\0").branch, "dev");
+  assert.equal(parsePorcelain("## feature\0").upstream, "");
+  const gh = remoteWeb("git@github.com:Org/Repo.git")!;
+  assert.equal(gh.kind, "github");
+  assert.equal(webLink(gh, { page: "file", ref: "main", file: "src/a b.ts" }), "https://github.com/org/repo/blob/main/src/a%20b.ts");
+  assert.equal(webLink(gh, { page: "newPr", ref: "feat/x" }), "https://github.com/org/repo/compare/feat%2Fx?expand=1");
+  assert.equal(remoteWeb("https://gitlab.com/g/sub/p")!.kind, "gitlab");
+  assert.equal(webLink(remoteWeb("https://bitbucket.org/t/r")!, { page: "prs" }), "https://bitbucket.org/t/r/pull-requests");
+  const az = remoteWeb("https://org@dev.azure.com/org/proj/_git/repo")!;
+  assert.equal(az.web, "https://dev.azure.com/org/proj/_git/repo");
+  assert.equal(webLink(remoteWeb("https://git.example.com/a/b")!, { page: "prs" }), "https://git.example.com/a/b");
+});

@@ -1,27 +1,24 @@
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CodeSnippet } from "./codeBlocks";
 import { OriginLine } from "./Extras";
-import { languageForFence, languageForPath } from "./monaco";
+import { languageForPath } from "./monaco";
 
 type FileTab = { path: string; name: string; contents: string; dirty: boolean };
-export type DiffView = { path: string; before: string; after: string; created: boolean };
+// labels: a git diff says "Working tree changes" / Stage / Discard instead of the agent's Keep / Undo.
+export type DiffView = { path: string; before: string; after: string; created: boolean; labels?: { title: string; keep: string; undo: string } };
 
 // A Cursor-style editor group: tabs, breadcrumb, then Monaco. Files are editable and save with Ctrl+S;
-// code blocks from Claude's replies open as read-only tabs.
+// reply code blocks no longer open here.
 export function CodePane({
   files,
   activePath,
-  snippets,
-  snippetId,
   workspace,
   diff,
   onDiffKeep,
   onDiffUndo,
   onDiffClose,
   onSelectFile,
-  onSelectSnippet,
   onCloseFile,
   onChangeFile,
   onSaveFile,
@@ -31,15 +28,12 @@ export function CodePane({
 }: {
   files: FileTab[];
   activePath: string | null;
-  snippets: CodeSnippet[];
-  snippetId: string | null;
   workspace: string;
   diff: DiffView | null;
   onDiffKeep: (path: string) => void;
   onDiffUndo: (path: string) => void;
   onDiffClose: () => void;
   onSelectFile: (path: string) => void;
-  onSelectSnippet: (id: string) => void;
   onCloseFile: (path: string) => void;
   onChangeFile: (path: string, contents: string) => void;
   onSaveFile: (path: string) => void;
@@ -49,17 +43,16 @@ export function CodePane({
   autocomplete?: string;
 }) {
   const file = files.find((t) => t.path === activePath) ?? files[0] ?? null;
-  const snippet = snippetId ? snippets.find((s) => s.id === snippetId) ?? null : null;
-  const shownSnippet = snippet ?? (!file ? snippets.at(-1) ?? null : null);
-  const shownFile = shownSnippet ? null : file;
+  const shownFile = file;
+  // Read here because the Code window has no prefs of its own; applies the next time a file opens.
+  const [minimap, setMinimap] = useState(false);
+  useEffect(() => {
+    void window.desk.getSettings().then((s) => setMinimap(Boolean(s.minimap)));
+  }, []);
 
   // Monaco keeps one model per path, so each tab keeps its own undo history, cursor and scroll.
-  const modelPath = shownFile ? shownFile.path : shownSnippet ? `snippet:/${shownSnippet.id}` : "empty";
-  const language = shownFile
-    ? languageForPath(shownFile.path)
-    : shownSnippet
-      ? languageForFence(shownSnippet.lang)
-      : "plaintext";
+  const modelPath = shownFile ? shownFile.path : "empty";
+  const language = shownFile ? languageForPath(shownFile.path) : "plaintext";
 
   const saveRef = useRef<() => void>(() => {});
   saveRef.current = () => {
@@ -139,7 +132,7 @@ export function CodePane({
     if (!autocomplete) return;
     const sub = monaco.languages.registerInlineCompletionsProvider({ pattern: "**" }, {
       provideInlineCompletions: async (model, position, _ctx, token) => {
-        // Only the editable file on screen, never read-only reply snippets or the diff view.
+        // Only the editable file on screen, never the diff view.
         const file = editableRef.current ? fileRef.current : null;
         if (!file || model !== editorRef.current?.getModel()) return { items: [] };
         // Wait for a pause, so a burst of typing costs one request, not one per key.
@@ -182,9 +175,9 @@ export function CodePane({
   }, [files]);
 
   const crumbs = useMemo(() => {
-    if (!shownFile) return shownSnippet ? ["Reply", shownSnippet.name] : [];
+    if (!shownFile) return [];
     return crumbsFor(shownFile.path, workspace);
-  }, [shownFile, shownSnippet, workspace]);
+  }, [shownFile, workspace]);
 
   return (
     <div className="code-pane">
@@ -226,16 +219,6 @@ export function CodePane({
               </button>
             </div>
           ))}
-          {snippets.map((s) => (
-            <div
-              key={s.id}
-              className={`editor-tab snippet ${!diff && shownSnippet?.id === s.id ? "active" : ""}`}
-              title="Code from the reply (read-only)"
-              onClick={() => onSelectSnippet(s.id)}
-            >
-              <span className="editor-tab-name">{s.name}</span>
-            </div>
-          ))}
         </div>
         <button type="button" className="editor-hide" title="Close editor" onClick={onHide}>
           ×
@@ -244,14 +227,14 @@ export function CodePane({
       {diff && (
         <div className="review-bar">
           <span>
-            {diff.created ? "New file from the agent" : "Changes by the agent"} · <strong>{crumbsFor(diff.path, workspace).join(" › ")}</strong>
+            {diff.labels?.title ?? (diff.created ? "New file from the agent" : "Changes by the agent")} · <strong>{crumbsFor(diff.path, workspace).join(" › ")}</strong>
           </span>
           <span className="grow" />
           <button type="button" className="btn danger" onClick={() => onDiffUndo(diff.path)}>
-            {diff.created ? "Delete file" : "Undo changes"}
+            {diff.labels?.undo ?? (diff.created ? "Delete file" : "Undo changes")}
           </button>
           <button type="button" className="btn primary" onClick={() => onDiffKeep(diff.path)}>
-            Keep
+            {diff.labels?.keep ?? "Keep"}
           </button>
         </div>
       )}
@@ -262,7 +245,6 @@ export function CodePane({
               {c}
             </span>
           ))}
-          {shownSnippet && <span className="readonly">read-only</span>}
           {shownFile && onOpenChat && <OriginLine file={shownFile.path} onOpen={onOpenChat} />}
         </div>
       )}
@@ -322,23 +304,23 @@ export function CodePane({
               hideUnchangedRegions: { enabled: true },
             }}
           />
-        ) : shownFile || shownSnippet ? (
+        ) : shownFile ? (
           <Editor
             theme="vs-dark"
             path={modelPath}
             language={language}
-            value={shownFile ? shownFile.contents : shownSnippet?.code ?? ""}
+            value={shownFile?.contents ?? ""}
             onMount={onMount}
             onChange={(v) => {
               if (shownFile && v !== undefined && v !== shownFile.contents) onChangeFile(shownFile.path, v);
             }}
             options={{
-              readOnly: !shownFile,
+              readOnly: false,
               fontFamily: '"Cascadia Code", Consolas, "Courier New", monospace',
               fontLigatures: true,
               fontSize: 13,
               lineHeight: 20,
-              minimap: { enabled: true, renderCharacters: false },
+              minimap: { enabled: minimap },
               scrollBeyondLastLine: false,
               smoothScrolling: true,
               cursorBlinking: "smooth",

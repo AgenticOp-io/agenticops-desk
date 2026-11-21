@@ -1,5 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
+import type { RemoteHost } from "./gitHosts";
 
 // Electron-free helpers for standing orders, org memory and the second opinion, so plain Node can test them.
 
@@ -753,6 +754,37 @@ export function remoteKey(url: string): string | null {
   if (clean.length < 2 || clean.length > 10 || clean.some((p) => !p || p === "." || p === "..")) return null;
   return `${host}/${clean.join("/")}`;
 }
+
+// `git status --porcelain=v1 -b -z`: index (staged) and worktree (unstaged) letters per file; "?" is untracked.
+export type GitFile = { path: string; from?: string; staged: string; unstaged: string };
+export function parsePorcelain(out: string) {
+  const parts = out.split("\0");
+  const head = parts[0]?.startsWith("## ") ? parts.shift()!.slice(3) : "";
+  const m = /^(?:No commits yet on )?(.+?)(?:\.\.\.(\S+))?(?: \[(.*)\])?$/.exec(head);
+  const ahead = Number(/ahead (\d+)/.exec(m?.[3] ?? "")?.[1] ?? 0);
+  const behind = Number(/behind (\d+)/.exec(m?.[3] ?? "")?.[1] ?? 0);
+  const files: GitFile[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const e = parts[i];
+    if (e.length < 4) continue;
+    const x = e[0], y = e[1];
+    const f: GitFile = { path: e.slice(3), staged: x === "?" || x === " " ? "" : x, unstaged: x === "?" ? "?" : y === " " ? "" : y };
+    if (x === "R" || x === "C") f.from = parts[++i];
+    files.push(f);
+  }
+  return { branch: m?.[1] === "HEAD (no branch)" ? "" : m?.[1] ?? "", upstream: m?.[2] ?? "", ahead, behind, files };
+}
+
+// The web pages of a remote on the four big hosts. Anything else (self-hosted) gets the repo page only.
+export function remoteWeb(url: string): RemoteHost | null {
+  const key = remoteKey(url);
+  if (!key) return null;
+  const [host, ...rest] = key.split("/");
+  const kind = host === "github.com" ? "github" : host.includes("gitlab") ? "gitlab" : host === "bitbucket.org" ? "bitbucket" : host === "dev.azure.com" ? "azure" : "other";
+  const web = kind === "azure" && rest.length === 3 ? `https://${host}/${rest[0]}/${rest[1]}/_git/${rest[2]}` : `https://${key}`;
+  return { kind, web, name: rest.join("/") };
+}
+export type { RemoteHost } from "./gitHosts";
 
 // Sync travels over https or ssh. A local path or cleartext http URL is rejected.
 export function allowedGitRemote(url: string): boolean {
