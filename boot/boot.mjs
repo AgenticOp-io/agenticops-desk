@@ -28,8 +28,11 @@ function start(version) {
   return import(pathToFileURL(path.join(folder, "dist-electron", "main.js")).href);
 }
 
+// A second copy only hands over to the open one and quits, so it must not use up a patch's one trial start.
+// main.ts asks for the lock again; Electron answers true to the process that already holds it.
+const first = app.requestSingleInstanceLock();
 const { run, state } = chooseBoot(read());
-if (state) save(state);
+if (state && first) save(state);
 try {
   await start(run);
 } catch (err) {

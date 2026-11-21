@@ -328,6 +328,14 @@ export async function pullProviderModels(id: string): Promise<void> {
   }
   if (res.status === 401 || res.status === 403) setKeyRejected(id, true);
   if (!res.ok) throw new Error(`${preset.label} returned ${res.status} when listing models.`);
+  // The built-in helper server (llama-server) answers the same list call as Ollama but runs a 2-4K context; an agent turn needs more.
+  const props = await fetch(`${new URL(base).origin}/props`, { signal: AbortSignal.timeout(2_000) })
+    .then((r) => (r.ok ? (r.json() as Promise<{ default_generation_settings?: { n_ctx?: number } }>) : null))
+    .catch(() => null);
+  const ctx = props?.default_generation_settings?.n_ctx;
+  if (ctx && ctx < 8192) {
+    throw new Error(`${preset.label} is the built-in helper model (${ctx}-token context), too small for chats. Run Ollama with OLLAMA_CONTEXT_LENGTH=16384 instead.`);
+  }
   setKeyRejected(id, false);
   const body = (await res.json()) as { data?: Array<{ id?: string }> };
   const listed = new Set(chatModelIds((body.data ?? []).map((m) => m.id ?? ""), 80));

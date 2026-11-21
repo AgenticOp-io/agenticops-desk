@@ -103,7 +103,8 @@ const SUMMARY_SYSTEM =
   "and the exact file names, commands and errors that matter. Plain text, no preamble.";
 const OUTCOME_SYSTEM =
   "Restate what this finished AI coding run did, in at most 2 sentences. Keep file names and the checks that passed. Plain text, no preamble.";
-const NEW_TURNS_LIMIT = 10_000; // small local models often have a 4k-token window; keep the call inside it
+const NEW_TURNS_LIMIT = 3_000; // the built-in helper has a 2048-token window; one bite plus the summary must fit
+const MAX_PASSES = 8;
 
 // The model the user picked, or the local one. An empty Summaries setting still stays on this computer.
 async function summaryModel(): Promise<string> {
@@ -145,20 +146,31 @@ export async function summarizeRun(
   const turns = said(history);
   const prev = summaries()[chatId];
   const base = prev && prev.turns <= turns.length ? prev : undefined;
-  const fresh = turns
-    .slice(base?.turns ?? 0)
-    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text.trim()}`)
-    .join("\n\n");
   const clean = (s: string) => scrubOutgoing(s).text;
   if (!model) return;
-  const timeout = AbortSignal.timeout(30_000);
+  const timeout = AbortSignal.timeout(90_000);
   const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
-    if (turns.length >= 2 && fresh) {
-      const user = `Earlier summary:\n${base ? base.text : "(none)"}\n\nNew turns:\n${clean(fresh.length > NEW_TURNS_LIMIT ? `…${fresh.slice(-NEW_TURNS_LIMIT)}` : fresh)}`;
-      const r = await askDirect(model, SUMMARY_SYSTEM, user, stop);
-      if (r?.text && !r.refused) {
-        summaries()[chatId] = { text: r.text.slice(0, 3_000), turns: turns.length };
+    if (turns.length >= 2) {
+      // Feed the new turns in bites that fit a small window, folding each into the running summary.
+      // Progress is saved per bite, so a long backlog finishes over a few runs if the passes run out.
+      let at = base?.turns ?? 0;
+      let text = base?.text ?? "(none)";
+      for (let pass = 0; at < turns.length && pass < MAX_PASSES; pass++) {
+        let bite = "";
+        let end = at;
+        while (end < turns.length) {
+          const m = turns[end];
+          const line = `${m.role === "user" ? "User" : "Assistant"}: ${m.text.trim()}`;
+          if (bite && bite.length + line.length > NEW_TURNS_LIMIT) break;
+          bite += `${bite ? "\n\n" : ""}${line.length > NEW_TURNS_LIMIT ? `${line.slice(0, NEW_TURNS_LIMIT)}…` : line}`;
+          end++;
+        }
+        const r = await askDirect(model, SUMMARY_SYSTEM, `Earlier summary:\n${text}\n\nNew turns:\n${clean(bite)}`, stop);
+        if (!r?.text || r.refused) break;
+        text = r.text.slice(0, 3_000);
+        at = end;
+        summaries()[chatId] = { text, turns: at };
         saveSummaries();
       }
     }

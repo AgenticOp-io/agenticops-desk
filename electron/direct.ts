@@ -150,6 +150,13 @@ type Ctx = {
   mcp: McpTool[];
 };
 
+// Tool output is resent on every later turn, so keep the head and tail of a long one.
+function capToolText(t: string, max = 8000): string {
+  return t.length <= max ? t : `${t.slice(0, max / 2)}
+[... ${t.length - max} characters left out ...]
+${t.slice(-max / 2)}`;
+}
+
 function toolSpecs(ctx: Ctx): Neutral[] {
   return [...TOOLS, ...ctx.mcp.map((t) => ({ name: t.name, description: t.description, properties: t.schema.properties, required: t.schema.required }))];
 }
@@ -718,7 +725,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
       const r = missing.length
         ? { text: `INVALID_JSON: missing ${missing.join(", ")}`, error: true }
         : await runPrivateTool(ctx, call.name, input, call.id);
-      results.push({ type: "tool_result", tool_use_id: call.id, content: r.text, ...(r.error ? { is_error: true } : {}) });
+      results.push({ type: "tool_result", tool_use_id: call.id, content: capToolText(r.text), ...(r.error ? { is_error: true } : {}) });
     }
     messages.push({ role: "user", content: results });
   }
@@ -863,7 +870,7 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
       const step = explainWork(c.name, input);
       sendPhase(ctx.win, ctx.chatId, ctx.session, step.phase, step.text, true);
       const r = bad ? { text: bad } : await runPrivateTool(ctx, c.name, input, id);
-      messages.push({ role: "tool", tool_call_id: id, content: r.text });
+      messages.push({ role: "tool", tool_call_id: id, content: capToolText(r.text) });
     }
   }
 }
