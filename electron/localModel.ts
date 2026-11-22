@@ -9,14 +9,19 @@ import { app } from "electron";
 import { DEFAULT_LOCAL_MODEL } from "./localChoices";
 import { llamaServerArgs, openAiListsModel } from "./pureFeatures";
 import { budgetFor, memoryIsLow, preferApp, relaxProcess, releaseApp, sampleResources, watchMemory } from "./resourceGuard";
-import { pullProviderModels } from "./providers";
 import { loadSettings } from "./settings";
 
 // Sets up llama.cpp's small server and a small model (pulled from Ollama's public registry over plain HTTP, no Ollama install) for chat summaries, then turns Summaries on.
 // The installer asks for this, or Settings › AI models starts it later. 64-bit Windows, macOS and Linux (x64 and arm64) are supported.
 
 export const LOCAL_MODEL = DEFAULT_LOCAL_MODEL;
-const API = "http://127.0.0.1:11434";
+// Its own port: 11434 is Ollama's and 11435 is the cloud GPU tunnel's.
+const API = "http://127.0.0.1:11437";
+
+// The helper's OpenAI-style URL when it is up and serving this model; summaries use it, chats never do.
+export async function helperBaseUrl(model: string): Promise<string | null> {
+  return (await probePort(model)) === "ready" ? `${API}/v1` : null;
+}
 
 export type LocalModelStatus = { running: boolean; text: string; ok?: boolean };
 let status: LocalModelStatus = { running: false, text: "" };
@@ -241,7 +246,7 @@ async function startServerOnce() {
   const now = await probePort(model);
   if (now === "ready") return;
   if (now === "other") {
-    throw new Error(`Port 11434 is in use, but it is not serving ${model}. Stop the other program using that port, then try again.`);
+    throw new Error(`Port 11437 is in use, but it is not serving ${model}. Stop the other program using that port, then try again.`);
   }
   const child = startLlama(model);
   let died = false;
@@ -281,7 +286,6 @@ export function setupLocalModel(onStatus: (s: LocalModelStatus) => void): Promis
       await installLlama(model, say);
       say("Starting the local model server…");
       await startServer();
-      await pullProviderModels("ollama");
       status = { running: false, ok: true, text: `${model} is ready and writes the summaries.` };
     } catch (err) {
       status = { running: false, ok: false, text: err instanceof Error ? err.message : String(err) };

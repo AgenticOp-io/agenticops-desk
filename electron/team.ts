@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { z } from "zod";
+import { autoLive } from "./autoRoute";
 import { capsulesBrief } from "./capsules";
 import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setToolServers } from "./claude";
 import { loadAgentSdk } from "./claudeBinary";
@@ -78,6 +79,8 @@ const newRun = () => ({ done: false, at: Date.now(), text: "" });
 // Over when the run said "done", or it ran and stopped without one (stopped or failed). Not over while the
 // window has yet to start it: chatState is idle in that gap, which must not read as finished.
 function ended(id: string): boolean {
+  // Auto swallows a failed AI's "done" and hands over to the next one; idle in between is not finished.
+  if (autoLive(id)) return false;
   const run = runs.get(id);
   const running = chatState(id).running;
   if (running && run) run.started = true;

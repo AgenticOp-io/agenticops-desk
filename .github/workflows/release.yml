@@ -35,7 +35,7 @@ jobs:
         include:
           - { label: windows, os: windows-latest, args: --win --x64 --arm64 }
           - { label: linux, os: ubuntu-latest, args: --linux --x64 --arm64 }
-          # macOS is off for now (10x minute cost): - { label: mac, os: macos-latest, args: --mac --x64 --arm64 }
+          - { label: mac, os: macos-latest, args: --mac --x64 --arm64 }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

@@ -26,7 +26,7 @@ import {
   updateMarketplace,
   updatePlugin,
 } from "./plugins";
-import { addCustomProvider, parseDirectModel, providerStatus, pullProviderModels, removeCustomProvider, setProvider } from "./providers";
+import { addCustomProvider, parseDirectModel, providerStatus, pruneDeadLocal, pullProviderModels, removeCustomProvider, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
 import { recentActivity, flush as flushActivity } from "./activityLog";
 import { chooseLearned } from "./modelLearn";
@@ -1135,7 +1135,10 @@ ipcMain.handle("image:describe", (_e, img: { mediaType?: string; data?: string; 
   describeImage({ mediaType: String(img?.mediaType ?? "image/png"), data: String(img?.data ?? ""), name: typeof img?.name === "string" ? img.name : undefined }),
 );
 ipcMain.handle("usage:plan", () => refreshPlanLimits());
-ipcMain.handle("providers:list", () => providerStatus());
+ipcMain.handle("providers:list", async () => {
+  await pruneDeadLocal();
+  return providerStatus();
+});
 ipcMain.handle("providers:set", (_e, id: string, patch: { key?: string | null; models?: string[]; baseUrl?: string }) =>
   setProvider(id, patch),
 );

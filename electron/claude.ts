@@ -1729,6 +1729,8 @@ export function runClaude(opts: RunOptions) {
   }
   // A message with no earlier turns, or a review round, continues the session it already has.
   const resuming = Boolean(session.claudeSession);
+  const idleMin = session.lastTurnAt ? Math.round((Date.now() - session.lastTurnAt) / 60000) : -1;
+  console.log(`[resume] chat=${chatId} handOff=${handOff} resuming=${resuming} idleMin=${idleMin} cold=${resuming && idleMin * 60000 > RESUME_TTL_MS}`);
   if (resuming && session.lastTurnAt && Date.now() - session.lastTurnAt > RESUME_TTL_MS) {
     frozenMemory.delete(`${chatId}\0${opts.workspace}`); // cache is cold anyway, so pick up new memories now
     send(opts.win, {

@@ -41,7 +41,7 @@ import { generateLocally } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
-import { providerBaseUrl, providerInfo, providerKey, setKeyRejected, type ProviderId } from "./providers";
+import { assertChatContext, providerBaseUrl, providerInfo, providerKey, setKeyRejected, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { healHistory } from "./healHistory";
 import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
@@ -962,6 +962,7 @@ export function runDirect(opts: {
   void (async () => {
     let failed = "";
     try {
+      if (isLocalProvider(opts.provider)) await assertChatContext(opts.provider);
       if (followUp && !chatSummary(chatId, opts.history)) {
         send(win, { kind: "status", running: true, phase: "starting", text: "Summarizing this chat locally…", chatId });
       } else {
@@ -970,7 +971,7 @@ export function runDirect(opts: {
       const [seen, packet, summary] = await Promise.all([
         imagesToText(opts.prompt, opts.images),
         paidPacket(cwd, opts.prompt),
-        followUp ? ensureSummary(chatId, opts.history, abort.signal).catch(() => "") : Promise.resolve(""),
+        followUp ? ensureSummary(chatId, opts.history, AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)])).catch(() => "") : Promise.resolve(""),
       ]);
       if (abort.signal.aborted) return;
       images = seen.images;

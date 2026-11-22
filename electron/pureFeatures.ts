@@ -105,7 +105,7 @@ export function llamaServerArgs(modelPath: string, alias: string, threads: numbe
     "-m", modelPath,
     "--alias", alias,
     "--host", "127.0.0.1",
-    "--port", "11434",
+    "--port", "11437",
     "-c", ctx,
     "-b", "256",
     "-ub", "128",
@@ -675,7 +675,9 @@ export function autoOrder(opts: {
   const active = [...new Set(pool)].filter((m) => !resting(m));
   let hosted = active.filter((m) => !isOwned(m));
   let owned = active.filter(isOwned);
-  if (opts.sticky && hosted.includes(opts.sticky)) hosted = [opts.sticky, ...hosted.filter((m) => m !== opts.sticky)];
+  // A chat that fell back to another AI must not stay there once the first choice is usable again.
+  if (hosted[0] === "default") { /* keep it first */ }
+  else if (opts.sticky && hosted.includes(opts.sticky)) hosted = [opts.sticky, ...hosted.filter((m) => m !== opts.sticky)];
   else if (!hosted.length && opts.sticky && owned.includes(opts.sticky)) owned = [opts.sticky, ...owned.filter((m) => m !== opts.sticky)];
   return [...hosted, ...owned];
 }

@@ -9,6 +9,7 @@ export function ChangesBar({
   onReview,
   onKeep,
   onUndo,
+  onMerge,
 }: {
   files: string[];
   workspace: string;
@@ -16,6 +17,7 @@ export function ChangesBar({
   onReview: (path: string) => void;
   onKeep: (paths?: string[]) => void;
   onUndo: (paths?: string[]) => void;
+  onMerge?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   if (!files.length) return null;
@@ -33,6 +35,11 @@ export function ChangesBar({
         <button type="button" className="ghost" title="Show the changes in the editor" onClick={() => onReview(files[0])}>
           Review
         </button>
+        {onMerge && (
+          <button type="button" className="ghost" title="Commit this chat's worktree changes and merge its branch into the main folder" onClick={onMerge}>
+            Merge
+          </button>
+        )}
         <button
           type="button"
           className="ghost danger-text"

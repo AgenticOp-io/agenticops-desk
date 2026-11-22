@@ -1,10 +1,10 @@
 import type { BrowserWindow } from "electron";
 import { changedFiles, chatState, listModels, send, setSendFilter } from "./claude";
-import { autoOrder, autoStep, claudeWindowFull, isOwnedModel, restUntil } from "./pureFeatures";
+import { autoOrder, autoStep, isOwnedModel, restUntil } from "./pureFeatures";
 import { isLocalProvider, privacyMode } from "./privacy";
-import { parseDirectModel } from "./providers";
+import { parseDirectModel, providerBaseUrl, providerKey } from "./providers";
 import { loadSettings } from "./settings";
-import { fiveHourWindow } from "./usageLog";
+
 
 // The "Auto" model: one choice that uses every AI the user has enabled (or the ones they picked, in
 // their order). A run goes to the first one that is not resting; when it fails because that AI can't
@@ -37,8 +37,6 @@ const live = new Map<string, Attempt>();
 // The AI that last finished a run for each chat, so the chat keeps its context there.
 const sticky = new Map<string, string>();
 const resting: Record<string, { until: number; reason: string }> = {};
-// Try again now: allow one more sign-in attempt even if the saved window still says full.
-let signInWoken = false;
 let dispatch: Dispatch | null = null;
 
 export function labelOf(model: string): string {
@@ -62,17 +60,7 @@ export function autoAvailable(): string[] {
   });
 }
 
-function noteSignInWindow() {
-  if (signInWoken) return;
-  const now = Date.now();
-  const window = fiveHourWindow(now);
-  if (!claudeWindowFull(window, now) || window?.resetsAt == null) return;
-  const cur = resting[CLAUDE_DEFAULT];
-  if (!cur || cur.until < window.resetsAt) resting[CLAUDE_DEFAULT] = { until: window.resetsAt, reason: "5-hour limit" };
-}
-
 function restingUntil(): Record<string, number> {
-  noteSignInWindow();
   return Object.fromEntries(Object.entries(resting).map(([k, v]) => [k, v.until]));
 }
 
@@ -83,8 +71,43 @@ function modelOwned(model: string): boolean {
   return Boolean(direct && isLocalProvider(direct.provider));
 }
 
+// Prepaid providers that report a balance. Checked once per 5 minutes; a failed check counts as funded.
+const unfunded = new Set<string>();
+let probedAt = 0;
+async function probeBalances() {
+  if (Date.now() - probedAt < 300_000) return;
+  probedAt = Date.now();
+  const ask = async (id: "deepseek" | "openrouter", path: string, empty: (j: any) => boolean) => {
+    const key = providerKey(id);
+    if (!key) {
+      unfunded.delete(id);
+      return;
+    }
+    try {
+      const r = await fetch(providerBaseUrl(id).replace(/\/+$/, "") + path, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(4_000) });
+      if (!r.ok) return;
+      if (empty(await r.json())) unfunded.add(id);
+      else unfunded.delete(id);
+    } catch {
+      /* unreachable: leave as it was */
+    }
+  };
+  await Promise.all([
+    ask("deepseek", "/user/balance", (j) => j?.is_available === false),
+    ask("openrouter", "/key", (j) => j?.data?.limit_remaining != null && j.data.limit_remaining <= 0),
+  ]);
+}
+
 async function currentOrder(chatId?: string): Promise<string[]> {
   const settings = await loadSettings();
+  await probeBalances();
+  const order = await orderNow(settings, chatId);
+  const dry = (m: string) => unfunded.has(parseDirectModel(m)?.provider ?? "");
+  // shortcut: unfunded providers go last, not removed; they may have been topped up since the 5-minute check.
+  return [...order.filter((m) => !dry(m)), ...order.filter(dry)];
+}
+
+async function orderNow(settings: Awaited<ReturnType<typeof loadSettings>>, chatId?: string): Promise<string[]> {
   return autoOrder({
     chosen: settings.autoModels,
     available: autoAvailable(),
@@ -118,7 +141,6 @@ export async function autoStatus(): Promise<AutoStatus> {
 
 // Lets a resting AI (or all of them) be tried again at once, e.g. after topping up credit.
 export function wakeAuto(model?: string) {
-  if (!model || model === CLAUDE_DEFAULT) signInWoken = true;
   if (model) delete resting[model];
   else for (const k of Object.keys(resting)) delete resting[k];
 }
@@ -203,7 +225,12 @@ export async function runAuto(win: BrowserWindow | null, payload: AutoPayload) {
     dispatch?.(running.current, payload);
     return;
   }
-  const order = await currentOrder(chatId);
+  let order = await currentOrder(chatId);
+  // A stale rest mark must not block the sign-in; try it once, a real limit error rests it again.
+  if (!order.length && autoAvailable().includes(CLAUDE_DEFAULT)) {
+    wakeAuto(CLAUDE_DEFAULT);
+    order = [CLAUDE_DEFAULT];
+  }
   if (!order.length) {
     reportNone(win, chatId);
     return;
@@ -219,6 +246,9 @@ export function cancelAuto(chatId?: string) {
   if (chatId) live.delete(chatId);
   else live.clear();
 }
+
+// True while Auto is still working a chat, including the gap between one AI failing and the next starting.
+export const autoLive = (chatId: string) => live.has(chatId);
 
 export function forgetAuto(chatId: string) {
   live.delete(chatId);

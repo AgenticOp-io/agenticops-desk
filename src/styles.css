@@ -265,6 +265,9 @@ button { cursor: pointer; }
   font-weight: 600;
 }
 .settings-item { color: var(--text); }
+.side-foot { display: flex; border-top: 1px solid var(--border); }
+.side-foot .settings-item { flex: 1; border-top: 0; text-align: center; }
+.side-foot .settings-item + .settings-item { border-left: 1px solid var(--border); }
 .settings-item:hover,
 .files-toggle:hover { color: #fff; background: #222; }
 

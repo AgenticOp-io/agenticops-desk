@@ -13,7 +13,7 @@ import { Explorer } from "./Explorer";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dock, type DockTab } from "./Dock";
 import { Help } from "./Help";
-import { Briefing, Inbox, WatchChips, WorktreeChip } from "./Extras";
+import { Briefing, Inbox, WatchChips } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
 import { ChatStorage } from "./ChatStorage";
@@ -1642,26 +1642,6 @@ export function App() {
           {setupNote || status}
         </div>
       )}
-      <nav className="topbar" aria-label="Main">
-        <div className="topbar-group">
-          <button
-            type="button"
-            title="Open the code editor in its own window"
-            onClick={() => void window.desk.codeOpen()}
-          >
-            <Glyph name="files" />
-            <span>Files</span>
-          </button>
-          <button type="button" title="Help (F1)" onClick={() => (popped("help") && showHelp ? focusPopout("help") : setShowHelp(true))}>
-            <Glyph name="help" />
-            <span>Help</span>
-          </button>
-          <button type="button" title="Settings" onClick={() => (popped("settings") && showSettings ? focusPopout("settings") : (setSettingsSection(""), setShowSettings(true)))}>
-            <Glyph name="settings" />
-            <span>Settings</span>
-          </button>
-        </div>
-      </nav>
       <div className={`workspace${inSide ? "" : " no-side"}`}>
         {(() => {
           // One render of each panel, used in the sidebar or in its own window.
@@ -1974,9 +1954,14 @@ export function App() {
                 <aside className="sidebar">
                   <div className="side-panel">
                     {panel(inSide)}
-                    <button className="settings-item" onClick={() => { setSettingsSection(""); setShowSettings(true); }}>
-                      Settings
-                    </button>
+                    <div className="side-foot">
+                      <button className="settings-item" title="Help (F1)" onClick={() => (popped("help") && showHelp ? focusPopout("help") : setShowHelp(true))}>
+                        Help
+                      </button>
+                      <button className="settings-item" title="Settings" onClick={() => (popped("settings") && showSettings ? focusPopout("settings") : (setSettingsSection(""), setShowSettings(true)))}>
+                        Settings
+                      </button>
+                    </div>
                   </div>
                 </aside>
               )}
@@ -1998,16 +1983,6 @@ export function App() {
             )}
             <div className="pane-head chat-head">
               <span className="chat-title">{activeChat?.title ?? "New agent"}</span>
-              {activeChat && !hiddenChatSet.has(activeChat.id) && (
-                <button
-                  type="button"
-                  className="team-chip"
-                  title={`Hide this chat. After ${prefs.chatArchiveDays || "no"} unused days it moves to its project's archive (Settings > Chats).`}
-                  onClick={() => hideChat(activeChat.id)}
-                >
-                  Archive
-                </button>
-              )}
               {activeChat && team.managers.includes(activeChat.id) && (() => {
                 const mine = Object.entries(team.workers)
                   .filter(([, m]) => m === activeChat.id)
@@ -2058,26 +2033,13 @@ export function App() {
                   Worker of {chats.find((c) => c.id === team.workers[activeChat.id])?.title ?? "a manager"}
                 </button>
               )}
-              {running && <span className="run-dot" title={runProgress?.status ?? "Starting"} />}
-              {running && (
-                <span className={`phase phase-${runProgress?.phase ?? "starting"}`} title={runProgress?.status}>
-                  {phaseWord(runProgress)}
-                </span>
-              )}
               {activeChat && <WatchChips chatId={activeChat.id} watches={watches} onChange={setWatches} />}
-              {activeChat && (
-                <WorktreeChip chatId={activeChat.id} folder={activeChat.projectPath ?? ""} running={running} onNote={setStatus} />
-              )}
-              {(["terminal", "git", "preview"] as DockTab[]).map((tab) => (
+              {(["terminal", "git"] as DockTab[]).map((tab) => (
                 <button
                   key={tab}
                   type="button"
-                  className={`ghost ${dock === tab || dockPopout === tab ? "on" : ""}`}
-                  onClick={() => {
-                    // Terminal and Git open as movable windows; Preview/Rules/Notes stay inline at the bottom.
-                    if (tab === "terminal" || tab === "git") setDockPopout((cur) => (cur === tab ? null : tab));
-                    else setDock((cur) => (cur === tab ? null : tab));
-                  }}
+                  className={`ghost ${dockPopout === tab ? "on" : ""}`}
+                  onClick={() => setDockPopout((cur) => (cur === tab ? null : tab))}
                 >
                   {tab[0].toUpperCase() + tab.slice(1)}
                 </button>
@@ -2158,6 +2120,7 @@ export function App() {
               onReview={(p) => void openReview(p)}
               onKeep={(paths) => void keepChanges(paths)}
               onUndo={(paths) => void undoChanges(paths)}
+              onMerge={activeChat && !running ? () => void window.desk.worktreeMerge(activeChat.id).then((r) => setStatus(r.note)) : undefined}
             />
             <Composer
               ref={composerRef}
@@ -2197,6 +2160,11 @@ export function App() {
             {dock && workspace && (
               <Dock tab={dock} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} previewMode={prefs.previewMode ?? "inline"} />
             )}
+            <div className="pane-head">
+              <button type="button" className={`ghost ${dockPopout === "preview" ? "on" : ""}`} onClick={() => setDockPopout((cur) => (cur === "preview" ? null : "preview"))}>
+                Preview
+              </button>
+            </div>
           </div>
         </section>
       </div>
@@ -2287,6 +2255,37 @@ export function App() {
                 }}
               >
                 Branch
+              </button>
+              {!hiddenChatSet.has(menu.chatId) && (
+                <button
+                  title={`Hide this chat. After ${prefs.chatArchiveDays || "no"} unused days it moves to its project's archive (Settings > Chats).`}
+                  onClick={() => {
+                    hideChat(menu.chatId!);
+                    setMenu(null);
+                  }}
+                >
+                  Archive
+                </button>
+              )}
+              <button
+                title="Commit this chat's worktree changes and merge its branch into the main folder"
+                onClick={() => {
+                  const id = menu.chatId!;
+                  setMenu(null);
+                  void window.desk.worktreeMerge(id).then((r) => setStatus(r.note));
+                }}
+              >
+                Merge worktree
+              </button>
+              <button
+                title="Remove this chat's worktree and its branch"
+                onClick={() => {
+                  const id = menu.chatId!;
+                  setMenu(null);
+                  void window.desk.worktreeRemove(id).then((r) => r.note && setStatus(r.note));
+                }}
+              >
+                Remove worktree
               </button>
               {!team.workers[menu.chatId] && (
                 <button
@@ -2460,7 +2459,7 @@ export function App() {
       {dockPopout && workspace && (
         <PopOut
           name={`dock-${dockPopout}`}
-          title={`${dockPopout === "terminal" ? "Terminal" : "Git"} — AgenticOps Desk`}
+          title={`${dockPopout[0].toUpperCase() + dockPopout.slice(1)} — AgenticOps Desk`}
           width={720}
           height={640}
           look={look}
@@ -2468,7 +2467,7 @@ export function App() {
           modal={false}
           onClose={() => setDockPopout(null)}
         >
-          <Dock tab={dockPopout} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} />
+          <Dock tab={dockPopout} workspace={workspace} previewUrl={previewUrl} onPreviewUrl={setPreviewUrl} onStatus={setStatus} previewMode={prefs.previewMode ?? "inline"} />
         </PopOut>
       )}
 

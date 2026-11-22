@@ -7,7 +7,7 @@ import { chatModelIds, isCustomProviderId, PROVIDER_CATALOGS } from "./pureFeatu
 // AI providers the Direct engine can call without Claude Code. Keys are encrypted with Windows'
 // credential protection (safeStorage) and never leave the main process.
 
-export type BuiltinId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "xai" | "mistral" | "qwen" | "ollama" | "gpu";
+export type BuiltinId = "anthropic" | "openai" | "openrouter" | "gemini" | "deepseek" | "xai" | "mistral" | "qwen" | "moonshot" | "zhipu" | "groq" | "together" | "fireworks" | "ollama" | "gpu";
 // `u…` ids are OpenAI-compatible services the user added in Settings.
 export type ProviderId = BuiltinId | `u${string}`;
 
@@ -105,6 +105,42 @@ export const PRESETS: Record<BuiltinId, Preset> = {
     needsKey: true,
     catalog: PROVIDER_CATALOGS.qwen,
     keyHint: "API key from Alibaba Model Studio. Change the address if your key is for a different region.",
+  },
+  // No fixed model names: Test and load fills the menu from each service's own /models list.
+  moonshot: {
+    label: "Kimi (Moonshot)",
+    kind: "openai-compatible",
+    baseUrl: "https://api.moonshot.ai/v1",
+    needsKey: true,
+    keyHint: "API key from platform.moonshot.ai. Use api.moonshot.cn as the address for a China account.",
+  },
+  zhipu: {
+    label: "GLM (Z.ai)",
+    kind: "openai-compatible",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    needsKey: true,
+    keyHint: "API key from z.ai. Use open.bigmodel.cn/api/paas/v4 as the address for a China account.",
+  },
+  groq: {
+    label: "Groq",
+    kind: "openai-compatible",
+    baseUrl: "https://api.groq.com/openai/v1",
+    needsKey: true,
+    keyHint: "API key from console.groq.com. Very fast open models.",
+  },
+  together: {
+    label: "Together AI",
+    kind: "openai-compatible",
+    baseUrl: "https://api.together.xyz/v1",
+    needsKey: true,
+    keyHint: "API key from api.together.ai. Hosts many open models.",
+  },
+  fireworks: {
+    label: "Fireworks AI",
+    kind: "openai-compatible",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    needsKey: true,
+    keyHint: "API key from fireworks.ai. Model names look like accounts/fireworks/models/name.",
   },
   ollama: {
     label: "Ollama (local)",
@@ -238,6 +274,20 @@ function statusOf(id: ProviderId): ProviderStatus {
   };
 }
 
+// A keyless local provider is only "ready" while something answers there; drop a model list left from a server that is gone.
+export async function pruneDeadLocal(): Promise<void> {
+  for (const id of ["ollama"] as const) {
+    const all = load();
+    if (!all[id]?.models?.length) continue;
+    const up = await fetch(`${providerBaseUrl(id).replace(/\/+$/, "")}/models`, { signal: AbortSignal.timeout(1_500) })
+      .then((r) => r.ok)
+      .catch(() => false);
+    if (up) continue;
+    all[id] = { ...all[id], models: [] };
+    save();
+  }
+}
+
 export function providerStatus(): ProviderStatus[] {
   const custom = Object.keys(load()).filter(isCustomProviderId).sort();
   return [...(Object.keys(PRESETS) as BuiltinId[]), ...custom].map((id) => statusOf(id as ProviderId));
@@ -309,6 +359,26 @@ export function directModelOptions(): DirectModelOption[] {
     .flatMap((p) => p.models.map((m) => ({ value: `direct:${p.id}:${m}`, displayName: modelName(p.id, m), group: `Direct · ${p.label}` })));
 }
 
+// The built-in helper server (llama-server) answers on Ollama's port but runs a 2-4K context; the system prompt and tools alone fill that.
+// Checked on listing and again on every run, since a model listed back when real Ollama ran there stays in the menu.
+export async function assertChatContext(id: ProviderId): Promise<void> {
+  const base = providerBaseUrl(id).replace(/\/+$/, "");
+  const props = await fetch(`${new URL(base).origin}/props`, { signal: AbortSignal.timeout(2_000) })
+    .then((r) => (r.ok ? (r.json() as Promise<{ default_generation_settings?: { n_ctx?: number } }>) : null))
+    .catch(() => null);
+  const ctx = props?.default_generation_settings?.n_ctx;
+  if (ctx && ctx < 8192) {
+    const all = load();
+    if (all[id]?.models?.length) {
+      all[id] = { ...all[id], models: [] }; // drop the stale entry from the model menu
+      save();
+    }
+    throw new Error(
+      `${providerInfo(id).label} is answered by the built-in summaries helper (${ctx}-token context), not Ollama. It is too small for chats. Install Ollama and run it with OLLAMA_CONTEXT_LENGTH=16384, or pick another model.`,
+    );
+  }
+}
+
 // Asks the provider for its model list and stores the chat models. Claude's list is fixed.
 export async function pullProviderModels(id: string): Promise<void> {
   if (!isProvider(id)) throw new Error(`Unknown provider ${id}`);
@@ -328,14 +398,7 @@ export async function pullProviderModels(id: string): Promise<void> {
   }
   if (res.status === 401 || res.status === 403) setKeyRejected(id, true);
   if (!res.ok) throw new Error(`${preset.label} returned ${res.status} when listing models.`);
-  // The built-in helper server (llama-server) answers the same list call as Ollama but runs a 2-4K context; an agent turn needs more.
-  const props = await fetch(`${new URL(base).origin}/props`, { signal: AbortSignal.timeout(2_000) })
-    .then((r) => (r.ok ? (r.json() as Promise<{ default_generation_settings?: { n_ctx?: number } }>) : null))
-    .catch(() => null);
-  const ctx = props?.default_generation_settings?.n_ctx;
-  if (ctx && ctx < 8192) {
-    throw new Error(`${preset.label} is the built-in helper model (${ctx}-token context), too small for chats. Run Ollama with OLLAMA_CONTEXT_LENGTH=16384 instead.`);
-  }
+  await assertChatContext(id);
   setKeyRejected(id, false);
   const body = (await res.json()) as { data?: Array<{ id?: string }> };
   const listed = new Set(chatModelIds((body.data ?? []).map((m) => m.id ?? ""), 80));

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import path from "node:path";
 import { parseDirectModel, providerBaseUrl, providerInfo, providerKey } from "./providers";
+import { helperBaseUrl } from "./localModel";
 import { lineDiff } from "./pureFeatures";
 import { recordUsage } from "./usageLog";
 
@@ -80,7 +81,9 @@ export async function askDirect(
     if (msg.stop_reason === "refusal") return { label, text: "", refused: true };
     return { label, text: msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim() };
   }
-  const client = new OpenAI({ apiKey: providerKey(pick.provider) || "local", baseURL: providerBaseUrl(pick.provider) });
+  // The built-in summaries helper has no provider entry; reach it directly when the model is its own.
+  const baseURL = (pick.provider === "ollama" && (await helperBaseUrl(pick.model))) || providerBaseUrl(pick.provider);
+  const client = new OpenAI({ apiKey: providerKey(pick.provider) || "local", baseURL });
   const res = await client.chat.completions.create(
     { model: pick.model, messages: [{ role: "system", content: system }, { role: "user", content: user }] },
     { signal },
