@@ -92,16 +92,19 @@ function Work({ steps, live, liveStatus }: { steps: Step[]; live: boolean; liveS
     if (!live && wasLive.current) setOpened(false);
     wasLive.current = live;
   }, [live]);
-  const shown = opened ? steps.slice(-8) : [];
-  const earlier = steps.length - shown.length;
+  // One step is already the header's label; listing it again would duplicate it.
+  const shown = opened && steps.length !== 1 ? steps.slice(-8) : [];
+  const earlier = steps.length === 1 ? 0 : steps.length - shown.length;
   const status = live && liveStatus && liveStatus !== steps[steps.length - 1]?.text ? liveStatus : "";
+  // With no steps the header already shows the status; listing it again would duplicate it.
+  const listStatus = steps.length === 0 ? "" : status;
   return (
     <div className={`work ${opened ? "open" : ""} ${live ? "live" : ""}`}>
       <button type="button" className="work-toggle" onClick={() => setOpened((value) => !value)}>
         <span className="work-caret" aria-hidden>{opened ? "▾" : "▸"}</span>
         <span>{steps.length === 0 ? status || "Working" : workLabel(steps)}</span>
       </button>
-      {opened && (shown.length > 0 || status) && (
+      {opened && (shown.length > 0 || listStatus) && (
         <ol className="work-list">
           {earlier > 0 && <li className="work-earlier">{earlier} earlier</li>}
           {shown.map((step, index) => (
@@ -109,7 +112,7 @@ function Work({ steps, live, liveStatus }: { steps: Step[]; live: boolean; liveS
               {step.text}
             </li>
           ))}
-          {status && <li className="current">{status}</li>}
+          {listStatus && <li className="current">{listStatus}</li>}
         </ol>
       )}
     </div>
