@@ -10,11 +10,11 @@ export const LOCAL_MODEL_CHOICES: { id: string; label: string; detail: string }[
   { id: "devstral:24b", label: "Devstral (large)", detail: "About 14 GB. Built for coding agents; needs a 16 to 24 GB graphics card." },
 ];
 
+// What "Set up" installs when the user picks nothing. The local model is manual: off until chosen in Settings.
 export const DEFAULT_LOCAL_MODEL = "qwen2.5:1.5b";
 
-// A missing value, or the old 7B id, becomes the small default. An explicit empty string stays off.
+// A missing value is off. An unknown id (the old 7B) becomes the small default.
 export function normalizeLocalModel(value: unknown): string {
-  if (value === "") return "";
-  if (typeof value !== "string") return DEFAULT_LOCAL_MODEL;
+  if (typeof value !== "string" || value === "") return "";
   return LOCAL_MODEL_CHOICES.some((c) => c.id === value) ? value : DEFAULT_LOCAL_MODEL;
 }

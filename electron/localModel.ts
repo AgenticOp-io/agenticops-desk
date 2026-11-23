@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { app } from "electron";
 import { DEFAULT_LOCAL_MODEL } from "./localChoices";
-import { llamaServerArgs, openAiListsModel } from "./pureFeatures";
+import { isModelLoading, llamaServerArgs, openAiListsModel } from "./pureFeatures";
 import { budgetFor, memoryIsLow, preferApp, relaxProcess, releaseApp, sampleResources, watchMemory } from "./resourceGuard";
 import { loadSettings } from "./settings";
 
@@ -215,14 +215,36 @@ function startLlama(model: string) {
   return child;
 }
 
-// "ready" lists our model. "other" is some other program on the port. "down" means nothing is listening.
-async function probePort(model: string): Promise<"ready" | "other" | "down"> {
+// "ready" can take a completion. "loading" is llama.cpp with the file still opening. "other" is another
+// program on the port. "down" means nothing is listening.
+async function probePort(model: string): Promise<"ready" | "loading" | "other" | "down"> {
+  try {
+    const health = await fetch(`${API}/health`, { signal: AbortSignal.timeout(2_000) });
+    if (health.status === 503) return "loading";
+    if (!health.ok) return "other";
+  } catch {
+    // A server without /health, such as Ollama, is judged by its model list.
+  }
   try {
     const res = await fetch(`${API}/v1/models`, { signal: AbortSignal.timeout(2_000) });
+    if (res.status === 503) return "loading";
     if (!res.ok) return "other";
     return openAiListsModel(await res.json(), model) ? "ready" : "other";
   } catch {
     return "down";
+  }
+}
+
+// One completion, retried while llama.cpp is still loading the model file. Gives up when the caller cancels.
+export async function retryWhileLoading<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const deadline = Date.now() + 45_000;
+  for (;;) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isModelLoading(err) || signal?.aborted || Date.now() >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 }
 
@@ -248,13 +270,15 @@ async function startServerOnce() {
   if (now === "other") {
     throw new Error(`Port 11437 is in use, but it is not serving ${model}. Stop the other program using that port, then try again.`);
   }
-  const child = startLlama(model);
   let died = false;
-  const markDead = () => {
-    died = true;
-  };
-  child.on("exit", markDead);
-  child.on("error", markDead);
+  if (now === "down") {
+    const child = startLlama(model);
+    const markDead = () => {
+      died = true;
+    };
+    child.on("exit", markDead);
+    child.on("error", markDead);
+  }
   // A cold load of the model file can take well over half a minute. Killing it early just starts the load again.
   for (let i = 0; i < 360; i++) {
     await new Promise((r) => setTimeout(r, 500));

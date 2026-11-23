@@ -94,7 +94,11 @@ const said = (history: { role: string; text: string }[]) => history.filter((m) =
 
 export function chatSummary(chatId: string, history: { role: string; text: string }[] | undefined): string {
   const s = summaries()[chatId];
-  return s && s.turns === said(history ?? []).length ? s.text : "";
+  if (!s?.text) return "";
+  // The new message is sent on its own. A summary that is a few turns behind still describes the chat.
+  // Rewriting it before the agent starts is what left the chat sitting on the summary.
+  if (s.turns > said(history ?? []).length) return "";
+  return s.text;
 }
 
 const SUMMARY_SYSTEM =
@@ -125,9 +129,10 @@ export async function ensureSummary(
   signal?: AbortSignal,
 ): Promise<string> {
   const ready = chatSummary(chatId, history);
-  if (ready) return ready;
-  await summarizeRun(chatId, await summaryModel(), history ?? [], null, signal);
-  return chatSummary(chatId, history);
+  if (ready || signal?.aborted) return ready;
+  // No summary yet. The brief covers this message. Writing one must not hold the agent.
+  void summarizeRun(chatId, await summaryModel(), history ?? [], null, signal);
+  return "";
 }
 
 // After a run, so the next message usually already has its summary.

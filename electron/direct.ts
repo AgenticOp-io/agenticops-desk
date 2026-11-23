@@ -20,6 +20,7 @@ import {
   realStorePwsh,
   restoreInput,
   secretFileMessage,
+  noteHandOff,
   send,
   sendChanges,
   explainWork,
@@ -32,16 +33,16 @@ import {
   withBrief,
   withHistory,
 } from "./claude";
-import { capsulesBrief, chatSummary, ensureSummary } from "./capsules";
+import { capsulesBrief, ensureSummary } from "./capsules";
 import { callMcpTool, mcpToolsFor, type McpTool } from "./directMcp";
 import { prepareMemory } from "./memory";
 import { ordersPrompt, protectedBy, runChecks, runOrders } from "./orders";
 import { paidPacket } from "./gather";
 import { imagesToText } from "./imageVision";
-import { generateLocally } from "./localModel";
+import { generateLocally, retryWhileLoading } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
-import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
+import { geminiSignature, shouldHandOff, shrinkGatherResult, staysInside, streamToolIndex, stripDeepSeekReasoning, thoughtSignature } from "./pureFeatures";
 import { assertChatContext, providerBaseUrl, providerInfo, providerKey, setKeyRejected, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { healHistory } from "./healHistory";
@@ -735,6 +736,7 @@ async function runAnthropic(ctx: Ctx, model: string, system: string, saved: Save
 // ---------- OpenAI-compatible loop (OpenAI, OpenRouter, Gemini, DeepSeek, Ollama) ----------
 
 async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: string, saved: Saved, prompt: string, images: ImageAttachment[]) {
+  model = model.replace(/^models\//, "");
   const client = new OpenAI({ apiKey: providerKey(provider) || "local", baseURL: providerBaseUrl(provider) });
   const messages = saved.messages as OpenAI.Chat.ChatCompletionMessageParam[];
   if (!messages.length || messages[0].role !== "system") messages.unshift({ role: "system", content: system });
@@ -769,6 +771,13 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
     sendPhase(ctx.win, ctx.chatId, ctx.session, "thinking", "Thinking…");
     // Thinking is on by default and runs again before every tool. That is the lag between commands.
     if (provider === "deepseek") stripDeepSeekReasoning(messages as Array<{ reasoning_content?: string }>);
+    if (provider === "gemini") {
+      for (const msg of messages) {
+        const calls = (msg as { role?: string; tool_calls?: Array<{ extra_content?: unknown }> }).tool_calls;
+        if (!calls) continue;
+        for (const call of calls) call.extra_content = geminiSignature(call.extra_content);
+      }
+    }
     if (provider === "deepseek" && (!ctx.session.steer || ctx.session.steer.signal.aborted)) {
       ctx.session.steer = new AbortController();
     }
@@ -777,18 +786,20 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
     ctx.signal.addEventListener("abort", onStop);
     let text = "";
     let steered = false;
-    const calls: Array<{ id: string; name: string; args: string }> = [];
+    const calls: Array<{ id: string; name: string; args: string; extra?: { google: { thought_signature: string } } }> = [];
     try {
-      const stream = await client.chat.completions.create(
+      const stream = await retryWhileLoading(() => client.chat.completions.create(
         {
           model,
           messages,
           tools,
           stream: true,
           ...(provider === "deepseek" ? { thinking: { type: "disabled" } } : { stream_options: { include_usage: true } }),
+          // Gemini's default think runs for minutes before the first word, and the chat just says Thinking.
+          ...(provider === "gemini" ? { reasoning_effort: "low" } : {}),
         } as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
         { signal: turnAbort.signal },
-      );
+      ), turnAbort.signal);
       for await (const chunk of stream) {
         if (provider === "deepseek" && ctx.session.guide) {
           steered = true;
@@ -804,10 +815,13 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
           send(ctx.win, { kind: "line", text: delta.content, phase: "writing", chatId: ctx.chatId, running: true });
         }
         for (const tc of delta?.tool_calls ?? []) {
-          const slot = (calls[tc.index] ??= { id: "", name: "", args: "" });
+          const index = streamToolIndex(tc.index, Boolean(tc.function?.name), calls.length);
+          const slot = (calls[index] ??= { id: "", name: "", args: "" });
           if (tc.id) slot.id = tc.id;
           if (tc.function?.name) slot.name += tc.function.name;
           if (tc.function?.arguments) slot.args += tc.function.arguments;
+          const signed = thoughtSignature((tc as { extra_content?: unknown }).extra_content);
+          if (signed) slot.extra = signed;
         }
         if (chunk.usage) {
           const cached = (chunk.usage as { prompt_tokens_details?: { cached_tokens?: number } }).prompt_tokens_details?.cached_tokens ?? 0;
@@ -839,11 +853,19 @@ async function runOpenAI(ctx: Ctx, provider: ProviderId, model: string, system: 
         role: "assistant",
         content: text || null,
         ...(live.length
-          ? { tool_calls: live.map((c, i) => ({ id: c.id || `call_${turn}_${i}`, type: "function" as const, function: { name: c.name, arguments: c.args || "{}" } })) }
+          ? {
+              tool_calls: live.map((c, i) => ({
+                id: c.id || `call_${turn}_${i}`,
+                type: "function" as const,
+                function: { name: c.name, arguments: c.args || "{}" },
+                ...(provider === "gemini" ? { extra_content: c.extra ?? geminiSignature(undefined) } : c.extra ? { extra_content: c.extra } : {}),
+              })),
+            }
           : {}),
       });
     }
     if (steered) continue;
+    if (!text && !live.length) throw new Error("The model returned no output");
     if (!live.length) {
       if (provider === "deepseek" && ctx.session.guide) continue;
       const feedback = await orderFeedback(ctx);
@@ -941,14 +963,7 @@ export function runDirect(opts: {
   const saved: Saved = sameProvider ? prior! : { provider: opts.provider, messages: [] };
   let prompt = "";
   let images = opts.images;
-  if (followUp && prior && prior.messages.length) {
-    send(win, {
-      kind: "note",
-      chatId,
-      running: true,
-      text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
-    });
-  }
+  if (followUp && prior && prior.messages.length) noteHandOff(win, chatId);
   const ctx: Ctx = {
     win,
     chatId,
@@ -964,11 +979,7 @@ export function runDirect(opts: {
     let failed = "";
     try {
       if (isLocalProvider(opts.provider)) await assertChatContext(opts.provider);
-      if (followUp && !chatSummary(chatId, opts.history)) {
-        send(win, { kind: "status", running: true, phase: "starting", text: "Summarizing this chat locally…", chatId });
-      } else {
-        send(win, { kind: "status", running: true, phase: "starting", text: "Reading the project locally…", chatId });
-      }
+      send(win, { kind: "status", running: true, phase: "starting", text: "Reading the project locally…", chatId });
       const [seen, packet, summary] = await Promise.all([
         imagesToText(opts.prompt, opts.images),
         paidPacket(cwd, opts.prompt),
