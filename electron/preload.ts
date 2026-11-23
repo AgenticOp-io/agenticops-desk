@@ -273,6 +273,10 @@ contextBridge.exposeInMainWorld("desk", {
   locateProject: (projectId: string) => ipcRenderer.invoke("project:locate", projectId) as Promise<boolean>,
   trashProject: (dir: string) => ipcRenderer.invoke("project:trash", dir) as Promise<{ ok: boolean; note: string } | null>,
   cloneMissingRepos: () => ipcRenderer.invoke("sync:clone-all") as Promise<{ ok: boolean; output: string }>,
+  phoneRepos: () => ipcRenderer.invoke("sync:phone-repos") as Promise<Array<{ repo: string; on: boolean; added: boolean }>>,
+  setPhoneRepo: (repo: string, action: "on" | "off" | "add" | "remove") =>
+    ipcRenderer.invoke("sync:phone-repo-set", repo, action) as Promise<Array<{ repo: string; on: boolean; added: boolean }>>,
+  phonePairQr: () => ipcRenderer.invoke("sync:phone-qr") as Promise<{ ok: boolean; image?: string; login?: string; code?: string; error?: string }>,
   findLocalRepos: () => ipcRenderer.invoke("sync:find-repos") as Promise<{ ok: boolean; output: string }>,
   storageStatus: () => ipcRenderer.invoke("storage:status"),
   setChatStorage: (mode: string) => ipcRenderer.invoke("storage:set", mode),

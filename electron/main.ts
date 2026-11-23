@@ -46,6 +46,7 @@ import {
   liveRunCount,
   runningChats,
   listModels,
+  onChatEvent,
   onNotificationClick,
   pendingRuns,
   probeClaude,
@@ -100,6 +101,8 @@ import {
   cloneMissingRepos,
   cloneSyncedProject,
   linkLocalRepos,
+  noteJobEvent,
+  onPhoneMessage,
   refreshProjectRemotes,
   remoteOfPath,
   scheduleDeskSync,
@@ -110,9 +113,12 @@ import {
   syncApplying,
   syncNow,
   syncStatus,
+  phoneRepoList,
+  setPhoneRepo,
 } from "./deskSync";
 import {
   checkForUpdate,
+  phonePairQr,
   closeAllShells,
   closeShell,
   gitCheckout,
@@ -562,6 +568,13 @@ app.on("web-contents-created", (_e, contents) => {
 });
 
 app.whenReady().then(async () => {
+  onChatEvent((e) => noteJobEvent(e.chatId, e.kind, e.running));
+  // A message from the phone runs like a manager's order to a worker: the window sends it in that chat.
+  onPhoneMessage(({ channel, order }) => {
+    if (!win || win.isDestroyed()) return false;
+    win.webContents.send(channel, order);
+    return true;
+  });
   // The installer runs this and waits, so the choice is on disk before the first window.
   if (process.argv.includes("--apply-install")) {
     // shortcut: a sign-in window left open holds the installer for 10 minutes, then setup stops. Opening the app applies a choice that was never started.
@@ -1468,6 +1481,10 @@ ipcMain.handle("sync:set", (_e, url: string) => setSyncUrl(String(url ?? "")));
 ipcMain.handle("sync:create", () => createSyncRepo());
 ipcMain.handle("sync:cursor", (_e, mode: string) => setCursorIntegration(String(mode ?? "")));
 ipcMain.handle("sync:now", () => syncNow());
+ipcMain.handle("sync:phone-qr", () => phonePairQr());
+ipcMain.handle("sync:phone-repos", () => phoneRepoList());
+ipcMain.handle("sync:phone-repo-set", (_e, repo: string, action: "on" | "off" | "add" | "remove") =>
+  setPhoneRepo(String(repo), ["on", "off", "add", "remove"].includes(action) ? action : "off"));
 ipcMain.handle("sync:clone", async (_e, remote: string, projectId: string) => {
   const result = await dialog.showOpenDialog(win!, {
     title: "Folder to clone into",

@@ -3,6 +3,11 @@ Copyright 2026 AgenticOp-io
 
 Licensed under the Apache License, Version 2.0. The full text is in LICENSE.
 
+This product includes open-source software. Each package, its license and its source are listed in
+THIRD_PARTY_NOTICES.md. Regenerate it with `node scripts/third-party-notices.mjs` after changing dependencies.
+The only edit we make to a dependency's code is scripts/patch-vite-electron.mjs, which patches
+vite-plugin-electron (MIT) in a developer's node_modules at install time; nothing of it ships.
+
 The Claude Agent SDK (@anthropic-ai/claude-agent-sdk) and the Claude Code executable are not part of
 this program and stay under Anthropic's own terms. AgenticOp-io's installers do not contain them: the
 app downloads them from npm on first use.

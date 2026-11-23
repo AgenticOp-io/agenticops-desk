@@ -985,3 +985,21 @@ test("git status parse and host web links", async () => {
   assert.equal(az.web, "https://dev.azure.com/org/proj/_git/repo");
   assert.equal(webLink(remoteWeb("https://git.example.com/a/b")!, { page: "prs" }), "https://git.example.com/a/b");
 });
+
+test("device git identity: login plus device, user's email or GitHub no-reply", async () => {
+  const { deviceGitIdentity } = await import("./pureFeatures.ts");
+  assert.deepEqual(deviceGitIdentity("octo", "me@example.com", "desktop", "42"), { name: "octo-desktop", email: "me@example.com" });
+  assert.deepEqual(deviceGitIdentity("octo", "", "mobile", "42"), { name: "octo-mobile", email: "42+octo@users.noreply.github.com" });
+  assert.equal(deviceGitIdentity("Jane Doe", "", "desktop").name, "Jane-Doe-desktop");
+  assert.equal(deviceGitIdentity("", "", "desktop").name, "user-desktop");
+});
+
+test("phone messages: only well-formed ones run", async () => {
+  const { parsePhoneMessage } = await import("./pureFeatures.ts");
+  assert.deepEqual(parsePhoneMessage({ chat: "abc-1", text: " fix it " }), { chat: "abc-1", title: undefined, text: "fix it", host: undefined });
+  assert.deepEqual(parsePhoneMessage({ text: "new", title: "T", host: "PC-1" }), { chat: undefined, title: "T", text: "new", host: "PC-1" });
+  assert.equal(parsePhoneMessage({ chat: "../x", text: "hi" }), null);
+  assert.equal(parsePhoneMessage({ chat: "a", text: "  " }), null);
+  assert.equal(parsePhoneMessage("hi"), null);
+  assert.equal(parsePhoneMessage({ text: "x", host: "a b" })?.host, undefined);
+});

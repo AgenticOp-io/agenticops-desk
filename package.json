@@ -11,10 +11,11 @@
     "dev": "node scripts/patch-vite-electron.mjs && vite",
     "build": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --publish never",
     "pack": "tsc --noEmit && node --max-old-space-size=6144 node_modules/vite/bin/vite.js build && electron-builder --publish never",
-    "test": "node --experimental-strip-types --test electron/gate.test.ts electron/healHistory.test.ts electron/memoryPath.test.ts electron/tarMember.test.ts electron/redact.test.ts electron/pureFeatures.test.ts src/transcript.test.ts src/autocorrect.test.ts src/helpText.test.ts boot/choice.test.mjs",
+    "test": "node --experimental-strip-types --test electron/gate.test.ts electron/healHistory.test.ts electron/memoryPath.test.ts electron/tarMember.test.ts electron/redact.test.ts electron/pureFeatures.test.ts src/transcript.test.ts src/autocorrect.test.ts src/helpText.test.ts mobile/github.test.ts boot/choice.test.mjs",
     "preview": "vite preview",
     "postinstall": "node scripts/patch-vite-electron.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "android": "vite build --config mobile/vite.config.ts && cap sync android && cd android && gradlew.bat assembleDebug"
   },
   "build": {
     "appId": "io.agenticop.desk",
@@ -38,6 +39,14 @@
       {
         "from": "LICENSE",
         "to": "LICENSE"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      },
+      {
+        "from": "NOTICE",
+        "to": "NOTICE"
       },
       {
         "from": "NOTICE",
@@ -102,20 +111,26 @@
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.319",
     "@anthropic-ai/sdk": "^1.6.0",
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/source-serif-4": "^5.3.1",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@monaco-editor/react": "^4.7.0",
     "@types/node": "^22.15.3",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",
     "electron": "^45.2.3",
     "electron-builder": "^26.0.12",
+    "jsqr": "^1.4.0",
     "katex": "^0.19.1",
     "monaco-editor": "^0.57.0",
     "openai": "^7.53.0",
     "playwright-core": "^1.65.0",
+    "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",

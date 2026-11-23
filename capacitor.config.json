@@ -1,0 +1,8 @@
+{
+  "appId": "io.agenticop.desk",
+  "appName": "AgenticOps Remote",
+  "webDir": "dist-mobile",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

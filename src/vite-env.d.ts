@@ -359,6 +359,9 @@ declare global {
       saveCredential: (input: { name: string; kind: string; username: string; host: string; secret: string; passphrase?: string }) => Promise<{ ok: boolean; note: string }>;
       removeCredential: (name: string) => Promise<{ ok: boolean; note: string }>;
       cloneMissingRepos: () => Promise<{ ok: boolean; output: string }>;
+      phoneRepos: () => Promise<Array<{ repo: string; on: boolean; added: boolean }>>;
+      setPhoneRepo: (repo: string, action: "on" | "off" | "add" | "remove") => Promise<Array<{ repo: string; on: boolean; added: boolean }>>;
+      phonePairQr: () => Promise<{ ok: boolean; image?: string; login?: string; code?: string; error?: string }>;
       findLocalRepos: () => Promise<{ ok: boolean; output: string }>;
       storageStatus: () => Promise<{ mode: string; cursorChats: number }>;
       setChatStorage: (mode: string) => Promise<{ ok: boolean; note: string }>;

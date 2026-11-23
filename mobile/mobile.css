@@ -1,0 +1,38 @@
+/* Phone layout around the desktop's own chat styles (src/styles.css). */
+body { overscroll-behavior: none; }
+#root { display: flex; flex-direction: column; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.m-screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.m-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 0 10px; background: var(--bg-2); border-bottom: 1px solid var(--border); }
+.m-head h1 { flex: 1; margin: 0; font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-back { background: none; border: 0; font-size: 30px; line-height: 1; padding: 0 8px 4px; }
+.m-head .ghost { padding: 8px 10px; font-size: 13px; }
+.m-list { flex: 1; overflow: auto; padding: 8px 0 24px; }
+.m-row { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--border); padding: 14px 16px; }
+.m-row:active { background: var(--bg-3); }
+.m-row-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-muted { color: var(--muted); font-size: 13px; }
+.m-pad { padding: 12px 16px; }
+.m-error { margin: 8px 12px; padding: 10px; border-radius: 8px; background: #4a2020; color: #fecaca; font-size: 14px; }
+.m-primary { display: inline-block; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 12px 18px; font-size: 15px; font-weight: 600; text-decoration: none; text-align: center; }
+.m-primary:disabled { opacity: 0.5; }
+.m-new { display: block; margin: 8px 16px 12px; width: calc(100% - 32px); }
+.m-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; }
+.m-brand { margin: 0; font-size: 24px; }
+.m-code { font: 600 32px var(--font-mono); letter-spacing: 0.15em; padding: 12px 20px; border: 1px solid var(--border); border-radius: 10px; user-select: all; }
+.m-chat { min-height: 0; height: auto; }
+.m-chat .messages { padding: 12px 12px 16px; }
+.m-pending { opacity: 0.75; }
+.m-composer { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; background: var(--bg-2); border-top: 1px solid var(--border); }
+.m-composer-row { display: flex; gap: 8px; align-items: flex-end; }
+.m-composer textarea, .m-composer input { flex: 1; min-width: 0; resize: none; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 16px; }
+.m-jobs { margin: 16px; }
+.m-jobs summary { color: var(--muted); padding: 6px 0; }
+.m-jobs div { padding: 3px 0; }
+
+.m-scan {
+  width: min(90vw, 420px);
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #000;
+}

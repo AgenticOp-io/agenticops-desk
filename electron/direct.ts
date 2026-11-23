@@ -7,6 +7,7 @@ import path from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { recordActivity } from "./activityLog";
 import { fillCredentials } from "./credentials";
+import { gitIdentityEnv } from "./gitIdentity";
 import { quietThreads } from "./resourceGuard";
 import {
   approveLogins,
@@ -249,7 +250,7 @@ function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string
       windowsHide: true,
       // Its own process group on macOS and Linux, so stopping it also stops whatever it started.
       detached: !WIN,
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...quietThreads() },
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...gitIdentityEnv(), ...quietThreads() },
     });
     let out = "";
     const add = (d: Buffer) => {

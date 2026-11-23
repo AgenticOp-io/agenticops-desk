@@ -1,9 +1,12 @@
 import { app } from "electron";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { CursorChat } from "./cursor";
 import { run, runGit } from "./features";
+import { loadGitIdentity } from "./gitIdentity";
 import { writeJsonAtomic } from "./jsonStore";
 import {
   exportLibrarySlice,
@@ -29,6 +32,7 @@ import {
   mergeProjects,
   mergeThreads,
   oneAtATime,
+  parsePhoneMessage,
   portablePrefs,
   remoteKey,
   type CursorMode,
@@ -46,6 +50,7 @@ import { canvasFile, deleteCanvas } from "./canvas";
 
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
 const SYNC_REPO = "desk-sync";
+const CHAT_BRANCH = "desk-chats";
 
 export type SyncView = {
   url: string;
@@ -251,14 +256,14 @@ async function mergeTrees(local: string, synced: string) {
   }
 }
 
-async function ensureRepo(dir: string, remote: string): Promise<{ ok: boolean; output: string }> {
+async function ensureRepo(dir: string, remote: string, branch = "main"): Promise<{ ok: boolean; output: string }> {
   await fs.mkdir(dir, { recursive: true });
   if (!existsSync(path.join(dir, ".git"))) {
-    let init = await runGit(dir, ["init", "-b", "main"]);
+    let init = await runGit(dir, ["init", "-b", branch]);
     if (!init.ok) {
       init = await runGit(dir, ["init"]);
       if (!init.ok) return init;
-      await runGit(dir, ["checkout", "-b", "main"]);
+      await runGit(dir, ["checkout", "-b", branch]);
     }
     const added = await runGit(dir, ["remote", "add", "origin", remote]);
     if (!added.ok) return added;
@@ -269,36 +274,37 @@ async function ensureRepo(dir: string, remote: string): Promise<{ ok: boolean; o
       if (!added.ok) return added;
     }
   }
-  // Commits here are the app's own; git refuses to commit on a computer with no name set.
-  await runGit(dir, ["config", "user.name", "AgenticOps Desk"]);
-  await runGit(dir, ["config", "user.email", "desk@agenticop.io"]);
+  // Commits here say which device made them (login-desktop); git refuses to commit on a computer with no name set.
+  const who = await loadGitIdentity();
+  await runGit(dir, ["config", "user.name", who.name]);
+  await runGit(dir, ["config", "user.email", who.email]);
   // A link committed to the repository must stay a plain file: copied through, it would read or overwrite any file here.
   await runGit(dir, ["config", "core.symlinks", "false"]);
   const ignore = path.join(dir, ".gitignore");
   if (!existsSync(ignore)) await fs.writeFile(ignore, "*.tmp\n", "utf8");
   const attrs = path.join(dir, ".gitattributes");
   if (!existsSync(attrs)) await fs.writeFile(attrs, "* -text\n", "utf8");
-  // --prune: a repository emptied or recreated on GitHub must not leave an origin/main that pull then cannot find.
-  const fetched = await runGit(dir, ["fetch", "--prune", "origin"], 120_000);
+  // --prune: a repository emptied or recreated on GitHub must not leave an origin branch that pull then cannot find.
+  const fetched = await runGit(dir, branch === "main" ? ["fetch", "--prune", "origin"] : ["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], 120_000);
   const auth = /authentication failed|permission denied|could not read username|repository not found|access denied/i.test(fetched.output);
   if (!fetched.ok && auth) return fetched;
-  const origin = await runGit(dir, ["rev-parse", "--verify", "origin/main"]);
+  const origin = await runGit(dir, ["rev-parse", "--verify", `origin/${branch}`]);
   if (!origin.ok) {
     if (!fetched.ok && !/couldn't find remote ref|no refs in common|does not appear to be a git/i.test(fetched.output)) return fetched;
     // The repository is empty and this folder's history is not chats: keep it, but never publish it there.
     if (!(await isDeskRepo(dir)).ok) {
       await fs.rename(dir, `${dir}-old-${Date.now()}`);
-      return ensureRepo(dir, remote);
+      return ensureRepo(dir, remote, branch);
     }
     return { ok: true, output: "" };
   }
   const head = await runGit(dir, ["rev-parse", "--verify", "HEAD"]);
-  if (!head.ok) return runGit(dir, ["reset", "--hard", "origin/main"]);
+  if (!head.ok) return runGit(dir, ["reset", "--hard", `origin/${branch}`]);
   await abortStaleRebase(dir);
-  const pulled = await runGit(dir, ["pull", "--rebase", "--autostash", "origin", "main"], 120_000);
+  const pulled = await runGit(dir, ["pull", "--rebase", "--autostash", "origin", branch], 120_000);
   if (pulled.ok || /already up to date/i.test(pulled.output)) return { ok: true, output: pulled.output };
   if (!fetched.ok) return pulled;
-  return takeRemote(dir);
+  return takeRemote(dir, branch);
 }
 
 // An older version could leave a rebase stopped on a conflict, and every sync after it failed.
@@ -310,9 +316,9 @@ async function abortStaleRebase(dir: string) {
 
 // This folder is a snapshot built from this computer's own library, threads and memory, which stay where they are.
 // So a commit that conflicts with another computer's is dropped for theirs, and the next merge rebuilds it.
-async function takeRemote(dir: string): Promise<{ ok: boolean; output: string }> {
+async function takeRemote(dir: string, branch = "main"): Promise<{ ok: boolean; output: string }> {
   await abortStaleRebase(dir);
-  return runGit(dir, ["reset", "--hard", "origin/main"]);
+  return runGit(dir, ["reset", "--hard", `origin/${branch}`]);
 }
 
 async function isDeskRepo(dir: string): Promise<{ ok: boolean; output: string }> {
@@ -389,9 +395,14 @@ async function doSync(): Promise<SyncView> {
 
       await importSyncedLibrary(merged.map(chatFromSync), deleted);
       if (mode !== "off") await writeCursorArchiveThreads(dir, new Set(Object.keys(deleted)));
-      await mergeThreadFiles(dir, merged, previous, deleted);
+      // A chat of a project with no git remote stays on this computer: the phone and other desks only see projects git holds.
+      const offline = new Set(slice.projects.filter((p) => p.remotes.length === 0).map((p) => p.id));
+      const theirIds = new Set(incomingChats.map((c) => c.id));
+      const priv = await privateProjects(slice.projects);
+      const shared = merged.filter((c) => !(c.projectId && (offline.has(c.projectId) || priv.has(c.projectId)) && !theirIds.has(c.id)));
+      await mergeThreadFiles(dir, shared, previous, deleted);
       await mergeMemory(slice);
-      await writeSnapshot(dir, projects, merged, deleted, slice.merged);
+      await writeSnapshot(dir, projects, shared, deleted, slice.merged);
 
       const status = await runGit(dir, ["status", "--porcelain"]);
       if (!status.ok) return { error: status.output };
@@ -421,6 +432,7 @@ async function doSync(): Promise<SyncView> {
       step = await mergeAndCommit();
       if ("error" in step) return await viewOf(url, false, step.error);
     }
+    const branchNote = await syncProjectBranches();
     const link = await applyCursorLink({
       mode,
       remote: url,
@@ -428,7 +440,7 @@ async function doSync(): Promise<SyncView> {
       restore: mode === "full",
       announce: false,
     });
-    const note = [changed ? "Synced." : "Already up to date.", linkNote, link].filter(Boolean).join(" ");
+    const note = [changed ? "Synced." : "Already up to date.", linkNote, branchNote, link].filter(Boolean).join(" ");
     linkNote = "";
     return await viewOf(url, true, note);
   } catch (err) {
@@ -442,6 +454,196 @@ async function doSync(): Promise<SyncView> {
       scheduleDeskSync(wait);
     }
   }
+}
+
+// Only a GitHub repository the signed-in account can see as private holds its project's chats; anything else (public, other host,
+// no gh, offline) keeps them in desk-sync. Cached for the run: it asks GitHub once per remote.
+const privacyOf = new Map<string, boolean>();
+async function repoIsPrivate(remote: string): Promise<boolean> {
+  const m = /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(remote);
+  if (!m) return false;
+  const hit = privacyOf.get(remote);
+  if (hit !== undefined) return hit;
+  const res = await run("gh", ["api", `repos/${m[1]}/${m[2]}`, "--jq", ".private"], app.getPath("home"));
+  if (!res.ok) return false;
+  const priv = res.output.trim() === "true";
+  privacyOf.set(remote, priv);
+  return priv;
+}
+
+async function privateProjects(projects: Array<{ id: string; remotes: string[] }>): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const p of projects) {
+    const remote = p.remotes.at(-1);
+    if (remote && allowedGitRemote(remote) && (await repoIsPrivate(remote))) out.add(p.id);
+  }
+  return out;
+}
+
+// Where a project's chats live: its own repo's desk-chats branch when private, else the shared desk-sync repo (null remote).
+export async function chatRepoOf(projectId: string): Promise<{ remote: string; branch: string } | null> {
+  const project = (await exportLibrarySlice()).projects.find((p) => p.id === projectId);
+  const remote = project?.remotes.at(-1);
+  return remote && allowedGitRemote(remote) && (await repoIsPrivate(remote)) ? { remote, branch: CHAT_BRANCH } : null;
+}
+
+// The GitHub repos of every project this desk works on (owner/name): the pairing QR hands them to the phone, which shows only these.
+// The user can deselect a desk project's repo (off) or add one by hand (added); both live in phone-repos.json in userData.
+const phoneChoiceFile = () => path.join(app.getPath("userData"), "phone-repos.json");
+const REPO_NAME = /^[\w.-]+\/[\w.-]+$/;
+export async function phoneRepoList(): Promise<Array<{ repo: string; on: boolean; added: boolean }>> {
+  const choice = await readJson<{ off?: string[]; added?: string[] }>(phoneChoiceFile(), {});
+  const off = new Set(choice.off ?? []);
+  const added = new Set((choice.added ?? []).filter((r) => REPO_NAME.test(r)));
+  const all = new Set<string>();
+  for (const p of (await exportLibrarySlice()).projects) {
+    const m = /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(p.remotes.at(-1) ?? "");
+    if (m) all.add(`${m[1]}/${m[2]}`);
+  }
+  for (const r of added) all.add(r);
+  return [...all].map((repo) => ({ repo, on: !off.has(repo), added: added.has(repo) }));
+}
+export async function setPhoneRepo(repo: string, action: "on" | "off" | "add" | "remove") {
+  repo = repo.trim().replace(/^https?:\/\/github\.com\//i, "").replace(/(\.git)?\/?$/i, "");
+  if (!REPO_NAME.test(repo)) return phoneRepoList();
+  const choice = await readJson<{ off?: string[]; added?: string[] }>(phoneChoiceFile(), {});
+  const off = new Set(choice.off ?? []);
+  const added = new Set(choice.added ?? []);
+  if (action === "add") { added.add(repo); off.delete(repo); }
+  else if (action === "remove") { added.delete(repo); off.add(repo); } // off too, so a desk project's repo stays gone
+  else if (action === "on") off.delete(repo);
+  else off.add(repo);
+  await writeJsonAtomic(phoneChoiceFile(), { off: [...off], added: [...added] });
+  return phoneRepoList();
+}
+export async function phoneRepos(): Promise<string[]> {
+  return (await phoneRepoList()).filter((r) => r.on).map((r) => r.repo).slice(0, 40);
+}
+
+// Job log: one line when a chat's run starts and one when it ends, kept in jobs/<computer>.jsonl on the project's desk-chats
+// branch (one file per computer, so two computers never conflict). Lines wait in userData until the next branch sync.
+const running = new Set<string>();
+export function noteJobEvent(chatId: string | undefined, kind: string, isRunning: boolean | undefined) {
+  if (!chatId) return;
+  const ev = kind === "done" ? "end" : isRunning && !running.has(chatId) ? "start" : "";
+  if (!ev) return;
+  if (ev === "start") running.add(chatId);
+  else running.delete(chatId);
+  void (async () => {
+    const chat = (await exportLibrarySlice()).chats.find((c) => c.id === chatId);
+    if (!chat?.projectId || !THREAD_ID.test(chat.projectId)) return;
+    const file = path.join(app.getPath("userData"), "project-sync", `${chat.projectId}.jobs.jsonl`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.appendFile(file, `${JSON.stringify({ chat: chatId, ev, at: Date.now() })}\n`);
+  })().catch(() => {});
+}
+
+const hostName = () => os.hostname().replace(/[^\w.-]/g, "_");
+
+async function flushJobs(projectId: string, dir: string) {
+  const pending = path.join(app.getPath("userData"), "project-sync", `${projectId}.jobs.jsonl`);
+  const lines = await fs.readFile(pending, "utf8").catch(() => "");
+  if (!lines) return;
+  const host = hostName();
+  await fs.mkdir(path.join(dir, "jobs"), { recursive: true });
+  await fs.appendFile(path.join(dir, "jobs", `${host}.jsonl`), lines);
+  await fs.rm(pending, { force: true });
+}
+
+// Phone messages: the phone app writes inbox/<id>.json to the desk-chats branch; the sync hands each to the window once
+// (team:send for a chat, team:start for a new one) and deletes the file, so the sync commit takes it out of the inbox.
+type PhoneOrder = { channel: "team:send" | "team:start"; order: { id: string; text?: string; managerId?: string; title?: string; prompt?: string } };
+let phoneSink: ((o: PhoneOrder) => boolean) | null = null;
+export function onPhoneMessage(cb: (o: PhoneOrder) => boolean) {
+  phoneSink = cb;
+}
+// shortcut: in memory only; a push that fails right before the app quits delivers that message again on the next start.
+const delivered = new Set<string>();
+let myLogin: string | null = null;
+
+// Only a file the signed-in GitHub account committed runs here. shortcut: the committer comes from the commit itself, so a
+// collaborator who can push to this private repo could fake it; they can already change its code, so this is not a new hole.
+async function committedByMe(dir: string, remote: string, file: string): Promise<boolean> {
+  const m = /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(remote);
+  if (!m) return false;
+  if (myLogin === null) {
+    const me = await run("gh", ["api", "user", "--jq", ".login"], app.getPath("home"));
+    if (!me.ok) return false;
+    myLogin = me.output.trim();
+  }
+  const sha = (await runGit(dir, ["log", "-1", "--format=%H", "--", file])).output.trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) return false;
+  const who = await run("gh", ["api", `repos/${m[1]}/${m[2]}/commits/${sha}`, "--jq", ".committer.login"], app.getPath("home"));
+  return who.ok && who.output.trim() === myLogin;
+}
+
+async function takeInbox(dir: string, remote: string, known: CursorChat[]) {
+  const inbox = path.join(dir, "inbox");
+  const names = await fs.readdir(inbox).catch(() => [] as string[]);
+  for (const name of names) {
+    const id = /^([\w-]{1,80})\.json$/.exec(name)?.[1];
+    if (!id) continue;
+    const file = path.join(inbox, name);
+    if (!delivered.has(id)) {
+      const msg = parsePhoneMessage(await readJson(file, null));
+      if (msg?.host && msg.host !== hostName()) continue; // meant for another computer
+      const chat = msg?.chat ? known.find((c) => c.id === msg.chat) : undefined;
+      // A chat not on this computer before this sync waits a round, so the window has it before the message arrives.
+      if (msg?.chat && !chat) continue;
+      if (!msg || !(await committedByMe(dir, remote, `inbox/${name}`))) {
+        await fs.rm(file, { force: true });
+        continue;
+      }
+      const template = [...known].sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? 0) - (a.lastUsedAt ?? a.updatedAt ?? 0))[0];
+      if (!chat && !template) continue;
+      const order: PhoneOrder = chat
+        ? { channel: "team:send", order: { id: chat.id, text: msg.text } }
+        : { channel: "team:start", order: { id: randomUUID(), managerId: template.id, title: msg.title || "From phone", prompt: msg.text } };
+      if (!phoneSink?.(order)) continue; // window closed: try again next sync
+      delivered.add(id);
+    }
+    await fs.rm(file, { force: true });
+  }
+}
+
+// Each private project keeps its chats on a desk-chats branch of its own repository: same merge as desk-sync, one project's chats only.
+// The branch lives in a separate clone under userData, never in the project folder.
+async function syncProjectBranches(): Promise<string> {
+  const slice = await exportLibrarySlice();
+  const priv = await privateProjects(slice.projects);
+  const failed: string[] = [];
+  for (const project of slice.projects) {
+    if (!priv.has(project.id) || !THREAD_ID.test(project.id)) continue;
+    const dir = path.join(app.getPath("userData"), "project-sync", project.id);
+    const mine = (await exportLibrarySlice()).chats.filter((c) => c.projectId === project.id);
+    const attempt = async (): Promise<string> => {
+      const ready = await ensureRepo(dir, project.remotes.at(-1)!, CHAT_BRANCH);
+      if (!ready.ok) return ready.output;
+      const incoming = asChats(await readJson(path.join(dir, "chats.json"), [])).filter((c) => c.projectId === project.id);
+      const deleted = asDeleted(await readJson(path.join(dir, "deleted.json"), []));
+      const previous = new Map(mine.map((c) => [c.id, c.updatedAt ?? 0]));
+      const merged = mergeChats(mine.map(chatToSync), incoming, deleted);
+      await importSyncedLibrary(merged.map(chatFromSync), deleted);
+      await mergeThreadFiles(dir, merged, previous, deleted);
+      await writeJsonAtomic(path.join(dir, "chats.json"), [...merged].sort((a, b) => (a.id < b.id ? -1 : 1)));
+      await writeJsonAtomic(path.join(dir, "deleted.json"), deleted);
+      await flushJobs(project.id, dir);
+      await takeInbox(dir, project.remotes.at(-1)!, mine);
+      await runGit(dir, ["add", "-A"]);
+      const committed = await runGit(dir, ["commit", "-m", "Sync chats"]);
+      if (!committed.ok && !/nothing to commit/i.test(committed.output)) return committed.output;
+      const pushed = await runGit(dir, ["push", "-u", "origin", `HEAD:${CHAT_BRANCH}`], 120_000);
+      return pushed.ok ? "" : pushed.output;
+    };
+    let err = await attempt();
+    // Another computer pushed first: take its commit and merge again on top of it.
+    if (err && (await runGit(dir, ["fetch", "origin", `+refs/heads/${CHAT_BRANCH}:refs/remotes/origin/${CHAT_BRANCH}`])).ok) {
+      await takeRemote(dir, CHAT_BRANCH);
+      err = await attempt();
+    }
+    if (err) failed.push(`${project.name}: ${err.split("\n").pop()}`);
+  }
+  return failed.length ? `Chats not synced to their repository: ${failed.join("; ")}` : "";
 }
 
 async function viewOf(url: string, ok: boolean, note: string): Promise<SyncView> {

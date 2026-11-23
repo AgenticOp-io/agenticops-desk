@@ -41,6 +41,7 @@ import { LOCAL_ONLY_MESSAGE, privacyMode, privacyVault, privateAppend, protectin
 import { directModelOptions, PRESETS } from "./providers";
 import { commandTouchesSecretFile, isSecretFile, mapStrings, wrapCommand } from "./redact";
 import { writeJsonAtomicSync } from "./jsonStore";
+import { gitIdentityEnv, loadGitIdentity } from "./gitIdentity";
 
 export type ApprovalQuestion = {
   question: string;
@@ -1815,6 +1816,8 @@ export function runClaude(opts: RunOptions) {
       // Inside the try: if these throw, the run still ends with an error and done instead of sticking as "running".
       // Frozen per chat: a changed memory index would rewrite the cached prompt prefix on every resume.
       const frozenKey = `${chatId}\0${cwd}`;
+      await loadGitIdentity();
+      Object.assign(env, gitIdentityEnv());
       const memory = frozenMemory.get(frozenKey) ?? prepareMemory(cwd);
       frozenMemory.set(frozenKey, memory);
       const orders = runOrders(cwd);
@@ -1888,6 +1891,8 @@ export function runClaude(opts: RunOptions) {
       resume: resumeId,
       permissionMode: mode,
       permissionPrompts: "host",
+      // Commits and PRs are the user's (login-desktop), so no agent co-author line.
+      settings: { attribution: { commit: "", pr: "" } },
       includePartialMessages: true,
       systemPrompt: { type: "preset", preset: "claude_code", append: privateAppend([memory.append, standing].filter(Boolean).join("\n\n")), snapshot: false },
       ...(memory.directories.length ? { additionalDirectories: memory.directories } : {}),

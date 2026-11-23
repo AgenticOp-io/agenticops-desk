@@ -7,7 +7,7 @@ import { app } from "electron";
 import { recordActivity } from "./activityLog";
 import { realStorePwsh } from "./claude";
 import { quietThreads } from "./resourceGuard";
-import { isNewerVersion, isReleaseTag, newestTag, parsePorcelain, remoteWeb } from "./pureFeatures";
+import { isNewerVersion, isReleaseTag, newestTag, newPairCode, parsePorcelain, remoteWeb, sealPairing } from "./pureFeatures";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
@@ -361,6 +361,19 @@ const REPO_URL = `https://github.com/${REPO}.git`;
 async function githubToken(): Promise<string> {
   const viaCli = await run("gh", ["auth", "token"], app.getPath("home"), 20_000);
   return viaCli.ok ? viaCli.output.trim() : "";
+}
+
+// Pairs the phone app without an OAuth app: a QR code carrying this computer's GitHub CLI sign-in, which the phone scans.
+// Only the image reaches the renderer, never the token text. The token is encrypted under a one-time code shown beside the QR (sealPairing).
+export async function phonePairQr(): Promise<{ ok: boolean; image?: string; login?: string; code?: string; error?: string }> {
+  const token = await githubToken();
+  const me = token ? await run("gh", ["api", "user", "--jq", `.login + " " + (.id|tostring)`], app.getPath("home"), 20_000) : null;
+  const [login, id] = me?.ok ? me.output.trim().split(" ") : [];
+  if (!token || !login || !id) return { ok: false, error: "Sign in to GitHub on this computer first (Settings → Accounts)." };
+  const QR = await import("qrcode");
+  const code = newPairCode();
+  const image = await QR.toDataURL(sealPairing(login, id, token, code, await (await import("./deskSync")).phoneRepos()), { errorCorrectionLevel: "L", margin: 2, width: 360 });
+  return { ok: true, image, login, code };
 }
 
 function authHeaders(token: string, accept = "application/vnd.github+json"): Record<string, string> {

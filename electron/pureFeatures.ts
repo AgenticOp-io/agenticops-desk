@@ -1,3 +1,4 @@
+import { createCipheriv, pbkdf2Sync, randomBytes, randomInt } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { RemoteHost } from "./gitHosts";
@@ -1632,4 +1633,44 @@ export function isCustomProviderId(id: string): boolean {
 // Old DeepSeek turns stored a chain of thought. Sending it back makes every later command slower.
 export function stripDeepSeekReasoning(messages: Array<{ reasoning_content?: string }>): void {
   for (const message of messages) delete message.reasoning_content;
+}
+
+// Commits made from AgenticOps Desk carry the git login plus where they came from ("me-desktop"), not the agent's name.
+// The email stays the user's own (or their GitHub no-reply address), so the host still links the commit to them.
+export function deviceGitIdentity(login: string, email: string, device: "desktop" | "mobile", githubId?: string): { name: string; email: string } {
+  const base = login.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "user";
+  const mail = email.trim() || (githubId ? `${githubId}+${base}@users.noreply.github.com` : `${base}+${device}@users.noreply.github.com`);
+  return { name: `${base}-${device}`, email: mail };
+}
+
+// A message typed on the phone (inbox/<id>.json on a project's desk-chats branch). It runs on this computer, so anything
+// malformed is refused. No chat = start a new chat with that title. host = the computer it is meant for; empty = any.
+export type PhoneMessage = { chat?: string; title?: string; text: string; host?: string };
+export function parsePhoneMessage(value: unknown): PhoneMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const text = typeof v.text === "string" ? v.text.trim() : "";
+  if (!text || text.length > 50_000) return null;
+  const chat = typeof v.chat === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/.test(v.chat) ? v.chat : undefined;
+  if (v.chat !== undefined && !chat) return null;
+  const title = typeof v.title === "string" ? v.title.trim().slice(0, 80) || undefined : undefined;
+  const host = typeof v.host === "string" && /^[\w.-]{1,100}$/.test(v.host) ? v.host : undefined;
+  return { chat, title, text, host };
+}
+
+// Phone pairing second factor: the QR holds the token encrypted under a one-time 8-digit code that only the desk screen shows,
+// so a photo of the QR alone is useless. Format: "ADPAIR2 <login> <id> <salt>.<iv>.<ciphertext+tag>" (base64url); opened in mobile/github.ts.
+// shortcut: the code is on the same screen as the QR, so a photo of both defeats it; upgrade to a TOTP the phone enrolls once.
+export const PAIR_KDF_ROUNDS = 300_000;
+// The sealed text is the token, then (if any) a newline and the space-separated owner/name repos the phone should show.
+export function sealPairing(login: string, id: string, token: string, code: string, repos: string[] = []): string {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = pbkdf2Sync(code, salt, PAIR_KDF_ROUNDS, 32, "sha256");
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([c.update(repos.length ? `${token}\n${repos.join(" ")}` : token, "utf8"), c.final(), c.getAuthTag()]);
+  return `ADPAIR2 ${login} ${id} ${[salt, iv, ct].map((b) => b.toString("base64url")).join(".")}`;
+}
+export function newPairCode(): string {
+  return String(randomInt(0, 100_000_000)).padStart(8, "0");
 }
