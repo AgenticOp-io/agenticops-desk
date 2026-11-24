@@ -24,7 +24,6 @@ import {
   gatePassed,
   lastRepliesVerbatim,
   pinnedTables,
-  latestContextTokens,
   percentUsed,
   RESUME_TTL_MS,
   sessionBrief,
@@ -1528,7 +1527,7 @@ export type HistoryMsg = { role: string; text: string };
 const HISTORY_LIMIT = 60_000;
 
 // Claude Code keeps the session log under ~/.claude/projects/<folder>/<id>.jsonl. The id is enough to find it.
-function rememberedSession(sessionId: string): { tokens?: number; idleMs: number } | undefined {
+function rememberedSession(sessionId: string): { idleMs: number } | undefined {
   if (!/^[\da-f-]{36}$/i.test(sessionId)) return undefined;
   const root = path.join(os.homedir(), ".claude", "projects");
   let names: string[];
@@ -1541,10 +1540,8 @@ function rememberedSession(sessionId: string): { tokens?: number; idleMs: number
     const file = path.join(root, name, `${sessionId}.jsonl`);
     if (!existsSync(file)) continue;
     try {
-      return {
-        tokens: latestContextTokens(readFileSync(file, "utf8")),
-        idleMs: Math.max(0, Date.now() - statSync(file).mtimeMs),
-      };
+      // Only the age is used; scanning a log that can be tens of MB froze the main thread.
+      return { idleMs: Math.max(0, Date.now() - statSync(file).mtimeMs) };
     } catch {
       return undefined;
     }
