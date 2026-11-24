@@ -330,6 +330,7 @@ contextBridge.exposeInMainWorld("desk", {
   originsOf: (file: string) => ipcRenderer.invoke("provenance:get", file),
   briefing: (sinceMs: number) => ipcRenderer.invoke("briefing:get", sinceMs),
   getTeam: () => ipcRenderer.invoke("team:get"),
+  setPlan: (chatId: string, text: string) => ipcRenderer.invoke("team:plan", chatId, text),
   setManager: (chatId: string, on: boolean) => ipcRenderer.invoke("team:manager", chatId, on),
   onWorkerRetired: (cb: (id: string) => void) => {
     const h = (_: unknown, id: string) => cb(id);

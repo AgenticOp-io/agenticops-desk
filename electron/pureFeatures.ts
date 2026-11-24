@@ -235,7 +235,7 @@ export function modelTier(model: string): ModelTier {
 
 export function tierFromWord(text: string): ModelTier | null {
   const word = text.trim().toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, "") ?? "";
-  if (word === "local" || word === "cheap") return 0;
+  if (word === "local" || word === "cheap" || word === "haiku") return 0;
   if (word === "sonnet" || word === "mid" || word === "medium") return 1;
   if (word === "opus" || word === "expensive") return 2;
   return null;
@@ -1645,17 +1645,23 @@ export function deviceGitIdentity(login: string, email: string, device: "desktop
 
 // A message typed on the phone (inbox/<id>.json on a project's desk-chats branch). It runs on this computer, so anything
 // malformed is refused. No chat = start a new chat with that title. host = the computer it is meant for; empty = any.
-export type PhoneMessage = { chat?: string; title?: string; text: string; host?: string };
+// Also: approve = answer a permission prompt the desk published; stop = stop that chat's run; image = a photo (JPEG data URL).
+export type PhoneMessage = { chat?: string; title?: string; text: string; host?: string; approve?: { request: string; allow: boolean }; stop?: boolean; image?: string };
 export function parsePhoneMessage(value: unknown): PhoneMessage | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
-  const text = typeof v.text === "string" ? v.text.trim() : "";
-  if (!text || text.length > 50_000) return null;
   const chat = typeof v.chat === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/.test(v.chat) ? v.chat : undefined;
   if (v.chat !== undefined && !chat) return null;
-  const title = typeof v.title === "string" ? v.title.trim().slice(0, 80) || undefined : undefined;
   const host = typeof v.host === "string" && /^[\w.-]{1,100}$/.test(v.host) ? v.host : undefined;
-  return { chat, title, text, host };
+  // Actions on an existing chat carry no text.
+  const a = v.approve as { request?: unknown; allow?: unknown } | undefined;
+  if (a && chat && typeof a.request === "string" && /^[\w.-]{1,120}$/.test(a.request) && typeof a.allow === "boolean") return { chat, text: "", host, approve: { request: a.request, allow: a.allow } };
+  if (v.stop === true && chat) return { chat, text: "", host, stop: true };
+  const text = typeof v.text === "string" ? v.text.trim() : "";
+  if (!text || text.length > 50_000) return null;
+  const title = typeof v.title === "string" ? v.title.trim().slice(0, 80) || undefined : undefined;
+  const image = typeof v.image === "string" && v.image.length < 3_000_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(v.image) ? v.image : undefined;
+  return { chat, title, text, host, ...(image ? { image } : {}) };
 }
 
 // Phone pairing second factor: the QR holds the token encrypted under a one-time 8-digit code that only the desk screen shows,

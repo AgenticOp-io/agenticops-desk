@@ -13,7 +13,7 @@ import { Explorer } from "./Explorer";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dock, type DockTab } from "./Dock";
 import { Help } from "./Help";
-import { Briefing, Inbox, WatchChips } from "./Extras";
+import { Briefing, Dashboard, Inbox, WatchChips, type DashRow } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
 import { ChatStorage } from "./ChatStorage";
@@ -234,6 +234,7 @@ export function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [dashOpen, setDashOpen] = useState(false);
   const [briefing, setBriefing] = useState<BriefingItem[] | null>(null);
   const [watches, setWatches] = useState<WatchInfo[]>([]);
   // What is typed in the message box belongs to the chat it was typed in, and survives a restart.
@@ -621,6 +622,7 @@ export function App() {
         setPlanByChat((cur) => ({ ...cur, [chatId]: ev.text ?? "" }));
       }
       if (ev.kind === "done") {
+        void window.desk.getTeam().then(setTeam); // plan_done ticks happen in the main process
         if (activeChatRef.current?.id !== chatId && typeof Notification !== "undefined") {
           const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "A chat";
           new Notification("AgenticOps Desk", { body: `${title} finished` });
@@ -783,6 +785,11 @@ export function App() {
         setPaletteOpen(true);
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        setDashOpen((v) => !v);
+        return;
+      }
       if (e.key === "F1" || ((e.ctrlKey || e.metaKey) && e.key === "/")) {
         e.preventDefault();
         setShowHelp((v) => !v);
@@ -931,7 +938,7 @@ export function App() {
     });
   };
 
-  const [team, setTeam] = useState<Team>({ managers: [], workers: {} });
+  const [team, setTeam] = useState<Team>({ managers: [], workers: {}, plans: {} });
   const teamRef = useRef({ send, chats });
   teamRef.current = { send, chats };
   useEffect(() => {
@@ -978,6 +985,8 @@ export function App() {
     [],
   );
   const [workerList, setWorkerList] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [planDraft, setPlanDraft] = useState("");
   const [openWork, setOpenWork] = useState<string[]>([]);
   const [openWorkHidden, setOpenWorkHidden] = useState(false);
   const openWorkFolder = activeChat?.projectPath || workspace;
@@ -1310,6 +1319,7 @@ export function App() {
     { id: "canvas", label: "Canvas: reports and diagrams the agent made", run: openCanvas },
     { id: "rules", label: "Standing orders: protected paths and checks", run: () => setDock("rules") },
     { id: "inbox", label: "Decisions inbox", run: () => setInboxOpen(true) },
+    { id: "dashboard", label: "Dashboard: all active work (Ctrl+Shift+D)", run: () => setDashOpen(true) },
     { id: "briefing", label: "Briefing: where every chat stands", run: () => showBriefing() },
     { id: "watch", label: "Watch a log file for errors (this chat reacts)", run: () => activeChatRef.current && watchLog(activeChatRef.current.id) },
     { id: "theme", label: prefs.theme === "light" ? "Use dark theme" : "Use light theme", run: () => patchPrefs({ theme: prefs.theme === "light" ? "dark" : "light" }) },
@@ -2013,6 +2023,46 @@ export function App() {
                         </div>
                       )}
                     </span>
+                    <span className="worker-pick">
+                      <button
+                        type="button"
+                        className="team-chip"
+                        title="Set the plan this manager must finish: one step per line. It keeps working until every step is done."
+                        onClick={() => {
+                          setPlanDraft(team.plans[activeChat.id]?.map((s) => s.text).join("\n") ?? "");
+                          setPlanOpen((v) => !v);
+                        }}
+                      >
+                        {(() => {
+                          const p = team.plans[activeChat.id];
+                          return p?.length ? `Plan ${p.filter((s) => s.done).length}/${p.length}` : "Add plan";
+                        })()}
+                      </button>
+                      {planOpen && (
+                        <div className="ctx-menu worker-list" style={{ width: 360, padding: 8 }}>
+                          <textarea
+                            value={planDraft}
+                            onChange={(e) => setPlanDraft(e.target.value)}
+                            rows={10}
+                            style={{ width: "100%" }}
+                            placeholder={"One step per line:\n1. Write the parser\n2. Add tests\n3. Update the docs"}
+                          />
+                          <div style={{ fontSize: 12, opacity: 0.7, margin: "4px 0" }}>Saving restarts every step as not done. Leave empty to remove the plan.</div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void window.desk.setPlan(activeChat.id, planDraft).then((t) => {
+                                setTeam(t);
+                                setPlanOpen(false);
+                                if (t.plans[activeChat.id]?.length) void send({ images: [], mentions: [], text: "Work through your plan step by step (plan_status shows it). Mark each step with plan_done once verified. Do not stop until every step is done.", chat: activeChat, model: activeChat.model || "", quiet: true });
+                              });
+                            }}
+                          >
+                            Save and start
+                          </button>
+                        </div>
+                      )}
+                    </span>
                     {live.map((c) => (
                       <button
                         type="button"
@@ -2436,6 +2486,48 @@ export function App() {
         </PopOut>
       )}
 
+
+      {dashOpen && (() => {
+        const row = (c: CursorChat, managerOf?: string): DashRow => {
+          const plan = team.plans[c.id];
+          return {
+            id: c.id,
+            title: c.title,
+            status: phaseWord(progressByChat[c.id]),
+            step: progressByChat[c.id]?.steps?.slice(-1)[0],
+            waiting: pendingApprovals.filter((a) => a.chatId === c.id).length,
+            plan: plan?.length ? `${plan.filter((s) => s.done).length}/${plan.length}` : undefined,
+            managerOf,
+            cost: usageByChat[c.id]?.costUsd || undefined,
+          };
+        };
+        const live = chats.filter((c) => runningByChat[c.id]);
+        const top = live.filter((c) => !team.workers[c.id] || !runningByChat[team.workers[c.id]]);
+        const rows = top.flatMap((c) => [
+          row(c),
+          ...live.filter((w) => team.workers[w.id] === c.id).map((w) => row(w, c.id)),
+        ]);
+        return (
+          <PopOut
+            name="dashboard"
+            title="Active work — AgenticOps Desk"
+            width={480}
+            height={760}
+            look={look}
+            modal={false}
+            onClose={() => setDashOpen(false)}
+          >
+            <Dashboard
+              rows={rows}
+              recent={chats
+                .filter((c) => !runningByChat[c.id])
+                .sort((a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt))
+                .slice(0, 8)
+                .map((c) => ({ id: c.id, title: c.title, status: "Finished", waiting: 0, cost: usageByChat[c.id]?.costUsd || undefined }))}
+              onOpen={(id) => openChatById(id)} onClose={() => setDashOpen(false)} />
+          </PopOut>
+        );
+      })()}
 
       {watchWorker && (
         <PopOut

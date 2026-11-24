@@ -42,7 +42,7 @@ import { generateLocally } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { shouldHandOff, shrinkGatherResult, staysInside, stripDeepSeekReasoning } from "./pureFeatures";
-import { assertChatContext, providerBaseUrl, providerInfo, providerKey, setKeyRejected, type ProviderId } from "./providers";
+import { assertChatContext, keyFault, providerBaseUrl, providerInfo, providerKey, setKeyRejected, type ProviderId } from "./providers";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { healHistory } from "./healHistory";
 import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
@@ -918,6 +918,12 @@ export function runDirect(opts: {
   const preset = providerInfo(opts.provider);
   if (preset.needsKey && !providerKey(opts.provider)) {
     send(win, { kind: "error", text: `Add an API key for ${preset.label} in Settings first.`, chatId, running: false });
+    send(win, { kind: "done", text: "Stopped.", chatId, running: false });
+    return;
+  }
+  const fault = keyFault(providerKey(opts.provider));
+  if (fault) {
+    send(win, { kind: "error", text: `The saved ${preset.label} key ${fault}. Paste it again in Settings, Providers.`, chatId, running: false });
     send(win, { kind: "done", text: "Stopped.", chatId, running: false });
     return;
   }

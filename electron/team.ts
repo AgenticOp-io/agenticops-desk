@@ -5,7 +5,7 @@ import { app, type BrowserWindow } from "electron";
 import { z } from "zod";
 import { autoLive } from "./autoRoute";
 import { capsulesBrief } from "./capsules";
-import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setToolServers } from "./claude";
+import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setPlanAuthority, setToolServers } from "./claude";
 import { loadAgentSdk } from "./claudeBinary";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
@@ -16,7 +16,12 @@ import { createWorktree, removeWorktree } from "./worktrees";
 // as an ordinary chat, so it shows in the sidebar, Waiting on you and Chat status like any other, and its
 // approvals still come to the user. One level only: a worker never gets these tools.
 
-export type Team = { managers: string[]; workers: Record<string, string> };
+export type PlanStep = { text: string; done: boolean };
+// plans: a manager's ordered steps. While any step is open, the manager is sent back to work each time a run ends.
+export type Team = { managers: string[]; workers: Record<string, string>; plans: Record<string, PlanStep[]> };
+// Re-prods in a row with no step ticked off before the manager is left alone (stuck, or waiting on the user).
+const MAX_IDLE_NUDGES = 3;
+const nudges = new Map<string, number>();
 
 // Under the agent's tool-call limit; the manager calls wait_for again if workers are still going.
 const WAIT_MS = 20 * 60_000;
@@ -37,11 +42,26 @@ function load(): Team {
         raw.workers && typeof raw.workers === "object"
           ? Object.fromEntries(Object.entries(raw.workers).filter(([, v]) => typeof v === "string"))
           : {},
+      plans: {},
     };
+    for (const [id, steps] of Object.entries(raw.plans ?? {})) {
+      if (Array.isArray(steps)) team.plans[id] = steps.filter((s) => s && typeof s.text === "string").map((s) => ({ text: s.text, done: Boolean(s.done) }));
+    }
   } catch {
-    team = { managers: [], workers: {} };
+    team = { managers: [], workers: {}, plans: {} };
   }
   return team;
+}
+
+// One step per line; blank lines and leading "1." / "-" markers are dropped. Empty text clears the plan.
+export function setPlan(chatId: string, text: string): Team {
+  const t = load();
+  const steps = text.split("\n").map((l) => l.replace(/^\s*(?:\d+[.)]|[-*])\s*/, "").trim()).filter(Boolean);
+  if (steps.length) t.plans[chatId] = steps.map((s) => ({ text: s, done: false }));
+  else delete t.plans[chatId];
+  nudges.delete(chatId);
+  save();
+  return t;
 }
 const save = () => writeJsonAtomicSync(file(), load());
 
@@ -97,7 +117,25 @@ let getWindow: (() => BrowserWindow | null) | undefined;
 export function initTeam(window: () => BrowserWindow | null) {
   getWindow = window;
   setManagerLookup((id) => load().workers[id]);
+  setPlanAuthority((id) => {
+    const t = load();
+    return Boolean(t.plans[t.workers[id] ?? id]?.some((s) => !s.done));
+  });
   onChatEvent((event) => {
+    // A manager's run ended normally ("Done.", not a user stop) with plan steps left: send it back to work.
+    const steps = event.chatId ? load().plans[event.chatId] : undefined;
+    if (event.chatId && steps && event.kind === "done" && event.text === "Done." && steps.some((s) => !s.done)) {
+      const n = (nudges.get(event.chatId) ?? 0) + 1;
+      nudges.set(event.chatId, n);
+      if (n <= MAX_IDLE_NUDGES) {
+        const next = steps.findIndex((s) => !s.done);
+        const left = steps.filter((s) => !s.done).length;
+        setTimeout(() => getWindow?.()?.webContents.send("team:send", {
+          id: event.chatId,
+          text: `Plan not finished: ${left} step(s) left. Continue with step ${next + 1}: ${steps[next].text}. Call plan_done when a step is truly complete and checked. Do not stop until every step is done.`,
+        }), 500);
+      }
+    }
     const run = event.chatId ? runs.get(event.chatId) : undefined;
     if (!run) return;
     run.started = true;
@@ -135,6 +173,29 @@ export function initTeam(window: () => BrowserWindow | null) {
     const menu = models.map((m) => `${m.value} (${m.displayName}${m.group ? `, ${m.group}` : ""})`).join("; ");
 
     const tools = [
+      tool(
+        "plan_status",
+        "Show your plan: every step and whether it is done. You must complete every step; you are sent back to work whenever you stop with steps left.",
+        {},
+        async () => {
+          const steps = t.plans[managerId];
+          return ok(steps?.length ? steps.map((s, i) => `${i + 1}. [${s.done ? "x" : " "}] ${s.text}`).join("\n") : "No plan is set.");
+        },
+      ),
+      tool(
+        "plan_done",
+        "Mark a plan step complete, only after its result is verified. Numbers are 1-based, as plan_status shows them.",
+        { step: z.number().int().min(1) },
+        async (args) => {
+          const s = t.plans[managerId]?.[args.step - 1];
+          if (!s) return fail("No such step.");
+          s.done = true;
+          nudges.delete(managerId);
+          save();
+          const left = t.plans[managerId].filter((x) => !x.done).length;
+          return ok(left ? `Step ${args.step} done. ${left} left; keep going.` : "Every step is done. The plan is complete.");
+        },
+      ),
       tool(
         "list_chats",
         "List the chats in this project: id, title, whether each is running, waiting on the user, or idle, and which are your workers.",

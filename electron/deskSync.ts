@@ -552,13 +552,36 @@ async function flushJobs(projectId: string, dir: string) {
 
 // Phone messages: the phone app writes inbox/<id>.json to the desk-chats branch; the sync hands each to the window once
 // (team:send for a chat, team:start for a new one) and deletes the file, so the sync commit takes it out of the inbox.
-type PhoneOrder = { channel: "team:send" | "team:start"; order: { id: string; text?: string; managerId?: string; title?: string; prompt?: string } };
+type PhoneOrder =
+  | { channel: "team:send" | "team:start"; order: { id: string; text?: string; managerId?: string; title?: string; prompt?: string } }
+  | { channel: "approve"; order: { id: string; request: string; allow: boolean } }
+  | { channel: "stop"; order: { id: string } };
 let phoneSink: ((o: PhoneOrder) => boolean) | null = null;
 export function onPhoneMessage(cb: (o: PhoneOrder) => boolean) {
   phoneSink = cb;
 }
 // shortcut: in memory only; a push that fails right before the app quits delivers that message again on the next start.
 const delivered = new Set<string>();
+// Set by main.ts: the permission prompts a phone may answer, for these chats.
+let approvalSource: (chatIds: Set<string>) => Array<{ chat: string; request: string; summary: string; detail: string }> = () => [];
+export function setApprovalSource(fn: typeof approvalSource) {
+  approvalSource = fn;
+}
+// approvals/<computer>.json: what each desk is waiting on, rewritten every sync; removed when nothing waits.
+async function flushApprovals(dir: string, chatIds: Set<string>) {
+  const file = path.join(dir, "approvals", `${hostName()}.json`);
+  const list = approvalSource(chatIds);
+  if (!list.length) return void (await fs.rm(file, { force: true }));
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await writeJsonAtomic(file, list);
+}
+// A photo from the phone is saved next to the app's data, and the message names the file so the agent can read it.
+async function savePhoto(id: string, image: string): Promise<string> {
+  const file = path.join(app.getPath("userData"), "phone-photos", `${id}.jpg`);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, Buffer.from(image.slice("data:image/jpeg;base64,".length), "base64"));
+  return file;
+}
 let myLogin: string | null = null;
 
 // Only a file the signed-in GitHub account committed runs here. shortcut: the committer comes from the commit itself, so a
@@ -596,9 +619,16 @@ async function takeInbox(dir: string, remote: string, known: CursorChat[]) {
       }
       const template = [...known].sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? 0) - (a.lastUsedAt ?? a.updatedAt ?? 0))[0];
       if (!chat && !template) continue;
-      const order: PhoneOrder = chat
-        ? { channel: "team:send", order: { id: chat.id, text: msg.text } }
-        : { channel: "team:start", order: { id: randomUUID(), managerId: template.id, title: msg.title || "From phone", prompt: msg.text } };
+      const text = msg.image ? `${msg.text}
+
+[Photo from the phone: ${await savePhoto(id, msg.image)}]` : msg.text;
+      const order: PhoneOrder = msg.approve && chat
+        ? { channel: "approve", order: { id: chat.id, ...msg.approve } }
+        : msg.stop && chat
+          ? { channel: "stop", order: { id: chat.id } }
+          : chat
+            ? { channel: "team:send", order: { id: chat.id, text } }
+            : { channel: "team:start", order: { id: randomUUID(), managerId: template.id, title: msg.title || "From phone", prompt: text } };
       if (!phoneSink?.(order)) continue; // window closed: try again next sync
       delivered.add(id);
     }
@@ -629,6 +659,7 @@ async function syncProjectBranches(): Promise<string> {
       await writeJsonAtomic(path.join(dir, "deleted.json"), deleted);
       await flushJobs(project.id, dir);
       await takeInbox(dir, project.remotes.at(-1)!, mine);
+      await flushApprovals(dir, new Set(mine.map((c) => c.id)));
       await runGit(dir, ["add", "-A"]);
       const committed = await runGit(dir, ["commit", "-m", "Sync chats"]);
       if (!committed.ok && !/nothing to commit/i.test(committed.output)) return committed.output;

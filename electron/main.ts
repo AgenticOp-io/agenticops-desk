@@ -6,7 +6,7 @@ import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { initTeam, setManager, teamView } from "./team";
+import { initTeam, setManager, setPlan, teamView } from "./team";
 import { initOpsTools } from "./opsTools";
 import { writeTextAtomicSync } from "./jsonStore";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
@@ -26,7 +26,7 @@ import {
   updateMarketplace,
   updatePlugin,
 } from "./plugins";
-import { addCustomProvider, parseDirectModel, providerStatus, pruneDeadLocal, pullProviderModels, removeCustomProvider, setProvider } from "./providers";
+import { addCustomProvider, apiModelFor, claudeCodeOff, parseDirectModel, setClaudeCodeOff, providerStatus, pruneDeadLocal, pullProviderModels, removeCustomProvider, setProvider } from "./providers";
 import { usageReport } from "./usageLog";
 import { recentActivity, flush as flushActivity } from "./activityLog";
 import { chooseLearned } from "./modelLearn";
@@ -36,6 +36,8 @@ import { clearCredentialFiles, listCredentials, removeCredential, saveCredential
 import { forgetPlaceholders, pinSecret, privacyStatus, saveVault, setPrivacyMode, unpinSecret } from "./privacy";
 import {
   answerApproval,
+  answerPhoneApproval,
+  phoneApprovals,
   changeBase,
   changedFiles,
   chatState,
@@ -103,6 +105,7 @@ import {
   linkLocalRepos,
   noteJobEvent,
   onPhoneMessage,
+  setApprovalSource,
   refreshProjectRemotes,
   remoteOfPath,
   scheduleDeskSync,
@@ -570,9 +573,12 @@ app.on("web-contents-created", (_e, contents) => {
 app.whenReady().then(async () => {
   onChatEvent((e) => noteJobEvent(e.chatId, e.kind, e.running));
   // A message from the phone runs like a manager's order to a worker: the window sends it in that chat.
-  onPhoneMessage(({ channel, order }) => {
+  setApprovalSource(phoneApprovals);
+  onPhoneMessage((o) => {
     if (!win || win.isDestroyed()) return false;
-    win.webContents.send(channel, order);
+    if (o.channel === "approve") return answerPhoneApproval(win, o.order.id, o.order.request, o.order.allow) || true; // already answered at the desk: drop it
+    if (o.channel === "stop") return stopClaude(win, o.order.id), true;
+    win.webContents.send(o.channel, o.order);
     return true;
   });
   // The installer runs this and waits, so the choice is on disk before the first window.
@@ -639,6 +645,7 @@ app.whenReady().then(async () => {
   }
   const s = await loadSettings();
   setPrivacyMode(s.privacy);
+  setClaudeCodeOff(s.claudeCodeOff);
   setAllowAll(s.allowAll);
   clearCredentialFiles();
   if (s.lastWorkspace && existsSync(s.lastWorkspace)) {
@@ -764,6 +771,7 @@ ipcMain.handle("settings:get", () => loadSettings());
 ipcMain.handle("settings:set", async (_e, prefs: Partial<UiPrefs>) => {
   const next = await patchSettings(prefs);
   setPrivacyMode(next.privacy);
+  setClaudeCodeOff(next.claudeCodeOff);
   setAllowAll(next.allowAll);
   scheduleDeskSync();
   return next;
@@ -1248,7 +1256,7 @@ ipcMain.handle(
 
 // Starts one run on one model: "direct:<provider>:<model>" goes to the Direct engine, anything else to Claude Code.
 function startRun(model: string, run: AutoPayload) {
-  const direct = parseDirectModel(model);
+  const direct = parseDirectModel(claudeCodeOff() && !parseDirectModel(model) ? apiModelFor(model) : model);
   if (direct) {
     runDirect({ win, ...run, provider: direct.provider, model: direct.model });
     return;
@@ -1263,6 +1271,7 @@ initAuto(startRun);
 initTeam(() => win);
 initOpsTools();
 ipcMain.handle("team:get", () => teamView());
+ipcMain.handle("team:plan", (_e, chatId: string, text: string) => setPlan(String(chatId ?? ""), String(text ?? "")));
 ipcMain.handle("team:manager", (_e, chatId: string, on: boolean) => setManager(String(chatId ?? ""), Boolean(on)));
 
 ipcMain.handle("claude:models", () => listModels());

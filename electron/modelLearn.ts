@@ -2,13 +2,16 @@ import path from "node:path";
 import { app } from "electron";
 import { readFileSync } from "node:fs";
 import { writeJsonAtomicSync } from "./jsonStore";
-import { generateLocally, LOCAL_MODEL } from "./localModel";
+import { generateLocally } from "./localModel";
+import { privacyMode } from "./privacy";
+import { claudeCodeOff, directModelOptions } from "./providers";
+import { askClaudeCode } from "./quickEdit";
+import { askDirect } from "./review";
 import {
   applyVerdict,
   lessonVerdict,
   modelTier,
   nextTier,
-  tierForAgent,
   tierFromWord,
   type ModelLesson,
   type ModelTier,
@@ -37,31 +40,42 @@ function save(all: Store) {
 }
 
 export function modelForTier(tier: ModelTier): string {
-  if (tier === 0) return `direct:ollama:${LOCAL_MODEL}`;
+  if (tier === 0) return "haiku";
   if (tier === 2) return "opus";
   return "sonnet";
 }
 
 export function tierLabel(model: string): string {
   const tier = modelTier(model);
-  if (tier === 0) return "Local model";
+  if (tier === 0) return "Haiku";
   if (tier === 2) return "Opus";
   return "Sonnet";
 }
 
+const ROUTER = [
+  "Choose the model for this coding chat. Reply with one word: haiku, sonnet, or opus.",
+  "haiku: chat, questions, explanations, lookups, or a continuation the cheap model already handled.",
+  "sonnet: writing or changing code, debugging, or work across several files.",
+  "opus: architecture, a hard bug, a proof, or work this chat keeps retrying or switching up to a heavier model for.",
+].join("\n");
+
+// Haiku routes: through the API key if there is one, else the Claude Code sign-in. Local only mode, or no
+// answer from Haiku, falls back to the local model, which stays available.
 async function askTier(row: ModelLesson, prompt: string): Promise<ModelTier | null> {
-  const heard = await generateLocally(
-    [
-      "Choose the model for this coding chat. Reply with one word: local, sonnet, or opus.",
-      "local: a small edit, a lookup, or a continuation the cheap model already handled.",
-      "sonnet: ordinary coding.",
-      "opus: a proof, a design, or work this chat keeps retrying or switching up to a heavier model for.",
-      `Record: kept ${row.kept}, retried ${row.retried}, switched up ${row.raised}, switched down ${row.lowered}, last tier ${row.lastTier}.`,
-      `Message:\n${prompt.slice(0, 500)}`,
-    ].join("\n"),
-    16,
-    8_000,
-  );
+  const user = [
+    `Record: kept ${row.kept}, retried ${row.retried}, switched up ${row.raised}, switched down ${row.lowered}, last tier ${row.lastTier}.`,
+    `Message:\n${prompt.slice(0, 500)}`,
+  ].join("\n");
+  let heard: string | null = null;
+  if (privacyMode() !== "local") {
+    try {
+      const key = directModelOptions().some((m) => m.value === "direct:anthropic:claude-haiku-5-5");
+      heard = key ? ((await askDirect("direct:anthropic:claude-haiku-5-5", ROUTER, user))?.text ?? null) : claudeCodeOff() ? null : await askClaudeCode(ROUTER, user);
+    } catch {
+      heard = null;
+    }
+  }
+  heard ??= await generateLocally(`${ROUTER}\n${user}`, 16, 8_000);
   return heard ? tierFromWord(heard) : null;
 }
 
@@ -77,8 +91,6 @@ export async function chooseLearned(chatId: string, prompt: string, requested: s
   if (!override) {
     const heard = await askTier(lesson, prompt);
     if (heard !== null) tier = heard;
-    // A local pick, or no answer, still runs on Sonnet. The small model only writes the summary.
-    tier = tierForAgent(tier);
   }
   const model = override ? asked : modelForTier(tier);
   all[chatId] = { ...lesson, assigned: model, lastCost: row?.lastCost };

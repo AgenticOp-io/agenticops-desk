@@ -9,8 +9,11 @@ import "../src/styles.css";
 import "./mobile.css";
 import { Conversation } from "../src/Conversation";
 import jsQR from "jsqr";
+import { credential, localModel, route, runAgent, type AgentMsg, type Route } from "./agent";
 import {
   CLIENT_ID,
+  listFiles,
+  readRepoFile,
   parsePairCode,
   signInWithPairCode,
   type PairCode,
@@ -22,6 +25,7 @@ import {
   sendMessage,
   session,
   startSignIn,
+  type Approval,
   type Chat,
   type DeviceCode,
   type Msg,
@@ -31,8 +35,32 @@ import {
 // The phone side of AgenticOps Remote: the same projects and chats as the desk, read from and sent through GitHub.
 // Messages typed here are run by the desktop on its next sync (every few minutes) and their replies come back the same way.
 
-type Screen = { kind: "projects" } | { kind: "project"; repo: string } | { kind: "chat"; repo: string; chatId: string } | { kind: "new"; repo: string };
+type Screen = { kind: "projects" } | { kind: "project"; repo: string } | { kind: "chat"; repo: string; chatId: string } | { kind: "new"; repo: string } | { kind: "agent"; repo: string } | { kind: "files"; repo: string };
+type Tab = "inbox" | "projects" | "agent" | "settings";
 type Pending = { id: string; repo: string; chat?: string; title?: string; text: string; at: number };
+type Out = { chat?: string; title?: string; text?: string; image?: string; approve?: { request: string; allow: boolean }; stop?: boolean };
+
+// A photo is shrunk to 1280 px JPEG so the message stays small enough for GitHub.
+const shrink = (file: File) =>
+  new Promise<string>((ok, no) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k);
+      c.height = Math.round(img.height * k);
+      c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+      ok(c.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => no(new Error("That photo could not be read."));
+    img.src = URL.createObjectURL(file);
+  });
+const Speech = (window as unknown as { SpeechRecognition?: new () => SpeechLike; webkitSpeechRecognition?: new () => SpeechLike }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => SpeechLike }).webkitSpeechRecognition;
+type SpeechLike = { lang: string; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; start: () => void; stop: () => void };
+const answered = {
+  get: (): string[] => JSON.parse(localStorage.getItem("answered") ?? "[]") as string[],
+  add: (id: string) => localStorage.setItem("answered", JSON.stringify([...answered.get(), id].slice(-200))),
+};
 
 const nothing = () => {};
 const when = (ms: number) => {
@@ -45,7 +73,8 @@ const when = (ms: number) => {
 
 // Last good data is kept, so the app opens instantly and still shows something offline.
 const cache = {
-  get: (): Record<string, Project> => JSON.parse(localStorage.getItem("cache.projects") ?? "{}") as Record<string, Project>,
+  // Older caches have no approvals list.
+  get: (): Record<string, Project> => Object.fromEntries(Object.entries(JSON.parse(localStorage.getItem("cache.projects") ?? "{}") as Record<string, Project>).map(([k, p]) => [k, { ...p, approvals: p.approvals ?? [] }])),
   set: (v: Record<string, Project>) => localStorage.setItem("cache.projects", JSON.stringify(v)),
   pending: (): Pending[] => JSON.parse(localStorage.getItem("pending") ?? "[]") as Pending[],
   setPending: (v: Pending[]) => localStorage.setItem("pending", JSON.stringify(v)),
@@ -192,17 +221,30 @@ function Header({ title, back, children }: { title: string; back?: () => void; c
   );
 }
 
-function Composer({ placeholder, onSend, withTitle }: { placeholder: string; onSend: (text: string, title?: string) => Promise<void>; withTitle?: boolean }) {
+function Composer({ placeholder, onSend, withTitle }: { placeholder: string; onSend: (text: string, title?: string, image?: string) => Promise<void>; withTitle?: boolean }) {
   const [text, setText] = useState("");
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [photo, setPhoto] = useState<string | undefined>();
+  const [listening, setListening] = useState(false);
+  const mic = useRef<SpeechLike | null>(null);
+  const dictate = () => {
+    if (mic.current) return mic.current.stop();
+    const sr = new Speech!();
+    sr.lang = navigator.language;
+    sr.onresult = (e) => setText((t) => `${t} ${Array.from(e.results, (x) => x[0].transcript).join(" ")}`.trim());
+    sr.onend = () => ((mic.current = null), setListening(false));
+    mic.current = sr;
+    setListening(true);
+    sr.start();
+  };
   const send = () => {
     if (!text.trim() || busy) return;
     setBusy(true);
     setErr("");
-    onSend(text.trim(), withTitle ? title.trim() || undefined : undefined)
-      .then(() => (setText(""), setTitle("")))
+    onSend(text.trim(), withTitle ? title.trim() || undefined : undefined, photo)
+      .then(() => (setText(""), setTitle(""), setPhoto(undefined)))
       .catch((e: Error) => setErr(e.message))
       .finally(() => setBusy(false));
   };
@@ -211,6 +253,11 @@ function Composer({ placeholder, onSend, withTitle }: { placeholder: string; onS
       {err && <div className="m-error">{err}</div>}
       {withTitle && <input placeholder="Title" value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} />}
       <div className="m-composer-row">
+        <label className="ghost m-attach" aria-label="Attach a photo">
+          {photo ? "Photo ✓" : "Photo"}
+          <input type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && shrink(e.target.files[0]).then(setPhoto, (x: Error) => setErr(x.message))} />
+        </label>
+        {Speech && <button className="ghost" aria-label="Dictate" onClick={dictate}>{listening ? "Stop" : "Voice"}</button>}
         <textarea rows={withTitle ? 6 : 2} placeholder={placeholder} value={text} onChange={(e) => setText(e.target.value)} />
         <button className="m-primary" disabled={busy || !text.trim()} onClick={send}>
           {busy ? "…" : "Send"}
@@ -220,7 +267,187 @@ function Composer({ placeholder, onSend, withTitle }: { placeholder: string; onS
   );
 }
 
-function ChatView({ project, chat, pending, send, refresh }: { project: Project; chat: Chat; pending: Pending[]; send: (text: string) => Promise<void>; refresh: () => void }) {
+function AgentView({ repo }: { repo: string }) {
+  const [hist, setHist] = useState<AgentMsg[]>(() => JSON.parse(localStorage.getItem(`agent.${repo}`) ?? "[]") as AgentMsg[]);
+  const [hasKey, setHasKey] = useState(!!credential.get() || !!localModel.get().url);
+  const [keyText, setKeyText] = useState("");
+  const [localUrl, setLocalUrl] = useState(localModel.get().url);
+  const [localName, setLocalName] = useState(localModel.get().model);
+  const save = (h: AgentMsg[]) => (setHist(h), localStorage.setItem(`agent.${repo}`, JSON.stringify(h)));
+  if (!hasKey)
+    return (
+      <div className="m-composer">
+        <p className="m-muted">
+          This agent runs on your phone and calls the model API directly. Chat goes to Haiku, which hands real coding work to Sonnet or Opus. Paste your API key; it stays on this phone.
+        </p>
+        <input type="password" placeholder={credential.get() ? "API key (saved; leave empty to keep)" : "API key"} value={keyText} onChange={(e) => setKeyText(e.target.value)} />
+        <p className="m-muted">Optional: a local Ollama model to chat with instead of Haiku. Harder work still goes to Sonnet or Opus with the API key.</p>
+        <input placeholder="Local model URL, e.g. http://192.168.1.20:11434" value={localUrl} onChange={(e) => setLocalUrl(e.target.value)} />
+        <input placeholder="Local model name, e.g. qwen3-coder:30b" value={localName} onChange={(e) => setLocalName(e.target.value)} />
+        <button
+          className="m-primary"
+          disabled={!(keyText.trim() || credential.get() || (localUrl.trim() && localName.trim())) || (!!localUrl.trim() !== !!localName.trim())}
+          onClick={() => (keyText.trim() && credential.set(keyText), localModel.set(localUrl, localName), setHasKey(true))}
+        >
+          Save
+        </button>
+      </div>
+    );
+  const text = (m: AgentMsg) =>
+    typeof m.content === "string" ? m.content : m.content.map((c) => (c.type === "text" ? String(c.text) : c.type === "tool_use" ? `▸ ${String(c.name)} ${JSON.stringify(c.input).slice(0, 120)}` : "")).filter(Boolean).join(String.fromCharCode(10));
+  return (
+    <div className="chat m-chat">
+      <div className="messages">
+        {hist.map((m, i) => (text(m) ? <div key={i} className={`bubble ${m.role === "user" ? "user" : "assistant"}`}>{text(m)}</div> : null))}
+        {!hist.length && <p className="m-muted m-pad">Ask about {repo}. The agent can read files and writes only to the phone-work branch.</p>}
+      </div>
+      <button className="m-link" onClick={() => setHasKey(false)}>
+        Models: {localModel.get().url ? `local ${localModel.get().model}` : "Haiku"} → Sonnet / Opus · change
+      </button>
+      <Composer
+        placeholder="Message the phone agent"
+        onSend={async (t) => {
+          const h: AgentMsg[] = [...hist, { role: "user", content: t }];
+          save(h);
+          try {
+            await runAgent(repo, h, save);
+          } catch (e) {
+            save([...h, { role: "assistant", content: `Error: ${(e as Error).message}` }]);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+// Browse and read the repo's files over GitHub (read-only).
+function FilesView({ repo }: { repo: string }) {
+  const [files, setFiles] = useState<string[] | null>(null);
+  const [open, setOpen] = useState<{ path: string; text: string } | null>(null);
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    listFiles(repo).then((t) => setFiles(t.split(String.fromCharCode(10)).filter((l) => !l.startsWith(" … "))), (e: Error) => setErr(e.message));
+  }, [repo]);
+  if (open)
+    return (
+      <main className="m-list m-pad">
+        <button className="m-link" onClick={() => setOpen(null)}>‹ {open.path}</button>
+        <pre className="m-file">{open.text}</pre>
+      </main>
+    );
+  return (
+    <main className="m-list">
+      <input className="m-search" placeholder="Filter files" value={q} onChange={(e) => setQ(e.target.value)} />
+      {err && <div className="m-error">{err}</div>}
+      {!files && !err && <p className="m-muted m-pad">Loading…</p>}
+      {files?.filter((f) => f.toLowerCase().includes(q.toLowerCase())).slice(0, 200).map((f) => (
+        <button key={f} className="m-row" onClick={() => readRepoFile(repo, f).then((text) => setOpen({ path: f, text }), (e: Error) => setErr(e.message))}>
+          <div className="m-row-title">{f}</div>
+        </button>
+      ))}
+    </main>
+  );
+}
+
+function SettingsView({ projects, onSignOut }: { projects: Record<string, Project>; onSignOut: () => void }) {
+  const [key, setKey] = useState("");
+  const [hasKey, setHasKey] = useState(!!credential.get());
+  const [url, setUrl] = useState(localModel.get().url);
+  const [name, setName] = useState(localModel.get().model);
+  const [r, setR] = useState<Route>(route.get());
+  const [mins, setMins] = useState(localStorage.getItem("phone.refresh") ?? "2");
+  const [saved, setSaved] = useState(false);
+  // Last time each desk wrote a job, from the jobs the projects already carry.
+  const desks = new Map<string, number>();
+  for (const p of Object.values(projects)) for (const j of p.jobs) desks.set(j.host, Math.max(desks.get(j.host) ?? 0, j.at));
+  const save = () => {
+    if (key.trim()) credential.set(key);
+    localModel.set(url, name);
+    route.set(r);
+    localStorage.setItem("phone.refresh", String(Math.max(1, Number(mins) || 2)));
+    setHasKey(!!credential.get());
+    setKey("");
+    setSaved(true);
+  };
+  return (
+    <main className="m-list m-pad m-settings">
+      <h2>API key</h2>
+      <input type="password" placeholder={hasKey ? "Saved on this phone; paste to replace" : "Paste your API key"} value={key} onChange={(e) => setKey(e.target.value)} />
+      {hasKey && <button className="ghost" onClick={() => (credential.set(""), setHasKey(false))}>Remove key</button>}
+      <h2>Model routing</h2>
+      <select value={r} onChange={(e) => setR(e.target.value as Route)}>
+        <option value="auto">Auto: Haiku chats, hands harder work up</option>
+        <option value="haiku">Always Haiku</option>
+        <option value="sonnet">Always Sonnet</option>
+        <option value="opus">Always Opus</option>
+      </select>
+      <input placeholder="Local model URL (optional, replaces Haiku for chat)" value={url} onChange={(e) => setUrl(e.target.value)} />
+      <input placeholder="Local model name" value={name} onChange={(e) => setName(e.target.value)} />
+      <h2>Notifications</h2>
+      <p className="m-muted">Alerts appear while the app is open or in recent apps; Android may stop a closed app from checking.</p>
+      <button className="ghost" onClick={() => typeof Notification !== "undefined" && void Notification.requestPermission().then(() => setSaved((v) => !v))}>
+        {typeof Notification === "undefined" ? "Not supported here" : Notification.permission === "granted" ? "Notifications on" : "Turn on notifications"}
+      </button>
+      <h2>Refresh</h2>
+      <label className="m-muted">Check the desk every <input className="m-num" inputMode="numeric" value={mins} onChange={(e) => setMins(e.target.value.replace(/\D/g, ""))} /> minutes</label>
+      <button className="m-primary" disabled={(!!url.trim() !== !!name.trim())} onClick={save}>{saved ? "Saved" : "Save"}</button>
+      <h2>Account</h2>
+      <p className="m-muted">Signed in as {session.login() || "GitHub"}.</p>
+      <button className="ghost" onClick={() => confirm("Remove the cached projects and chats from this phone?") && (["cache.projects", "pending"].forEach((k) => localStorage.removeItem(k)), location.reload())}>Clear local data</button>
+      <button className="ghost" onClick={onSignOut}>Sign out</button>
+      <h2>Desks</h2>
+      {desks.size === 0 && <p className="m-muted">No desk has run a job yet.</p>}
+      {[...desks].map(([h, at]) => <p key={h} className="m-muted">{h} · last seen {when(at)}</p>)}
+      <h2>About</h2>
+      <p className="m-muted">AgenticOps Remote. Desk questions and plan approvals must be answered at the desk.</p>
+    </main>
+  );
+}
+
+function ApprovalCards({ list, title, act }: { list: Array<{ project: Project; a: Approval }>; title: (chat: string, p: Project) => string; act: (p: Project, a: Approval, allow: boolean) => void }) {
+  return (
+    <>
+      {list.map(({ project, a }) => (
+        <div key={a.request} className="m-row m-approval">
+          <div className="m-row-title">{a.summary}</div>
+          <div className="m-muted">{title(a.chat, project)} · on {a.host}</div>
+          {a.detail && <pre className="m-file">{a.detail}</pre>}
+          <div className="m-composer-row">
+            <button className="ghost" onClick={() => act(project, a, false)}>Deny</button>
+            <button className="m-primary" onClick={() => act(project, a, true)}>Allow</button>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function InboxView({ projects, open, act }: { projects: Record<string, Project>; open: (repo: string, chat: string) => void; act: (p: Project, a: Approval, allow: boolean) => void }) {
+  const waiting = Object.values(projects).flatMap((project) => project.approvals.filter((a) => !answered.get().includes(a.request)).map((a) => ({ project, a })));
+  const rows = Object.values(projects).flatMap((p) => p.chats.map((c) => ({ p, c, run: isRunning(p.jobs, c.id), end: p.jobs.find((j) => j.chat === c.id && j.ev === "end")?.at ?? 0 })));
+  const running = rows.filter((x) => x.run);
+  const done = rows.filter((x) => !x.run && x.end).sort((a, b) => b.end - a.end).slice(0, 30);
+  const row = (x: (typeof rows)[number], sub: string) => (
+    <button key={x.p.repo + x.c.id} className="m-row" onClick={() => open(x.p.repo, x.c.id)}>
+      <div className="m-row-title">{x.run && <span className="run-dot" />} {x.c.title || "Untitled chat"}</div>
+      <div className="m-muted">{x.p.name} · {sub}</div>
+    </button>
+  );
+  return (
+    <main className="m-list">
+      {waiting.length > 0 && <h2 className="m-sec">Needs you</h2>}
+      <ApprovalCards list={waiting} title={(c, p) => p.chats.find((x) => x.id === c)?.title || "Untitled chat"} act={act} />
+      {running.length > 0 && <h2 className="m-sec">Running</h2>}
+      {running.map((x) => row(x, `on ${x.run!.host}`))}
+      <h2 className="m-sec">Finished</h2>
+      {done.map((x) => row(x, when(x.end)))}
+      {!running.length && !done.length && <p className="m-muted m-pad">Nothing has run yet.</p>}
+    </main>
+  );
+}
+
+function ChatView({ project, chat, pending, send, refresh, act, stop }: { project: Project; chat: Chat; pending: Pending[]; send: (text: string, title?: string, image?: string) => Promise<void>; refresh: () => void; act: (p: Project, a: Approval, allow: boolean) => void; stop: () => void }) {
   const [msgs, setMsgs] = useState<Msg[] | null>(() => JSON.parse(localStorage.getItem(`thread.${chat.id}`) ?? "null") as Msg[] | null);
   const [err, setErr] = useState("");
   const box = useRef<HTMLDivElement>(null);
@@ -264,7 +491,9 @@ function ChatView({ project, chat, pending, send, refresh }: { project: Project;
           </div>
         ))}
       </div>
-      <Composer placeholder="Message the agent on your desk" onSend={send} />
+      <ApprovalCards list={project.approvals.filter((a) => a.chat === chat.id && !answered.get().includes(a.request)).map((a) => ({ project, a }))} title={() => chat.title || "Untitled chat"} act={act} />
+      {running && <button className="ghost m-new" onClick={() => confirm("Stop this chat on the desk?") && stop()}>Stop the run</button>}
+      <Composer placeholder="Message the agent on your desk" onSend={(t, _title, image) => send(t, undefined, image)} />
     </div>
   );
 }
@@ -276,6 +505,9 @@ function App() {
   const [stack, setStack] = useState<Screen[]>([{ kind: "projects" }]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [tab, setTab] = useState<Tab>("projects");
+  const [agentRepo, setAgentRepo] = useState(localStorage.getItem("phone.agentRepo") ?? "");
+  const [q, setQ] = useState("");
   const screen = stack[stack.length - 1];
 
   // The Android back button walks the WebView's history, so each screen is a history entry.
@@ -301,6 +533,16 @@ function App() {
         const next: Record<string, Project> = {};
         for (const { repo, head } of repos) next[repo] = old[repo]?.head === head ? old[repo] : await loadProject(repo, head);
         cache.set(next);
+        // Tell the user about new questions from the desk and chats that just finished.
+        const seen = new Set(JSON.parse(localStorage.getItem("seen.approvals") ?? "[]") as string[]);
+        const fresh = Object.values(next).flatMap((p) => p.approvals).filter((a) => !seen.has(a.request) && !answered.get().includes(a.request));
+        const finished = Object.values(next).flatMap((p) => p.chats.filter((c) => old[p.repo] && isRunning(old[p.repo].jobs, c.id) && !isRunning(p.jobs, c.id)));
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          for (const a of fresh) new Notification("Needs your answer", { body: a.summary });
+          for (const c of finished) new Notification("Chat finished", { body: c.title || "Untitled chat" });
+        }
+        if (fresh.length) navigator.vibrate?.(200);
+        localStorage.setItem("seen.approvals", JSON.stringify(Object.values(next).flatMap((p) => p.approvals.map((a) => a.request)).slice(-200)));
         setProjects(next);
         setErr("");
         // A message whose inbox file is gone was taken by the desk; its turn now shows in the thread.
@@ -321,20 +563,26 @@ function App() {
     if (signedIn) refresh();
   }, [signedIn, refresh]);
   useEffect(() => {
-    const t = setInterval(() => document.visibilityState === "visible" && refresh(), 120_000);
+    const t = setInterval(() => document.visibilityState === "visible" && refresh(), Math.max(1, Number(localStorage.getItem("phone.refresh")) || 2) * 60_000);
     return () => clearInterval(t);
   }, [refresh]);
 
   if (!signedIn) return <SignIn done={() => setSignedIn(true)} />;
 
-  const send = async (repo: string, msg: { chat?: string; title?: string; text: string }) => {
+  const send = async (repo: string, msg: Out) => {
     const p = projects[repo];
     // Sent to the computer that last ran this chat (or this project), so two desks don't both run it.
     const host = (msg.chat ? p?.jobs.find((j) => j.chat === msg.chat) : p?.jobs[0])?.host;
     const id = await sendMessage(repo, { ...msg, host });
-    const next = [...cache.pending(), { id, repo, ...msg, at: Date.now() }];
+    if (!msg.text) return; // an answer or a stop has nothing to wait for in the thread
+    const next = [...cache.pending(), { id, repo, chat: msg.chat, title: msg.title, text: msg.image ? `${msg.text} (photo)` : msg.text, at: Date.now() }];
     cache.setPending(next);
     setPending(next);
+  };
+  const act = (p: Project, a: Approval, allow: boolean) => {
+    answered.add(a.request);
+    setPending((v) => [...v]); // redraw without the card
+    send(p.repo, { chat: a.chat, approve: { request: a.request, allow } }).catch((e: Error) => setErr(e.message));
   };
   const reload = (
     <button className="ghost" disabled={loading} onClick={refresh}>
@@ -343,9 +591,32 @@ function App() {
   );
   const errorLine = err && <div className="m-error">{err}</div>;
 
-  if (screen.kind === "chat" || screen.kind === "new" || screen.kind === "project") {
+  const signOut = () => {
+    if (!confirm(`Sign ${session.login()} out of this phone?`)) return;
+    session.clear();
+    localStorage.clear();
+    setProjects({});
+    setPending([]);
+    setSignedIn(false);
+  };
+
+  if (screen.kind === "chat" || screen.kind === "new" || screen.kind === "project" || screen.kind === "agent" || screen.kind === "files") {
     const project = projects[screen.repo];
     if (!project) return <Header title="Not found" back={back} />;
+    if (screen.kind === "files")
+      return (
+        <div className="m-screen">
+          <Header title={`Files · ${project.name}`} back={back} />
+          <FilesView repo={project.repo} />
+        </div>
+      );
+    if (screen.kind === "agent")
+      return (
+        <div className="m-screen">
+          <Header title={`Phone agent · ${project.name}`} back={back} />
+          <AgentView repo={project.repo} />
+        </div>
+      );
     if (screen.kind === "new") {
       return (
         <div className="m-screen">
@@ -354,8 +625,8 @@ function App() {
           <Composer
             withTitle
             placeholder="What should the agent do?"
-            onSend={async (text, title) => {
-              await send(project.repo, { text, title });
+            onSend={async (text, title, image) => {
+              await send(project.repo, { text, title, image });
               back();
             }}
           />
@@ -371,7 +642,7 @@ function App() {
             {reload}
           </Header>
           {errorLine}
-          <ChatView project={project} chat={chat} pending={pending.filter((p) => p.chat === chat.id)} send={(text) => send(project.repo, { chat: chat.id, text })} refresh={refresh} />
+          <ChatView project={project} chat={chat} pending={pending.filter((p) => p.chat === chat.id)} send={(text, _t, image) => send(project.repo, { chat: chat.id, text, image })} refresh={refresh} act={act} stop={() => send(project.repo, { chat: chat.id, stop: true }).catch((e: Error) => setErr(e.message))} />
         </div>
       );
     }
@@ -386,13 +657,21 @@ function App() {
           <button className="m-primary m-new" onClick={() => go({ kind: "new", repo: project.repo })}>
             New chat
           </button>
+          <button className="m-primary m-new" onClick={() => go({ kind: "agent", repo: project.repo })}>
+            Phone agent
+          </button>
+          <button className="ghost m-new" onClick={() => go({ kind: "files", repo: project.repo })}>
+            Browse files
+          </button>
+          <input className="m-search" placeholder="Search chats" value={q} onChange={(e) => setQ(e.target.value)} />
           {fresh.map((p) => (
             <div key={p.id} className="m-row m-pending">
               <div className="m-row-title">{p.title || "From phone"}</div>
               <div className="m-muted">Waiting for the desk · sent {when(p.at)}</div>
             </div>
           ))}
-          {[...project.chats]
+          {project.chats
+            .filter((c) => (c.title || "Untitled chat").toLowerCase().includes(q.toLowerCase()))
             .sort((a, b) => b.updatedAt - a.updatedAt)
             .map((c) => {
               const run = isRunning(project.jobs, c.id);
@@ -420,27 +699,24 @@ function App() {
     );
   }
 
+  const badge = Object.values(projects).reduce((n, p) => n + p.approvals.filter((a) => !answered.get().includes(a.request)).length, 0);
   const list = Object.values(projects).sort((a, b) => (b.chats[0] ? Math.max(...b.chats.map((c) => c.updatedAt)) : 0) - (a.chats[0] ? Math.max(...a.chats.map((c) => c.updatedAt)) : 0));
   return (
     <div className="m-screen">
-      <Header title="Projects">
-        {reload}
-        <button
-          className="ghost"
-          onClick={() => {
-            if (!confirm(`Sign ${session.login()} out of this phone?`)) return;
-            session.clear();
-            localStorage.clear();
-            setProjects({});
-            setPending([]);
-            setSignedIn(false);
-          }}
-        >
-          Sign out
-        </button>
-      </Header>
+      <Header title={{ inbox: "Inbox", projects: "Projects", agent: "Agent", settings: "Settings" }[tab]}>{reload}</Header>
       {errorLine}
-      <main className="m-list">
+      {tab === "inbox" && <InboxView projects={projects} open={(repo, chatId) => go({ kind: "chat", repo, chatId })} act={act} />}
+      {tab === "settings" && <SettingsView projects={projects} onSignOut={signOut} />}
+      {tab === "agent" && (
+        <>
+          <select className="m-search" value={agentRepo} onChange={(e) => (setAgentRepo(e.target.value), localStorage.setItem("phone.agentRepo", e.target.value))}>
+            <option value="">Choose a project</option>
+            {list.map((p) => <option key={p.repo} value={p.repo}>{p.name}</option>)}
+          </select>
+          {projects[agentRepo] ? <AgentView key={agentRepo} repo={agentRepo} /> : <p className="m-muted m-pad">Pick a project to talk to the phone agent.</p>}
+        </>
+      )}
+      {tab === "projects" && <main className="m-list">
         {list.map((p) => {
           const runs = p.chats.filter((c) => isRunning(p.jobs, c.id)).length;
           return (
@@ -460,7 +736,15 @@ function App() {
             No projects yet. A project shows up here once the desk has synced its chats to a desk-chats branch in its private GitHub repository.
           </p>
         )}
-      </main>
+      </main>}
+      <nav className="m-tabs">
+        {(["inbox", "projects", "agent", "settings"] as Tab[]).map((t) => (
+          <button key={t} className={t === tab ? "on" : ""} onClick={() => setTab(t)}>
+            {t[0].toUpperCase() + t.slice(1)}
+            {t === "inbox" && badge > 0 ? ` (${badge})` : ""}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

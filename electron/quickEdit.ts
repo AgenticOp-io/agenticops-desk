@@ -29,7 +29,7 @@ function pickModel(): string | null {
   return direct.find((v) => v === "direct:anthropic:claude-haiku-5-5") ?? "claude-code";
 }
 
-async function askClaudeCode(system: string, user: string): Promise<string> {
+export async function askClaudeCode(system: string, user: string): Promise<string> {
   const { query } = await loadAgentSdk();
   const q = query({
     prompt: user,

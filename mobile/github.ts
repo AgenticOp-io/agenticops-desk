@@ -96,7 +96,7 @@ export async function signInWithPairCode(p: PairCode, pin: string): Promise<void
   localStorage.setItem("gh.repos", list);
 }
 
-async function api(path: string, init: RequestInit = {}, accept = "application/vnd.github+json"): Promise<Response> {
+export async function api(path: string, init: RequestInit = {}, accept = "application/vnd.github+json"): Promise<Response> {
   const res = await fetch(`${API}${path}`, { ...init, headers: { Authorization: `Bearer ${session.token()}`, Accept: accept, ...init.headers } });
   if (res.status === 401) {
     session.clear();
@@ -143,7 +143,8 @@ export async function projectRepos(): Promise<Array<{ repo: string; head: string
 
 export type Chat = { id: string; title: string; updatedAt: number; projectId?: string; projectName?: string };
 export type Job = { chat: string; ev: "start" | "end"; at: number; host: string };
-export type Project = { repo: string; head: string; name: string; projectId?: string; chats: Chat[]; jobs: Job[]; inbox: string[] };
+export type Approval = { chat: string; request: string; summary: string; detail: string; host: string };
+export type Project = { repo: string; head: string; name: string; projectId?: string; chats: Chat[]; jobs: Job[]; inbox: string[]; approvals: Approval[] };
 
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
 
@@ -155,7 +156,7 @@ export async function readFile(repo: string, file: string): Promise<string | nul
 }
 
 export async function loadProject(repo: string, head: string): Promise<Project> {
-  if (!head) return { repo, head, name: repo.split("/")[1], chats: [], jobs: [], inbox: [] };
+  if (!head) return { repo, head, name: repo.split("/")[1], chats: [], jobs: [], inbox: [], approvals: [] };
   const res = await api(`/repos/${repo}/git/trees/${head}?recursive=1`);
   if (!res.ok) throw new Error(`${repo}: GitHub said ${res.status}`);
   const paths = ((await res.json()) as { tree: Array<{ path: string }> }).tree.map((t) => t.path);
@@ -172,9 +173,19 @@ export async function loadProject(repo: string, head: string): Promise<Project> 
       }
     }
   }
+  const approvals: Approval[] = [];
+  for (const p of paths) {
+    const host = /^approvals\/([\w.-]+)\.json$/.exec(p)?.[1];
+    if (!host) continue;
+    try {
+      for (const a of JSON.parse((await readFile(repo, p)) ?? "[]") as Approval[]) approvals.push({ ...a, host });
+    } catch {
+      /* a half-written file; skip it */
+    }
+  }
   const inbox = paths.flatMap((p) => /^inbox\/([\w-]+)\.json$/.exec(p)?.[1] ?? []);
   const named = chats.find((c) => c.projectName);
-  return { repo, head, name: named?.projectName || repo.split("/")[1], projectId: named?.projectId, chats, jobs: jobs.sort((a, b) => b.at - a.at), inbox };
+  return { repo, head, name: named?.projectName || repo.split("/")[1], projectId: named?.projectId, chats, jobs: jobs.sort((a, b) => b.at - a.at), inbox, approvals };
 }
 
 export type Msg = TranscriptMsg;
@@ -188,11 +199,11 @@ export async function loadThread(repo: string, chatId: string): Promise<Msg[]> {
 const base64 = (s: string) => btoa(Array.from(new TextEncoder().encode(s), (b) => String.fromCharCode(b)).join(""));
 
 // One file per message, so two phones (or a phone and the desk) never edit the same file. The desktop runs it and deletes it.
-export async function sendMessage(repo: string, msg: { chat?: string; title?: string; text: string; host?: string }): Promise<string> {
+export async function sendMessage(repo: string, msg: { chat?: string; title?: string; text?: string; host?: string; approve?: { request: string; allow: boolean }; stop?: boolean; image?: string }): Promise<string> {
   const id = crypto.randomUUID();
   const login = session.login().replace(/[^A-Za-z0-9._-]+/g, "-") || "user";
   const body = JSON.stringify({
-    message: msg.chat ? "Message from phone" : `New chat from phone: ${msg.title ?? ""}`.trim(),
+    message: msg.approve ? "Answer from phone" : msg.stop ? "Stop from phone" : msg.chat ? "Message from phone" : `New chat from phone: ${msg.title ?? ""}`.trim(),
     content: base64(JSON.stringify({ ...msg, at: Date.now() })),
     branch: BRANCH,
     // Same naming as the desktop's commits (deviceGitIdentity in electron/pureFeatures.ts): login-mobile, GitHub no-reply email.
@@ -210,4 +221,45 @@ export async function sendMessage(repo: string, msg: { chat?: string; title?: st
 export function isRunning(jobs: Job[], chatId: string): Job | undefined {
   const last = jobs.find((j) => j.chat === chatId);
   return last?.ev === "start" && Date.now() - last.at < 6 * 3600_000 ? last : undefined;
+}
+
+// Tools for the phone's own agent. Reads use the repo's default branch; writes go to a `phone-work` branch, never the default.
+const WORK = "phone-work";
+const repoOk = (r: string) => /^[\w.-]+\/[\w.-]+$/.test(r);
+const pathOk = (f: string) => !!f && !f.startsWith("/") && !f.split("/").includes("..");
+
+export async function listFiles(repo: string): Promise<string> {
+  if (!repoOk(repo)) throw new Error("bad repo");
+  const res = await api(`/repos/${repo}/git/trees/HEAD?recursive=1`);
+  if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+  const t = ((await res.json()) as { tree: Array<{ path: string; type: string }> }).tree.filter((x) => x.type === "blob").map((x) => x.path);
+  return t.slice(0, 500).join(String.fromCharCode(10)) + (t.length > 500 ? ` … ${t.length - 500} more` : "");
+}
+
+export async function readRepoFile(repo: string, file: string): Promise<string> {
+  if (!repoOk(repo) || !pathOk(file)) throw new Error("bad path");
+  let res = await api(`/repos/${repo}/contents/${file}?ref=${WORK}`, {}, "application/vnd.github.raw+json");
+  if (res.status === 404) res = await api(`/repos/${repo}/contents/${file}`, {}, "application/vnd.github.raw+json");
+  if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+  return (await res.text()).slice(0, 60_000);
+}
+
+export async function writeRepoFile(repo: string, file: string, content: string): Promise<string> {
+  if (!repoOk(repo) || !pathOk(file)) throw new Error("bad path");
+  if (!(await api(`/repos/${repo}/git/ref/heads/${WORK}`)).ok) {
+    const info = (await (await api(`/repos/${repo}`)).json()) as { default_branch: string };
+    const ref = (await (await api(`/repos/${repo}/git/ref/heads/${info.default_branch}`)).json()) as { object: { sha: string } };
+    const made = await api(`/repos/${repo}/git/refs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${WORK}`, sha: ref.object.sha }) });
+    if (!made.ok) throw new Error(`GitHub said ${made.status} creating ${WORK}`);
+  }
+  const cur = await api(`/repos/${repo}/contents/${file}?ref=${WORK}`);
+  const sha = cur.ok ? ((await cur.json()) as { sha: string }).sha : undefined;
+  const login = session.login().replace(/[^A-Za-z0-9._-]+/g, "-") || "user";
+  const res = await api(`/repos/${repo}/contents/${file}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: `Phone agent: ${file}`, content: base64(content), branch: WORK, sha, author: { name: `${login}-mobile`, email: `${session.id()}+${login}@users.noreply.github.com` } }),
+  });
+  if (!res.ok) throw new Error(`GitHub said ${res.status} writing ${file}`);
+  return `Wrote ${file} to branch ${WORK}`;
 }

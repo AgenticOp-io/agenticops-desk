@@ -135,6 +135,8 @@ type PendingApproval = {
   suggestions?: PermissionUpdate[];
   gate: "trust" | "risk" | "question" | "login";
   risks?: string[];
+  summary?: string;
+  detail?: string;
   settled?: boolean;
   resolve: (result: PermissionResult) => void;
 };
@@ -454,6 +456,11 @@ let managerOf: (chatId: string) => string | undefined = () => undefined;
 export function setManagerLookup(fn: (chatId: string) => string | undefined) {
   managerOf = fn;
 }
+// True for a manager with plan steps left, and for its workers: they act on the plan without asking the user.
+let underPlan: (chatId: string) => boolean = () => false;
+export function setPlanAuthority(fn: (chatId: string) => boolean) {
+  underPlan = fn;
+}
 const managerWorkspace = (chatId: string) => {
   const m = managerOf(chatId);
   return m ? sessions.get(m)?.workspace : undefined;
@@ -484,6 +491,12 @@ export function askPermission(
   let gate: PermissionGate = options.login ? { ask: true, kind: "login", ...options.login } : permissionGate(session.workspace, toolName, input);
   const parentWs = managerWorkspace(chatId);
   if (gate.ask && (gate.kind === "trust" || gate.kind === "risk") && parentWs && !permissionGate(parentWs, toolName, input).ask) gate = { ask: false };
+  // Saved logins still ask: every use goes through approveLogins.
+  if (gate.ask && gate.kind !== "login" && underPlan(chatId)) {
+    if (toolName === "AskUserQuestion")
+      return Promise.resolve({ behavior: "deny", message: "No one will answer: you are the authority on this plan. Decide yourself, following the plan, and continue." });
+    gate = { ask: false };
+  }
   if (!gate.ask) return Promise.resolve({ behavior: "allow", updatedInput: input });
   const summary = gate.kind === "question" ? options.title || approvalSummary(toolName, input) : gate.summary;
   const reason =
@@ -495,6 +508,8 @@ export function askPermission(
       suggestions: options.suggestions,
       gate: gate.kind,
       risks: gate.kind === "risk" ? gate.risks : undefined,
+      summary,
+      detail: questions ? "" : approvalDetail(toolName, input).slice(0, 600),
       resolve,
     });
     send(win, {
@@ -558,6 +573,20 @@ export function answerApproval(
   if (win && !win.isDestroyed() && ![...sessions.values()].some((s) => s.approvals.size)) win.flashFrame(false);
   if (session.abort) sendPhase(win, chatId, session, "thinking", "Thinking…");
   return true;
+}
+
+// Prompts a phone may answer: folder trust and risky commands only. Questions, plan approval and saved logins must be read at the desk.
+export function phoneApprovals(chatIds: Set<string>) {
+  const out: Array<{ chat: string; request: string; summary: string; detail: string }> = [];
+  for (const [chat, s] of sessions)
+    if (chatIds.has(chat))
+      for (const [request, a] of s.approvals) if (!a.settled && (a.gate === "trust" || a.gate === "risk")) out.push({ chat, request, summary: a.summary ?? a.toolName, detail: a.detail ?? "" });
+  return out;
+}
+export function answerPhoneApproval(win: BrowserWindow | null, chatId: string, requestId: string, allow: boolean) {
+  const gate = sessions.get(chatId)?.approvals.get(requestId)?.gate;
+  if (gate !== "trust" && gate !== "risk") return false;
+  return answerApproval(win, chatId, requestId, { allow, message: "Denied from the phone." });
 }
 
 export function dropApprovals(win: BrowserWindow | null, chatId: string, session: Session) {

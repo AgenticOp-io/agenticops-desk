@@ -237,6 +237,12 @@ export function providerKey(id: ProviderId): string {
   }
 }
 
+// A key goes into an HTTP header, which takes plain ASCII only. An em dash (often "--" autocorrected) crashes the request.
+export function keyFault(key: string): string {
+  const i = key.search(/[^!-~]/);
+  return i < 0 ? "" : `is an invalid API key: character ${i + 1} is "${key[i]}" (code ${key.charCodeAt(i)}), which cannot be in a key`;
+}
+
 export function providerBaseUrl(id: ProviderId): string {
   return load()[id]?.baseUrl || providerInfo(id).baseUrl || "";
 }
@@ -308,6 +314,8 @@ export function setProvider(id: string, patch: { key?: string | null; models?: s
   const cur = { ...(all[id] ?? {}) };
   if (patch.key === null || patch.key === "") delete cur.key;
   else if (typeof patch.key === "string") {
+    const fault = keyFault(patch.key.trim());
+    if (fault) throw new Error(`That ${fault}. Copy it again straight from the provider's page.`);
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows could not encrypt the key, so it was not saved.");
     cur.key = safeStorage.encryptString(patch.key.trim()).toString("base64");
   }
@@ -349,6 +357,14 @@ export function removeCustomProvider(id: string): ProviderStatus[] {
   save();
   return providerStatus();
 }
+
+// When on, nothing starts the Claude Code engine; a run on one of its models goes to the Claude API with the saved key.
+let claudeOff = false;
+export const setClaudeCodeOff = (on: unknown) => void (claudeOff = on === true);
+export const claudeCodeOff = () => claudeOff;
+const API_FOR: Record<string, string> = { haiku: "claude-haiku-5-5", sonnet: "claude-sonnet-5-5", opus: "claude-opus-5-5" };
+// "default" and unknown names land on Sonnet.
+export const apiModelFor = (model: string) => `direct:anthropic:${API_FOR[model] ?? API_FOR[/haiku|opus/.exec(model)?.[0] ?? ""] ?? API_FOR.sonnet}`;
 
 // Model picker entries for the Direct engine: value "direct:<provider>:<model>".
 // Only providers with a key that has not been rejected (or that need none) and a model list are listed;

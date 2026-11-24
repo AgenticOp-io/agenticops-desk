@@ -51,6 +51,8 @@ export type UiPrefs = {
   allowAll?: boolean;
   /** Show the small file preview beside the editor's scrollbar. */
   minimap?: boolean;
+  /** Never start the Claude Code engine; every run goes to the Claude API with the saved key. Per computer. */
+  claudeCodeOff?: boolean;
 };
 
 const PANEL_KEYS = ["chats", "files", "inbox", "status", "help", "settings"] as const;
@@ -156,6 +158,7 @@ function normalize(raw: Partial<UiPrefs> | null | undefined): UiPrefs {
     previewMode: r.previewMode === "browser" ? "browser" : "inline",
     allowAll: r.allowAll === true,
     minimap: r.minimap === true,
+    claudeCodeOff: r.claudeCodeOff === true,
   };
 }
 

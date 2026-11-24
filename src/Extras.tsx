@@ -71,6 +71,46 @@ export function Inbox({
   );
 }
 
+export type DashRow = { id: string; title: string; status: string; step?: string; waiting: number; plan?: string; managerOf?: string; cost?: number };
+
+// Dashboard: one pane of everything running right now. Workers sit under their manager.
+export function Dashboard({ rows, recent = [], onOpen, onClose }: { rows: DashRow[]; recent?: DashRow[]; onOpen: (id: string) => void; onClose: () => void }) {
+  return (
+    <aside className="inbox" aria-label="Dashboard">
+      <div className="inbox-head">
+        <strong>Active work</strong>
+        <span className="grow" />
+        <button type="button" className="ghost" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      {rows.length === 0 && <p className="settings-hint">Nothing is running.</p>}
+      {[...rows, ...(recent.length ? [{ id: "", title: "Recently finished", status: "", waiting: 0 }] : []), ...recent].map((r) =>
+        !r.id ? (
+          <strong key="recent" className="list-sub">{r.title}</strong>
+        ) : (
+        <div key={r.id} className="inbox-card" style={r.managerOf ? { marginLeft: 16 } : undefined}>
+          <div className="inbox-chat">
+            {r.title}
+            {r.plan && <span className="list-sub"> · Plan {r.plan}</span>}
+          </div>
+          <div className="inbox-summary">
+            {r.waiting > 0 ? `Waiting on you (${r.waiting})` : r.status}
+            {(r as DashRow).cost ? ` · $${(r as DashRow).cost!.toFixed(2)} since launch` : ""}
+          </div>
+          {r.step && <div className="inbox-reason">{r.step}</div>}
+          <div className="inbox-actions">
+            <button type="button" className="ghost" onClick={() => onOpen(r.id)}>
+              Open chat
+            </button>
+          </div>
+        </div>
+        ),
+      )}
+    </aside>
+  );
+}
+
 const lines = (s: string) => s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
 
 // Standing orders editor, shown as the "Rules" dock tab.

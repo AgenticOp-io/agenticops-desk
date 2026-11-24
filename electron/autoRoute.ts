@@ -2,7 +2,7 @@ import type { BrowserWindow } from "electron";
 import { changedFiles, chatState, listModels, send, setSendFilter } from "./claude";
 import { autoOrder, autoStep, isOwnedModel, restUntil } from "./pureFeatures";
 import { isLocalProvider, privacyMode } from "./privacy";
-import { parseDirectModel, providerBaseUrl, providerKey } from "./providers";
+import { claudeCodeOff, parseDirectModel, providerBaseUrl, providerKey } from "./providers";
 import { loadSettings } from "./settings";
 
 
@@ -52,7 +52,7 @@ export function labelOf(model: string): string {
 // Local-only privacy keeps it on this computer. The user's chosen order still wins.
 export function autoAvailable(): string[] {
   const enabled = listModels().filter((m) => m.value !== AUTO && !m.needsSetup && !m.pinned && m.group !== "Claude Code").map((m) => m.value);
-  const all = [...new Set([CLAUDE_DEFAULT, ...enabled])];
+  const all = [...new Set([...(claudeCodeOff() ? [] : [CLAUDE_DEFAULT]), ...enabled])];
   if (privacyMode() !== "local") return all;
   return all.filter((m) => {
     const d = parseDirectModel(m);

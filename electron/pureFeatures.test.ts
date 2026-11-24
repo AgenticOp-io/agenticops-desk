@@ -1002,4 +1002,9 @@ test("phone messages: only well-formed ones run", async () => {
   assert.equal(parsePhoneMessage({ chat: "a", text: "  " }), null);
   assert.equal(parsePhoneMessage("hi"), null);
   assert.equal(parsePhoneMessage({ text: "x", host: "a b" })?.host, undefined);
+  assert.deepEqual(parsePhoneMessage({ chat: "c1", approve: { request: "r-1", allow: true } }), { chat: "c1", text: "", host: undefined, approve: { request: "r-1", allow: true } });
+  assert.equal(parsePhoneMessage({ approve: { request: "r-1", allow: true } }), null); // needs a chat
+  assert.equal(parsePhoneMessage({ chat: "c1", stop: true })?.stop, true);
+  assert.equal(parsePhoneMessage({ text: "x", image: "data:image/jpeg;base64,AAAA" })?.image, "data:image/jpeg;base64,AAAA");
+  assert.equal(parsePhoneMessage({ text: "x", image: "data:text/html;base64,AAAA" })?.image, undefined);
 });

@@ -99,7 +99,7 @@ export type Orders = {
 };
 export type WatchInfo = { chatId: string; file: string; pattern: string };
 // Manager chats, and each worker chat's manager (electron/team.ts).
-export type Team = { managers: string[]; workers: Record<string, string> };
+export type Team = { managers: string[]; workers: Record<string, string>; plans: Record<string, { text: string; done: boolean }[]> };
 export type CanvasDoc = { chatId: string; title: string; kind: "html" | "svg" | "markdown"; content: string };
 export type TeamOrder = { id: string; managerId?: string; title?: string; prompt?: string; model?: string; text?: string };
 
@@ -408,6 +408,7 @@ declare global {
       originsOf: (file: string) => Promise<Array<{ chatId: string; prompt: string; at: number }>>;
       briefing: (sinceMs: number) => Promise<BriefingItem[]>;
       getTeam: () => Promise<Team>;
+      setPlan: (chatId: string, text: string) => Promise<Team>;
       setManager: (chatId: string, on: boolean) => Promise<Team | string>;
       onWorkerRetired: (cb: (id: string) => void) => () => void;
       onCanvas: (cb: (doc: CanvasDoc | null) => void) => () => void;
