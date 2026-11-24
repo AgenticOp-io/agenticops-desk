@@ -1955,6 +1955,7 @@ export function App() {
                   <div className="side-panel">
                     {panel(inSide)}
                     <div className="side-foot">
+                      <img className="brand-mark" src="/logo.svg" alt="AgenticOps" />
                       <button className="settings-item" title="Help (F1)" onClick={() => (popped("help") && showHelp ? focusPopout("help") : setShowHelp(true))}>
                         Help
                       </button>

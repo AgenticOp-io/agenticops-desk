@@ -1709,3 +1709,5 @@ button.team-chip { cursor: pointer; }
 .scm-letter.l-A, .scm-letter.l-U { color: #73c991; }
 .scm-letter.l-D { color: var(--danger); }
 .scm-clone { display: flex; flex-direction: column; gap: 4px; }
+
+.brand-mark { width: 20px; height: 20px; margin: 0 auto 6px; display: block; opacity: 0.9; }
