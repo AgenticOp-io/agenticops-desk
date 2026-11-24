@@ -215,6 +215,10 @@ const IGNORED_DIRS = new Set([
   "coverage",
   ".turbo",
   ".cache",
+  // Gradle, the mobile build and installer assets write thousands of files, and each burst reloaded the file tree.
+  "build",
+  "dist-mobile",
+  ".gradle",
 ]);
 
 function watchWorkspace() {
