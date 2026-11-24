@@ -185,15 +185,7 @@ function showWindow() {
 
 function ensureTray() {
   if (tray) return;
-  const size = 16;
-  const buf = Buffer.alloc(size * size * 4);
-  for (let i = 0; i < size * size; i++) {
-    buf[i * 4] = 80;
-    buf[i * 4 + 1] = 180;
-    buf[i * 4 + 2] = 60;
-    buf[i * 4 + 3] = 255;
-  }
-  tray = new Tray(nativeImage.createFromBitmap(buf, { width: size, height: size }));
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, "../build/icon.png")).resize({ width: 16, height: 16 }));
   tray.setToolTip("AgenticOps Desk is still working");
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -226,6 +218,10 @@ const IGNORED_DIRS = new Set([
   "coverage",
   ".turbo",
   ".cache",
+  // Gradle, the mobile build and installer assets write thousands of files, and each burst reloaded the file tree.
+  "build",
+  "dist-mobile",
+  ".gradle",
 ]);
 
 function watchWorkspace() {

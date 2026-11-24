@@ -173,10 +173,28 @@ export function lineDiff(before: string, after: string): string {
 // Auto model: errors that mean "this AI can't take the job right now", so the next one should try.
 // Anything else (a tool failing, a bad request in the chat itself) stays with the user.
 const FAILOVER =
-  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|rate.?limit|usage limit|5-hour limit|you've hit your|overloaded|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|local only is on/i;
+  /\b(?:api error|status|error|http)\W{0,3}(?:429|5\d\d)\b|:\s*5\d\d\b|rate.?limit|usage limit|5-hour limit|you've hit your|overloaded|high demand|(?:exceeded|out of|over) (?:your |the )?(?:current )?quota|quota (?:exceeded|exhausted|reached)|credit balance|billing (?:error|issue|problem)|insufficient (?:credit|funds|quota|balance)|too many requests|(?:at|over) capacity|rejected the api key|invalid api key|add an api key|not logged in|\/login|authentication|unauthori[sz]ed|declined this request|connection error|could not connect|econnrefused|econnreset|enotfound|etimedout|fetch failed|network error|(?:request|connection|api) timed out|stalled|no (claude code|agent engine) build|(claude code|agent engine) (was )?not found|model\b.*\b(not found|does not exist|not available)|returned no output|local only is on/i;
 
 export function shouldFailOver(error: string): boolean {
   return FAILOVER.test(error);
+}
+
+// Gemini signs each function call. The next request must send that signature back, or the tool turn is rejected.
+export function thoughtSignature(extra: unknown): { google: { thought_signature: string } } | undefined {
+  const sig = (extra as { google?: { thought_signature?: unknown } } | null)?.google?.thought_signature;
+  return typeof sig === "string" && sig ? { google: { thought_signature: sig } } : undefined;
+}
+
+// A call we did not sign (an older saved turn) still has to carry a signature. Gemini documents this exact value.
+export function geminiSignature(extra: unknown): { google: { thought_signature: string } } {
+  return thoughtSignature(extra) ?? { google: { thought_signature: "skip_thought_signature_validator" } };
+}
+
+// llama.cpp returns this while the model file is still loading. The server is up; the request should wait.
+export function isModelLoading(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const row = err as { status?: number; message?: string; error?: { message?: string } };
+  return row.status === 503 && /loading model/i.test(`${row.message ?? ""} ${row.error?.message ?? ""}`);
 }
 
 // What Auto does with one event of a run it routes: let it through, hide a provider error so the next AI
@@ -1589,12 +1607,18 @@ export function mergeChats(local: SyncChat[], incoming: SyncChat[], deleted: Rec
 
 // Chat models from a provider's /models list. Drops embeddings, images, audio and the rest.
 // shortcut: first 20 only, raise the cap if the menu needs the long tail.
+// Gemini streams a function call without OpenAI's index. A later piece of the same call has no name.
+export function streamToolIndex(index: number | undefined, hasName: boolean, open: number): number {
+  if (typeof index === "number" && index >= 0) return index;
+  return hasName || open === 0 ? open : open - 1;
+}
+
 export function chatModelIds(ids: string[], limit = 20): string[] {
   const skip = /embed|whisper|tts|dall-e|moderation|transcri|realtime|\baudio\b|\bimage\b|\bspeech\b|\bsora\b/i;
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of ids) {
-    const id = raw.trim();
+    const id = raw.trim().replace(/^models\//, "");
     if (!id || id.length > 80 || seen.has(id) || skip.test(id)) continue;
     seen.add(id);
     out.push(id);

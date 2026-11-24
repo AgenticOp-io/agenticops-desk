@@ -231,7 +231,8 @@ export function providerKey(id: ProviderId): string {
   const enc = load()[id]?.key;
   if (!enc) return "";
   try {
-    return safeStorage.decryptString(Buffer.from(enc, "base64"));
+    // Headers must be printable ASCII; a pasted dash or space would crash the request.
+    return safeStorage.decryptString(Buffer.from(enc, "base64")).replace(/[^\x21-\x7e]/g, "");
   } catch {
     return "";
   }

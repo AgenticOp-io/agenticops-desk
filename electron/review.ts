@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import path from "node:path";
+import { helperBaseUrl, retryWhileLoading } from "./localModel";
 import { parseDirectModel, providerBaseUrl, providerInfo, providerKey } from "./providers";
-import { helperBaseUrl } from "./localModel";
 import { lineDiff } from "./pureFeatures";
 import { recordUsage } from "./usageLog";
 
@@ -84,9 +84,12 @@ export async function askDirect(
   // The built-in summaries helper has no provider entry; reach it directly when the model is its own.
   const baseURL = (pick.provider === "ollama" && (await helperBaseUrl(pick.model))) || providerBaseUrl(pick.provider);
   const client = new OpenAI({ apiKey: providerKey(pick.provider) || "local", baseURL });
-  const res = await client.chat.completions.create(
-    { model: pick.model, messages: [{ role: "system", content: system }, { role: "user", content: user }] },
-    { signal },
+  const res = await retryWhileLoading(
+    () => client.chat.completions.create(
+      { model: pick.model, messages: [{ role: "system", content: system }, { role: "user", content: user }] },
+      { signal },
+    ),
+    signal,
   );
   if (res.usage) recordUsage(pick.provider, pick.model, { input: res.usage.prompt_tokens ?? 0, output: res.usage.completion_tokens ?? 0 });
   return { label, text: res.choices[0]?.message?.content?.trim() ?? "" };

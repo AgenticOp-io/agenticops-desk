@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chatModelIds, globToRegExp, isCustomProviderId, lineDiff, ownerFromRemote, PROVIDER_CATALOGS } from "./pureFeatures.ts";
+import { chatModelIds, globToRegExp, isCustomProviderId, lineDiff, ownerFromRemote, PROVIDER_CATALOGS, streamToolIndex } from "./pureFeatures.ts";
 
 test("run capsules: only checked work, dropped once its files change", async () => {
   const { capsuleBrief, gateCommand, gatePassed, makeCapsule } = await import("./pureFeatures.ts");
@@ -130,7 +130,7 @@ test("a local server is ready only when it lists this model", async () => {
 
 test("the local model choice is a known model or none", async () => {
   const { DEFAULT_LOCAL_MODEL, normalizeLocalModel } = await import("./localChoices.ts");
-  assert.equal(normalizeLocalModel(undefined), DEFAULT_LOCAL_MODEL);
+  assert.equal(normalizeLocalModel(undefined), "");
   assert.equal(normalizeLocalModel("qwen2.5-coder:7b"), DEFAULT_LOCAL_MODEL);
   assert.equal(normalizeLocalModel(""), "");
   assert.equal(normalizeLocalModel("qwen2.5:3b"), "qwen2.5:3b");
@@ -240,6 +240,10 @@ test("chat model ids drop embeddings and cap the list", () => {
   assert.equal(isCustomProviderId("uab12c"), true);
   assert.equal(isCustomProviderId("openai"), false);
   assert.deepEqual(ids, ["deepseek-flash"]);
+  assert.deepEqual(chatModelIds(["models/gemini-3.8-flash", "models/gemini-3.8-flash"]), ["gemini-3.8-flash"]);
+  assert.equal(streamToolIndex(undefined, true, 0), 0);
+  assert.equal(streamToolIndex(undefined, false, 1), 0);
+  assert.equal(streamToolIndex(undefined, true, 1), 1);
   assert.equal(chatModelIds(Array.from({ length: 30 }, (_, i) => `m${i}`)).length, 20);
 });
 
@@ -276,6 +280,7 @@ test("Auto fails over only on provider trouble", async () => {
   const { shouldFailOver, coolDownMs } = await import("./pureFeatures.ts");
   assert.ok(shouldFailOver("API Error: 429 rate_limit_error"));
   assert.ok(shouldFailOver("Claude AI usage limit reached|1767000000"));
+  assert.ok(shouldFailOver("The model returned no output"));
   assert.ok(shouldFailOver("You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)"));
   assert.ok(shouldFailOver("Claude Code returned an error result: You've hit your 5-hour limit · resets 9:20pm (America/Mexico_City)"));
   assert.ok(shouldFailOver("OpenAI: 429 You exceeded your current quota"));
@@ -295,6 +300,18 @@ test("Auto ignores numbers and words that only look like provider trouble", asyn
   assert.ok(!shouldFailOver("Standing-order check still fails after 3 fix attempts: npm run network-test"));
   assert.ok(!shouldFailOver("SyntaxError in src/a.ts at line 503"));
   assert.ok(shouldFailOver("Request failed with status 503"));
+  assert.ok(
+    shouldFailOver(
+      'Google Gemini: 503 [{"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}]',
+    ),
+  );
+  assert.ok(!shouldFailOver("The function is unavailable until the flag is on."));
+  const { isModelLoading } = await import("./pureFeatures.ts");
+  const { geminiSignature } = await import("./pureFeatures.ts");
+  assert.deepEqual(geminiSignature({ google: { thought_signature: "abc" } }), { google: { thought_signature: "abc" } });
+  assert.equal(geminiSignature(undefined).google.thought_signature, "skip_thought_signature_validator");
+  assert.equal(isModelLoading({ status: 503, error: { message: "Loading model" } }), true);
+  assert.equal(isModelLoading({ status: 503, message: "overloaded" }), false);
 });
 
 test("Auto hands over only after a hidden provider error", async () => {

@@ -11,7 +11,7 @@ import type { PermissionGate } from "./gate";
 import { ensureClaudeBinary, loadAgentSdk } from "./claudeBinary";
 import { quietThreads } from "./resourceGuard";
 import { prepareMemory } from "./memory";
-import { capsulesBrief, chatSummary, ensureSummary, forgetCapsules, recordCapsule, refreshSummary } from "./capsules";
+import { capsulesBrief, ensureSummary, forgetCapsules, recordCapsule, refreshSummary } from "./capsules";
 import { paidPacket } from "./gather";
 import { imagesToText } from "./imageVision";
 import { generateLocally } from "./localModel";
@@ -24,7 +24,6 @@ import {
   gatePassed,
   lastRepliesVerbatim,
   pinnedTables,
-  latestContextTokens,
   percentUsed,
   RESUME_TTL_MS,
   sessionBrief,
@@ -345,6 +344,20 @@ export function send(win: BrowserWindow | null, event: ClaudeEvent) {
 let sendFilter: ((win: BrowserWindow | null, event: ClaudeEvent) => boolean) | null = null;
 export function setSendFilter(fn: typeof sendFilter) {
   sendFilter = fn;
+}
+
+// Auto can start a second engine for the same message. The note belongs in the chat once.
+const handoffNotedAt = new Map<string, number>();
+export function noteHandOff(win: BrowserWindow | null, chatId: string) {
+  const now = Date.now();
+  if (now - (handoffNotedAt.get(chatId) ?? 0) < 20_000) return;
+  handoffNotedAt.set(chatId, now);
+  send(win, {
+    kind: "note",
+    chatId,
+    running: true,
+    text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
+  });
 }
 
 // Main-process listeners (team.ts) see what the window sees, after the Auto model's filter.
@@ -1543,7 +1556,7 @@ export type HistoryMsg = { role: string; text: string };
 const HISTORY_LIMIT = 60_000;
 
 // Claude Code keeps the session log under ~/.claude/projects/<folder>/<id>.jsonl. The id is enough to find it.
-function rememberedSession(sessionId: string): { tokens?: number; idleMs: number } | undefined {
+function rememberedSession(sessionId: string): { idleMs: number } | undefined {
   if (!/^[\da-f-]{36}$/i.test(sessionId)) return undefined;
   const root = path.join(os.homedir(), ".claude", "projects");
   let names: string[];
@@ -1556,10 +1569,8 @@ function rememberedSession(sessionId: string): { tokens?: number; idleMs: number
     const file = path.join(root, name, `${sessionId}.jsonl`);
     if (!existsSync(file)) continue;
     try {
-      return {
-        tokens: latestContextTokens(readFileSync(file, "utf8")),
-        idleMs: Math.max(0, Date.now() - statSync(file).mtimeMs),
-      };
+      // Only the age is used; scanning a log that can be tens of MB froze the main thread.
+      return { idleMs: Math.max(0, Date.now() - statSync(file).mtimeMs) };
     } catch {
       return undefined;
     }
@@ -1746,12 +1757,7 @@ export function runClaude(opts: RunOptions) {
   // A follow-up carries a short summary. Resuming would send the earlier tokens again.
   const handOff = shouldHandOff(opts.history?.length ?? 0);
   if (handOff && session.claudeSession) {
-    send(opts.win, {
-      kind: "note",
-      chatId,
-      running: true,
-      text: "This message continues from a short summary of the chat, so earlier tokens are not sent again. The agent reads again any file it needs.",
-    });
+    noteHandOff(opts.win, chatId);
     session.claudeSession = undefined;
     session.lastContext = undefined;
     session.lastTurnAt = undefined;
@@ -1851,25 +1857,14 @@ export function runClaude(opts: RunOptions) {
       frozenMemory.set(frozenKey, memory);
       const orders = runOrders(cwd);
       const standing = ordersPrompt(orders);
-      if (handOff && !chatSummary(chatId, opts.history)) {
-        send(opts.win, {
-          kind: "status",
-          running: true,
-          phase: "starting",
-          text: "Summarizing this chat locally…",
-          sessionId: session.claudeSession,
-          chatId,
-        });
-      } else {
-        send(opts.win, {
-          kind: "status",
-          running: true,
-          phase: "starting",
-          text: "Reading the project locally…",
-          sessionId: session.claudeSession,
-          chatId,
-        });
-      }
+      send(opts.win, {
+        kind: "status",
+        running: true,
+        phase: "starting",
+        text: "Reading the project locally…",
+        sessionId: session.claudeSession,
+        chatId,
+      });
       const [seen, packet, summary] = await Promise.all([
         imagesToText(opts.prompt, opts.images),
         paidPacket(cwd, opts.prompt),

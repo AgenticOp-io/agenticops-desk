@@ -114,7 +114,8 @@ export function stopPythons() {
 
 export function watchPythons() {
   if (process.platform !== "win32") return;
-  const timer = setInterval(() => releasePythons(), 2000);
+  // Each scan starts PowerShell and queries every process (~0.3 s of CPU). Every 2 s kept the machine busy for nothing.
+  const timer = setInterval(() => releasePythons(), 15_000);
   timer.unref();
 }
 

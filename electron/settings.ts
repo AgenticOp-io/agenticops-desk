@@ -77,7 +77,7 @@ const defaults = (): UiPrefs => ({
   autoModels: [],
   autocomplete: "",
   summarizer: "",
-  localModelId: DEFAULT_LOCAL_MODEL,
+  localModelId: "",
   runBudgetUsd: 0,
   maxWorkers: 3,
   privacy: "protect",
