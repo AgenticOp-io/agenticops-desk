@@ -9,6 +9,7 @@ import "../src/styles.css";
 import "./mobile.css";
 import { Conversation } from "../src/Conversation";
 import jsQR from "jsqr";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { credential, localModel, route, runAgent, type AgentMsg, type Route } from "./agent";
 import { CloudView } from "./cloud";
 import {
@@ -32,6 +33,10 @@ import {
   type Msg,
   type Project,
 } from "./github";
+
+// Native alerts while the app is closed (android/.../DeskWatchPlugin.java); the WebView has no Notification API.
+const DeskWatch = registerPlugin<{ setup(o: { token: string; repos: string }): Promise<void>; stop(): Promise<void>; ask(): Promise<void>; status(): Promise<{ enabled: boolean }> }>("DeskWatch");
+const native = Capacitor.isNativePlatform();
 
 // The phone side of AgenticOps Remote: the same projects and chats as the desk, read from and sent through GitHub.
 // Messages typed here are run by the desktop on its next sync (every few minutes) and their replies come back the same way.
@@ -359,6 +364,8 @@ function SettingsView({ projects, onSignOut }: { projects: Record<string, Projec
   const [r, setR] = useState<Route>(route.get());
   const [mins, setMins] = useState(localStorage.getItem("phone.refresh") ?? "2");
   const [saved, setSaved] = useState(false);
+  const [notify, setNotify] = useState(false);
+  useEffect(() => void (native && DeskWatch.status().then((s) => setNotify(s.enabled), () => {})), []);
   // Last time each desk wrote a job, from the jobs the projects already carry.
   const desks = new Map<string, number>();
   for (const p of Object.values(projects)) for (const j of p.jobs) desks.set(j.host, Math.max(desks.get(j.host) ?? 0, j.at));
@@ -386,10 +393,21 @@ function SettingsView({ projects, onSignOut }: { projects: Record<string, Projec
       <input placeholder="Local model URL (optional, replaces Haiku for chat)" value={url} onChange={(e) => setUrl(e.target.value)} />
       <input placeholder="Local model name" value={name} onChange={(e) => setName(e.target.value)} />
       <h2>Notifications</h2>
-      <p className="m-muted">Alerts appear while the app is open or in recent apps; Android may stop a closed app from checking.</p>
-      <button className="ghost" onClick={() => typeof Notification !== "undefined" && void Notification.requestPermission().then(() => setSaved((v) => !v))}>
-        {typeof Notification === "undefined" ? "Not supported here" : Notification.permission === "granted" ? "Notifications on" : "Turn on notifications"}
-      </button>
+      {native ? (
+        <>
+          <p className="m-muted">While the app is closed it checks the desk about every 15 minutes and alerts you to new prompts and finished chats. Battery saver can delay the checks.</p>
+          <button className="ghost" onClick={() => void DeskWatch.ask().then(() => setTimeout(() => void DeskWatch.status().then((s) => setNotify(s.enabled)), 4000))}>
+            {notify ? "Notifications on" : "Turn on notifications"}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="m-muted">Alerts appear while this page is open.</p>
+          <button className="ghost" onClick={() => typeof Notification !== "undefined" && void Notification.requestPermission().then(() => setSaved((v) => !v))}>
+            {typeof Notification === "undefined" ? "Not supported here" : Notification.permission === "granted" ? "Notifications on" : "Turn on notifications"}
+          </button>
+        </>
+      )}
       <h2>Refresh</h2>
       <label className="m-muted">Check the desk every <input className="m-num" inputMode="numeric" value={mins} onChange={(e) => setMins(e.target.value.replace(/\D/g, ""))} /> minutes</label>
       <button className="m-primary" disabled={(!!url.trim() !== !!name.trim())} onClick={save}>{saved ? "Saved" : "Save"}</button>
@@ -546,6 +564,7 @@ function App() {
         localStorage.setItem("seen.approvals", JSON.stringify(Object.values(next).flatMap((p) => p.approvals.map((a) => a.request)).slice(-200)));
         setProjects(next);
         setErr("");
+        if (native) void DeskWatch.setup({ token: session.token(), repos: Object.keys(next).join(" ") }).catch(() => {});
         // A message whose inbox file is gone was taken by the desk; its turn now shows in the thread.
         const left = cache.pending().filter((p) => next[p.repo]?.inbox.includes(p.id));
         cache.setPending(left);
@@ -596,6 +615,7 @@ function App() {
     if (!confirm(`Sign ${session.login()} out of this phone?`)) return;
     session.clear();
     localStorage.clear();
+    if (native) void DeskWatch.stop().catch(() => {});
     setProjects({});
     setPending([]);
     setSignedIn(false);

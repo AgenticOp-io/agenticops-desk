@@ -1,6 +1,6 @@
 # Builds and publishes a release on this computer instead of GitHub Actions: Windows here, Linux in WSL.
-# macOS cannot be built off a Mac, so a local release has no macOS files.
-# Windows only unless -Linux is given.
+# macOS cannot be built off a Mac: run the Release workflow with only=mac for those files.
+# Windows, plus the Android APK when the Android SDK is installed; Linux too with -Linux.
 # Usage: pwsh scripts/release-local.ps1 [-Tag v0.1.43] [-Linux]   (default: the version in package.json)
 # Needs: the tag already pushed, `gh` signed in, WSL Ubuntu with Node in ~/.local/node (and ruby + fpm for .deb),
 # and the patch signing key in $env:PATCH_SIGNING_KEY or the file ~/.agenticops-patch-key.
@@ -26,6 +26,13 @@ if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 git clone --quiet --depth 1 --branch $Tag "file://$($gitDir -replace '\\','/')" $work
 Push-Location $work
 try {
+  # Installed copies update only to a higher version, so an installer must carry its tag's number and be newer than what is out.
+  $version = (Get-Content "$work/package.json" -Raw | ConvertFrom-Json).version
+  if ("v$version" -ne $Tag) { throw "package.json at $Tag says $version. Bump it to $($Tag -replace '^v') and re-tag." }
+  $latest = gh release list --repo $repo --limit 20 --json tagName,isDraft --jq '.[] | select(.isDraft | not) | .tagName' |
+    Where-Object { $_ -ne $Tag } | Sort-Object { [version]($_ -replace '^v', '') } -Descending | Select-Object -First 1
+  if ($latest -and [version]$version -le [version]($latest -replace '^v', '')) { throw "$Tag is not newer than the published $latest; installed copies would not update." }
+
   npm ci --no-audit --no-fund
   npx tsc --noEmit
   npm test
@@ -41,7 +48,17 @@ try {
   wsl -d Ubuntu -- bash (& $toWsl "$work/scripts/build-linux-wsl.sh") (& $toWsl $gitDir) $Tag (& $toWsl "$work/release")
   }
 
-  $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|AppImage|deb)$|^patch' } | ForEach-Object FullName
+  # The phone app, when this computer has the Android SDK. Debug-signed: sideload only, not for the Play Store.
+  if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = [Environment]::GetEnvironmentVariable("ANDROID_HOME", "User"); $env:JAVA_HOME = [Environment]::GetEnvironmentVariable("JAVA_HOME", "User") }
+  if ($env:ANDROID_HOME) {
+    npx vite build --config mobile/vite.config.ts
+    npx cap sync android
+    # --no-daemon: a Gradle daemon keeps the pipe open after the build and the script never returns.
+    Push-Location android; try { ./gradlew.bat assembleDebug --no-daemon -q } finally { Pop-Location }
+    Copy-Item android/app/build/outputs/apk/debug/app-debug.apk "release/AgenticOps-Remote-$Tag.apk"
+  }
+
+  $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|AppImage|deb|apk)$|^patch' } | ForEach-Object FullName
   if (-not $files) { throw "Nothing was built" }
 
   try { gh release view $Tag --repo $repo *> $null }
