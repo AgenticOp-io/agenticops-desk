@@ -162,7 +162,7 @@ The local model is off until you install it: nothing downloads or runs by defaul
 
 ## Sending a message
 
-- **Enter** sends, **Shift+Enter** starts a new line. Sending while a chat is working guides that run.
+- **Enter** sends, **Shift+Enter** starts a new line. Sending while a chat is working guides that run: the command in progress stops, and the new instruction continues the same run.
 - The box grows to fit your text, up to 40% of the window, and then scrolls.
 - **Spelling:** misspelled words are underlined. Right-click one for suggestions or **Add to dictionary**; right-click in any text box also gives Cut, Copy, Paste and Select all. In the message box, an obvious typo is fixed as you finish the word, such as *recieve* to *receive*. Ctrl+Z takes the fix back. Autocorrect leaves alone words under four letters, words with capitals, digits or symbols, and anything inside backticks.
 - **Drafts stay with their chat.** Switch away and come back, and your text is there with the cursor at the end.
@@ -265,7 +265,7 @@ See [SECURITY.md](./SECURITY.md#saved-logins) for what this does and doesn't pro
 - **Phone:** a project in a private GitHub repository keeps its chats, and a job log (one line when a chat's run starts and one when it ends), on a `desk-chats` branch of that repository. To sign the Android app in, open Settings → Sync → Phone on the desk, click Show pairing code, and tap Scan in the app. The code carries the desk's GitHub CLI sign-in, so treat it like a password; it hides itself after two minutes. The app then lists every project that has that branch, and shows its chats as they look on the desk. A message or new chat sent from the phone is picked up by the computer that last ran that chat on its next sync (within about 3 minutes) and runs there. Its reply reaches the phone on the sync after that. The desk only runs phone messages committed by its own GitHub CLI account. The Inbox tab lists chats running now and recently finished, and a "Needs you" section: folder-trust and risky-command prompts the desk is waiting on show Allow/Deny buttons, and an open chat has a Stop button. Questions, plan approvals and saved-login prompts never go to the phone. A photo (shrunk to 1280 px) is saved on the desk and named in the message; the Voice button dictates when the phone supports it. The app notifies about new prompts and finished chats only while it is running; there is no background push.
 
 - **Plan authority and dashboard:** a manager with plan steps left, and its workers, allow their own permission prompts (not saved logins) and are told to decide questions themselves. Ctrl+Shift+D or the palette entry "Dashboard: all active work" opens a pane of every running chat (workers under their manager, plan progress, cost since launch) plus the eight most recently finished.
-- **When it commits:** within about a second of sending a message or a reply ending. While a reply is streaming, at most every 30 seconds. Also every 3 minutes, and when the app starts and quits.
+- **When it commits:** chats are batched. A change waits and shares one commit, within about 3 minutes, instead of going up as each message is sent. Also when the app starts and quits, and when you press Sync now.
 - If the repository is emptied or recreated, the next sync fills it again from this computer. At startup, duplicate copies of a chat and empty leftover projects with no folder are removed; branches and blank chats are kept.
 - **What goes up:** chats, project names and remotes, memory, and these settings: fonts, theme, code panel, hidden chats, Auto model list, reviewer and autocomplete model, privacy mode, and Cursor mode.
 - **What stays on the computer:** API keys, saved logins, project folder paths, and the rest of the settings.
@@ -337,7 +337,7 @@ Close any terminal or editor using the folder first, or Windows may refuse the m
 ## Around the chat
 
 
-- **Terminal:** a shell in the project, up to three at once. Output keeps collecting while the panel is hidden, and Restart ends the shell and everything it started. Python started from the agent, this terminal, or a standing-order check stays on two threads and off the window's cores. If memory runs low, the window freezes, or the app quits, that Python is stopped so it cannot keep the app.
+- **Terminal:** a shell in the project, up to three at once. Output keeps collecting while the panel is hidden, and Restart ends the shell and everything it started. Commands the agent runs (and Git in the app) do not wait on a password, a confirmation, or a pager. That question comes back as an error, instead of a prompt outside the window that nothing can answer. Opening a local app, such as a text editor, shows that app's own window and returns at once. The shell does not sit there until the window is closed. Python started from the agent, this terminal, or a standing-order check stays on two threads and off the window's cores. If memory runs low, the window freezes, or the app quits, that Python is stopped so it cannot keep the app.
 - **Git:** branch, changes, commit, fetch, pull, push, checkout, history, and a pull request through GitHub's `gh` command.
 - **Preview:** loads a web address. In a project with a `dev`, `start` or `serve` script, **Run npm run dev** (or the pnpm, yarn or bun form its lockfile names) starts it in the project's terminal and opens the local address it prints. The Terminal tab shows its output, and Restart there stops it.
 - **Instructions:** edits `CLAUDE.md`, `AGENTS.md` and the project's `.mcp.json`.
@@ -388,7 +388,7 @@ Settings → **Cloud agents** makes this desk the superadmin for agents that run
 ## Activity log and recovery
 
 - **Activity log** (**Settings → Activity log**): a timeline of agent runs and their outcomes, each tool call and whether it failed, git operations, approvals and errors. It keeps labels and outcomes only, never prompts, replies or secrets.
-- **Crash and freeze recovery:** if the window's page crashes, or stays frozen for 15 seconds, it reloads by itself. Chats run in the app's main process, so a reload never stops them.
+- **Crash and freeze recovery:** if the window's page crashes, or stays frozen for 15 seconds, it reloads by itself. Chats run in the app's main process, so a reload never stops them. A long tool argument is no longer re-read in full on every streamed chunk, so that work does not pin the window.
 - **Image tools for the agent:** every chat on the default engine can read an attached image as text (local vision first, cloud fallback) and run one read-only `git` or `gh` status command through a local-model summary (`ops_triage`), so busywork doesn't use the paid model. With an OpenAI key saved under **Settings → AI models → Direct AI providers**, it can also create an image from a prompt; the PNG goes to the app's data folder, not your project.
 
 ## Memory

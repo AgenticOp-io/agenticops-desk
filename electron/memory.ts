@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
 import { claudeMemoryDir } from "./memoryPath";
-import { ownerFromRemote } from "./pureFeatures";
+import { cliPromptEnv, ownerFromRemote } from "./pureFeatures";
 
 // Claude's long-term memory: plain markdown files that outlive every chat, CLI session and app restart.
 // global/ holds what applies everywhere (who the user is, how they like to work); projects/<slug>/ holds
@@ -38,6 +38,7 @@ function orgOf(workspace: string): string | null {
       windowsHide: true,
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, ...cliPromptEnv() },
     });
     owner = ownerFromRemote(url);
   } catch {

@@ -43,7 +43,7 @@ import { generateLocally, retryWhileLoading } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import { isLocalProvider, LOCAL_ONLY_MESSAGE, privacyMode, privateAppend, protecting, scrubOutgoing } from "./privacy";
 import { assertChatContext, keyFault, providerBaseUrl, providerInfo, providerKey, setKeyRejected, type ProviderId } from "./providers";
-import { geminiSignature, shouldHandOff, shrinkGatherResult, staysInside, streamToolIndex, stripDeepSeekReasoning, thoughtSignature } from "./pureFeatures";
+import { cliPromptEnv, commandDetachedForGui, geminiSignature, shouldHandOff, shrinkGatherResult, staysInside, streamToolIndex, stripDeepSeekReasoning, thoughtSignature } from "./pureFeatures";
 import { commandTouchesSecretFile, isSecretFile } from "./redact";
 import { healHistory } from "./healHistory";
 import { writeJsonAtomicSync, writeTextAtomicSync } from "./jsonStore";
@@ -245,13 +245,15 @@ async function orderFeedback(ctx: Ctx): Promise<string | null> {
 
 function runShell(ctx: Ctx, command: string, timeoutSec: number): Promise<string> {
   return new Promise((resolve) => {
-    const { exe, args } = shellCommand(command);
+    const { exe, args } = shellCommand(commandDetachedForGui("PowerShell", command) ?? command);
     const child = spawn(exe, args, {
       cwd: ctx.cwd,
       windowsHide: true,
+      // Closed stdin: a prompt has nothing to read, so it fails instead of waiting on a console the window never sees.
+      stdio: ["ignore", "pipe", "pipe"],
       // Its own process group on macOS and Linux, so stopping it also stops whatever it started.
       detached: !WIN,
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...gitIdentityEnv(), ...quietThreads() },
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...cliPromptEnv(), ...gitIdentityEnv(), ...quietThreads() },
     });
     let out = "";
     const add = (d: Buffer) => {

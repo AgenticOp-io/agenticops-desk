@@ -2,6 +2,45 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chatModelIds, globToRegExp, isCustomProviderId, lineDiff, ownerFromRemote, PROVIDER_CATALOGS, streamToolIndex } from "./pureFeatures.ts";
 
+test("a cli prompt fails instead of waiting outside the window", async () => {
+  const { cliPromptEnv } = await import("./pureFeatures.ts");
+  const env = cliPromptEnv();
+  assert.equal(env.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(env.CLOUDSDK_CORE_DISABLE_PROMPTS, "1");
+  assert.equal(env.PAGER, "cat");
+  assert.equal(env.POWERSHELL_TELEMETRY_OPTOUT, "1");
+});
+
+test("a local app opens in its own window and a cli stays a cli", async () => {
+  const { commandDetachedForGui, detachGuiCommand, isGuiImage, parseSimpleLaunch } = await import("./pureFeatures.ts");
+  const pe = (subsystem: number) => {
+    const buf = Buffer.alloc(256);
+    buf[0] = 0x4d;
+    buf[1] = 0x5a;
+    buf.writeUInt32LE(0x80, 0x3c);
+    buf.writeUInt32LE(0x4550, 0x80);
+    buf.writeUInt16LE(0x20b, 0x80 + 24);
+    buf.writeUInt16LE(subsystem, 0x80 + 24 + 68);
+    return buf;
+  };
+  assert.equal(isGuiImage(pe(2)), true);
+  assert.equal(isGuiImage(pe(3)), false);
+  assert.deepEqual(parseSimpleLaunch('notepad "notes.txt"'), { exe: "notepad", args: ["notes.txt"] });
+  assert.equal(parseSimpleLaunch("git status")?.exe, "git");
+  assert.equal(parseSimpleLaunch("git status | more"), null);
+  assert.equal(parseSimpleLaunch("Start-Process notepad"), null);
+  assert.match(detachGuiCommand("PowerShell", "C:\\Windows\\notepad.exe", ["a b.txt"]), /Start-Process/);
+  assert.match(detachGuiCommand("PowerShell", "C:\\Windows\\notepad.exe", ["a b.txt"]), /a b\.txt/);
+  const opened = commandDetachedForGui("PowerShell", "notepad readme.txt");
+  if (process.platform === "win32") {
+    assert.ok(opened?.startsWith("Start-Process"));
+    assert.match(opened ?? "", /readme\.txt/);
+    assert.equal(commandDetachedForGui("PowerShell", "git status"), null);
+  } else {
+    assert.equal(opened, null);
+  }
+});
+
 test("run capsules: only checked work, dropped once its files change", async () => {
   const { capsuleBrief, gateCommand, gatePassed, makeCapsule } = await import("./pureFeatures.ts");
   assert.equal(gatePassed({ is_error: true, content: "x" }), false);
@@ -901,6 +940,7 @@ test("a run stays open while background tasks can still report", async () => {
   const { turnIsOver } = await import("./pureFeatures.ts");
   assert.equal(turnIsOver({ type: "result" }, 0), true);
   assert.equal(turnIsOver({ type: "result" }, 2), false);
+  assert.equal(turnIsOver({ type: "result", queued_turn_count: 1 }, 0), false);
   assert.equal(turnIsOver({ type: "system", subtype: "session_state_changed", state: "idle" }, 2), true);
   assert.equal(turnIsOver({ type: "system", subtype: "session_state_changed", state: "running" }, 0), false);
   assert.equal(turnIsOver({ type: "assistant" }, 0), false);

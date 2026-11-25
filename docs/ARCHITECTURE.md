@@ -108,10 +108,10 @@ Project memory lives in Claude Code's folder: `~/.claude/projects/<encoded-path>
 
 ### A message
 
-1. `App.tsx` saves the thread with `entered: true`, which schedules a sync, then calls the run IPC.
+1. `App.tsx` saves the thread, which joins the next batched sync, then calls the run IPC.
 2. The run starts on the chat's engine, or through `autoRoute.ts`. Memory and standing orders go in the system prompt, through `privateAppend`.
 3. Events stream back to the renderer as `ClaudeEvent`s: `status`, `tool`, `thinking`, `line`, `approval`, `changes`, `done`. Thinking is the model's reasoning, shown in the round and kept out of the text sent back on the next command.
-4. The renderer saves the thread on a timer. Those saves schedule a sync with a 30-second wait (`SYNC_WHILE_WORKING`), and the save at `done` is another entered save.
+4. The renderer saves the thread on a timer. Those saves stay on this computer until the next batched sync (`SYNC_BATCH_MS`, about 3 minutes), or until the app quits.
 
 ### Tool hooks (Claude Code engine)
 

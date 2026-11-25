@@ -17,6 +17,8 @@ import { imagesToText } from "./imageVision";
 import { generateLocally } from "./localModel";
 import { noteLearned } from "./modelLearn";
 import {
+  cliPromptEnv,
+  commandDetachedForGui,
   COMPACT_REREAD,
   contextTokens,
   modelTier,
@@ -173,6 +175,8 @@ type Session = {
   backgroundTasks?: number;
   // A steer waiting for the next Direct turn, applied before the following model call.
   guide?: string;
+  // A guide just interrupted this Claude turn. The error result from that interrupt is not a failure.
+  steering?: boolean;
   // Aborts only the Direct HTTP call in flight, so a new command does not stop the whole run.
   steer?: AbortController;
   // Files Claude edited in this chat, keyed by lower-case path, with their contents before the first edit
@@ -237,7 +241,12 @@ function loadStore(): Record<string, StoredSession> {
 }
 
 // Sync on purpose: this must land on disk even when the app is quitting.
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function persistStore() {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
   try {
     writeJsonAtomicSync(storeFile(), loadStore());
   } catch (err) {
@@ -245,12 +254,26 @@ function persistStore() {
   }
 }
 
+// Context size is updated on every assistant turn. Writing the session file each time stalled the
+// window and left a trail of temp files. The latest values land within a second, and on quit.
+function schedulePersist() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    persistStore();
+  }, 1000);
+}
+
 function patchStored(chatId: string, fn: (s: StoredSession) => void) {
   const all = loadStore();
   const cur = all[chatId] ?? {};
+  const resumeKey = () => JSON.stringify([cur.pending ?? null, cur.claudeSession ?? null]);
+  const before = resumeKey();
   fn(cur);
   all[chatId] = cur;
-  persistStore();
+  // The resume marker and session id must hit disk now, or a crash resumes a finished run or loses a started one.
+  if (resumeKey() !== before) persistStore();
+  else schedulePersist();
 }
 
 // A Claude Code session imported from the terminal: the chat's next message resumes it in its own folder.
@@ -769,6 +792,9 @@ function describeTool(name: string, input: unknown): { phase: RunPhase; text: st
 }
 
 function describePartial(partial: string): { phase: RunPhase; text: string } | null {
+  // Every streamed chunk of a tool argument used to be scanned in full. A long Write or Bash
+  // body made that quadratic and pinned the window on one core. A git push is named up front.
+  if (partial.length > 2048) return null;
   return pushActivity(partial);
 }
 
@@ -812,11 +838,12 @@ function announceTool(
   noteStructured(win, chatId, name, input);
 }
 
-function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string, session: Session) {
-  const trimmed = line.trim();
-  if (!trimmed) return;
+function parseStreamLine(line: unknown, win: BrowserWindow | null, chatId: string, session: Session) {
+  const trimmed = typeof line === "string" ? line.trim() : "";
+  if (typeof line === "string" && !trimmed) return;
   try {
-    const msg = JSON.parse(trimmed) as Record<string, unknown>;
+    const msg = (typeof line === "string" ? JSON.parse(trimmed) : line) as Record<string, unknown>;
+    if (!msg || typeof msg !== "object") return;
     const type = String(msg.type ?? "");
     if (typeof msg.session_id === "string" && msg.session_id !== session.claudeSession) {
       session.claudeSession = msg.session_id;
@@ -989,10 +1016,13 @@ function parseStreamLine(line: string, win: BrowserWindow | null, chatId: string
     if (type === "result") {
       const result = typeof msg.result === "string" ? msg.result : "";
       const err = typeof msg.is_error === "boolean" && msg.is_error;
+      const steered = session.steering;
+      if (steered) session.steering = false;
       if (result && !err) session.finalText = result;
       // The result repeats the final assistant text; only show it if nothing streamed.
       if (result && !err && !session.sawText) send(win, { kind: "line", text: result, sessionId, chatId, running: true });
-      if (err && result) send(win, { kind: "error", text: result, sessionId, chatId, running: true });
+      // A guide stops the command in progress. That interrupt is not a failure to show.
+      if (err && result && !steered) send(win, { kind: "error", text: result, sessionId, chatId, running: true });
       if (msg.subtype === "error_max_budget_usd") {
         const spent = typeof msg.total_cost_usd === "number" ? ` after $${msg.total_cost_usd.toFixed(2)}` : "";
         send(win, { kind: "note", text: `Stopped at the spending cap${spent}. Send a message to continue, or change the cap in Settings.`, sessionId, chatId, running: true });
@@ -1480,6 +1510,7 @@ export function stopClaude(win: BrowserWindow | null, chatId?: string) {
 // Called on quit: kill the CLIs but keep their pending marker so the next launch resumes them.
 export function shutdownClaude() {
   shuttingDown = true;
+  persistStore();
   for (const session of sessions.values()) {
     session.stopping = true;
     for (const pending of session.approvals.values()) {
@@ -1720,14 +1751,16 @@ export function runClaude(opts: RunOptions) {
   }
   // abort is set before inbox, so a message during start-up must queue, not stop the run that is starting.
   if (session.engine === "claude" && (session.inbox || session.abort) && !session.stopping) {
+    const owner = session.abort;
     void (async () => {
       const inbox = session.inbox;
       const seen = await imagesToText(scrubOutgoing(opts.prompt).text, opts.images).catch((err) => {
         send(opts.win, { kind: "error", text: `Could not send your instruction: ${err instanceof Error ? err.message : String(err)}`, chatId, running: true });
         return null;
       });
-      if (!seen) return;
-      if (inbox && session.inbox === inbox && !session.stopping && inbox.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
+      if (!seen || session.stopping) return;
+      const follow = () => {
+        session.steering = true;
         send(opts.win, {
           kind: "status",
           running: true,
@@ -1736,13 +1769,21 @@ export function runClaude(opts: RunOptions) {
           sessionId: session.claudeSession,
           chatId,
         });
+        // Stop the command in progress so the new instruction is read now, not after that command exits.
+        void session.query?.interrupt().catch(() => {});
+      };
+      if (inbox && session.inbox === inbox && inbox.push(userTurn(guidePrompt(seen.prompt), seen.images, "now"))) {
+        follow();
         return;
       }
-      if (!session.stopping && !session.inbox && session.abort) {
+      // The run still owns this chat. Hold the instruction. Starting a second run here would cut this one off.
+      if (owner && session.abort === owner) {
+        // Raw text: begin() and the end-of-run follow-up add the guide wording themselves.
         (session.early ??= []).push({ prompt: seen.prompt, images: seen.images });
+        follow();
         return;
       }
-      runClaude({ ...opts, prompt: seen.prompt, images: seen.images });
+      runClaude({ ...opts, prompt: seen.prompt, images: seen.images, history: undefined });
     })();
     return;
   }
@@ -1845,6 +1886,8 @@ export function runClaude(opts: RunOptions) {
     NO_COLOR: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: "AgenticOps-Desk",
     CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+    // Inherited by PowerShell, git and gcloud. A question they ask outside the window is never answered.
+    ...cliPromptEnv(),
     ...(bash ? { CLAUDE_CODE_GIT_BASH_PATH: bash } : {}),
     ...(pwsh ? { PATH: `${path.dirname(pwsh)};${process.env.PATH ?? ""}` } : {}),
   };
@@ -1964,6 +2007,10 @@ export function runClaude(opts: RunOptions) {
                   return deny(result.message);
                 }
                 let updated = result.updatedInput ?? (privacy ? toolInput : undefined);
+                const source = updated ?? toolInput;
+                const opened = typeof source.command === "string" ? commandDetachedForGui(shell, source.command) : null;
+                // A windowed app (Notepad, Explorer) is shown and not waited on. A CLI stays as approved.
+                if (opened) updated = { ...source, command: opened };
                 if (privacy && updated && typeof updated.command === "string") {
                   updated = { ...updated, command: wrapCommand(shell, fillCredentials(updated.command, shell)) };
                 }
@@ -2118,10 +2165,14 @@ export function runClaude(opts: RunOptions) {
           .catch(() => {});
       }
       let grew = false;
+      let streamed = 0;
       try {
         for await (const msg of q) {
           if (session.query !== q) return;
-          parseStreamLine(JSON.stringify(msg), opts.win, chatId, session);
+          // The message is already an object. Copying it to text and back on every chunk pinned the
+          // window once a tool argument got large. Yield often enough that the window can still paint.
+          parseStreamLine(msg, opts.win, chatId, session);
+          if ((++streamed & 7) === 0) await new Promise((resolve) => setImmediate(resolve));
           if ((session.reread ?? 0) >= COMPACT_REREAD && compact === 0 && !session.stopping) {
             grew = true;
             try {
@@ -2207,7 +2258,25 @@ export function runClaude(opts: RunOptions) {
       session.query = undefined;
       session.abort = undefined;
       session.child = null;
+      const queued = session.early?.slice() ?? [];
+      session.early = undefined;
       if (shuttingDown) return;
+      // A guide arrived after this run had stopped reading. Continue the same session with it.
+      if (!failed && !session.stopping && queued.length) {
+        dropApprovals(opts.win, chatId, session);
+        const images = queued.flatMap((e) => e.images ?? []).slice(0, 10);
+        runClaude({
+          win: opts.win,
+          chatId,
+          workspace: cwd,
+          prompt: guidePrompt(queued.map((e) => e.prompt).join("\n\n")),
+          images: images.length ? images : undefined,
+          permissionMode: opts.permissionMode,
+          model: opts.model,
+          history: undefined,
+        });
+        return;
+      }
       dropApprovals(opts.win, chatId, session);
       pruneChanges(session);
       sendChanges(opts.win, chatId, session);

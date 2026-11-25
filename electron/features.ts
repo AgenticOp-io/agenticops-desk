@@ -7,7 +7,7 @@ import { app } from "electron";
 import { recordActivity } from "./activityLog";
 import { realStorePwsh } from "./claude";
 import { quietThreads } from "./resourceGuard";
-import { isNewerVersion, isReleaseTag, newestTag, newPairCode, parsePorcelain, remoteWeb, sealPairing } from "./pureFeatures";
+import { cliPromptEnv, commandDetachedForGui, isNewerVersion, isReleaseTag, newestTag, newPairCode, parsePorcelain, remoteWeb, sealPairing } from "./pureFeatures";
 
 const DOCS = new Set(["CLAUDE.md", "AGENTS.md", ".mcp.json"]);
 
@@ -22,7 +22,7 @@ export function run(
     execFile(
       cmd,
       args,
-      { cwd, windowsHide: true, timeout, maxBuffer: 2_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv } },
+      { cwd, windowsHide: true, timeout, maxBuffer: 2_000_000, env: { ...process.env, ...cliPromptEnv(), ...extraEnv } },
       (err, stdout, stderr) => {
         const output = `${stdout ?? ""}${stderr ?? ""}`.trim();
         resolve({ ok: !err, output: output || (err ? String(err.message) : "") });
@@ -112,7 +112,7 @@ const badPaths = { ok: false, output: "Those paths are not in this repository." 
 // stdout only, untrimmed: run() appends stderr warnings (line endings) that would read as files.
 function gitOut(cwd: string, args: string[]) {
   return new Promise<string | null>((resolve) =>
-    execFile("git", args, { cwd, windowsHide: true, timeout: 60_000, maxBuffer: 20_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }, (err, stdout) => resolve(err ? null : stdout)),
+    execFile("git", args, { cwd, windowsHide: true, timeout: 60_000, maxBuffer: 20_000_000, env: { ...process.env, ...cliPromptEnv() } }, (err, stdout) => resolve(err ? null : stdout)),
   );
 }
 
@@ -313,7 +313,7 @@ export function openShell(cwd: string, onData: (chunk: string) => void): { id: s
     cwd,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, ...quietThreads() },
+    env: { ...process.env, POWERSHELL_TELEMETRY_OPTOUT: "1", POWERSHELL_UPDATECHECK: "Off", ...quietThreads() },
     // Its own process group on macOS and Linux, so Restart also stops what it started.
     detached: process.platform !== "win32",
   });
@@ -350,7 +350,9 @@ export function writeShell(id: string, text: string) {
   const entry = shells.get(id);
   if (!entry?.child.stdin || entry.child.exitCode !== null) return false;
   entry.usedAt = Date.now();
-  entry.child.stdin.write(text.endsWith("\n") ? text : `${text}\n`);
+  // A local app typed here gets its own window. The shell returns instead of waiting on that window.
+  const sent = commandDetachedForGui("PowerShell", text.trim()) ?? text;
+  entry.child.stdin.write(sent.endsWith("\n") ? sent : `${sent}\n`);
   return true;
 }
 

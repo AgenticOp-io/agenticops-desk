@@ -1,5 +1,5 @@
 import { createCipheriv, pbkdf2Sync, randomBytes, randomInt } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { RemoteHost } from "./gitHosts";
 
@@ -11,6 +11,135 @@ export function openAiListsModel(body: unknown, model: string): boolean {
   const data = (body as { data?: unknown }).data;
   if (!Array.isArray(data)) return false;
   return data.some((row) => !!row && typeof row === "object" && (row as { id?: unknown }).id === model);
+}
+
+// A CLI that asks a question (a git login, a gcloud confirm, a pager, PowerShell's first-run notice)
+// reads a console this app does not own. Nothing answers, so the window sits there until the process
+// is killed. These make that question fail or skip instead of waiting. Git has done this since desk sync.
+// They belong on command-line tools only. A local app with its own window is started separately.
+export function cliPromptEnv(): Record<string, string> {
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_PAGER: "cat",
+    PAGER: "cat",
+    GCM_INTERACTIVE: "Never",
+    CLOUDSDK_CORE_DISABLE_PROMPTS: "1",
+    POWERSHELL_TELEMETRY_OPTOUT: "1",
+    POWERSHELL_UPDATECHECK: "Off",
+  };
+}
+
+// IMAGE_SUBSYSTEM_WINDOWS_GUI. A console program is 3 and stays a CLI.
+const WINDOWS_GUI = 2;
+
+// True when this file is a Windows app with its own window, not a console program.
+export function isGuiImage(buf: Uint8Array): boolean {
+  if (buf.length < 0x40 || buf[0] !== 0x4d || buf[1] !== 0x5a) return false;
+  const pe = buf[0x3c]! | (buf[0x3d]! << 8) | (buf[0x3e]! << 16) | (buf[0x3f]! << 24);
+  if (pe < 0 || pe + 94 > buf.length) return false;
+  if (buf[pe] !== 0x50 || buf[pe + 1] !== 0x45 || buf[pe + 2] !== 0 || buf[pe + 3] !== 0) return false;
+  const magic = buf[pe + 24]! | (buf[pe + 25]! << 8);
+  if (magic !== 0x10b && magic !== 0x20b) return false;
+  const subsystem = buf[pe + 24 + 68]! | (buf[pe + 24 + 69]! << 8);
+  return subsystem === WINDOWS_GUI;
+}
+
+// The program a one-line command starts, when that line is only a launch. A pipeline, a script, or
+// something already handed to Start-Process stays as written.
+export function parseSimpleLaunch(command: string): { exe: string; args: string[] } | null {
+  const text = command.trim();
+  if (!text || /[\n\r|;&<>]/.test(text)) return null;
+  if (/^(?:start|start-process)\b/i.test(text)) return null;
+  const body = text.replace(/^&\s+/, "");
+  if (!body || body.includes("&")) return null;
+  const tokens: string[] = [];
+  for (let i = 0; i < body.length; ) {
+    while (body[i] === " " || body[i] === "\t") i++;
+    if (i >= body.length) break;
+    const quote = body[i];
+    if (quote === '"' || quote === "'") {
+      const end = body.indexOf(quote, i + 1);
+      if (end < 0) return null;
+      tokens.push(body.slice(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    let j = i;
+    while (j < body.length && body[j] !== " " && body[j] !== "\t") j++;
+    tokens.push(body.slice(i, j));
+    i = j;
+  }
+  const exe = tokens[0];
+  if (!exe || /^[A-Za-z]+-[A-Za-z]+$/.test(exe)) return null;
+  return { exe, args: tokens.slice(1) };
+}
+
+function candidateNames(base: string): string[] {
+  if (path.extname(base) || process.platform !== "win32") return [base];
+  const exts = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  return [base, ...exts.map((ext) => base + ext)];
+}
+
+export function resolveExecutable(name: string): string | null {
+  const rooted = /[\\/]/.test(name) || /^[A-Za-z]:/.test(name);
+  const dirs = rooted ? [path.dirname(name)] : (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const bases = candidateNames(rooted ? path.basename(name) : name);
+  for (const dir of dirs) {
+    for (const base of bases) {
+      const full = path.join(dir, base);
+      if (existsSync(full)) return full;
+    }
+  }
+  return null;
+}
+
+function imageHead(file: string): Uint8Array | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(file, "r");
+    const buf = Buffer.alloc(4096);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return buf.subarray(0, n);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+}
+
+function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function cmdQuote(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+// Show the window and return at once. The shell must not sit there until the person closes it.
+export function detachGuiCommand(shell: "Bash" | "PowerShell", exe: string, args: string[]): string {
+  if (shell === "PowerShell") {
+    const list = args.length ? ` -ArgumentList ${args.map(psQuote).join(", ")}` : "";
+    return `Start-Process -FilePath ${psQuote(exe)} -WindowStyle Normal${list}`;
+  }
+  return `cmd //c start "" ${[exe, ...args].map(cmdQuote).join(" ")}`;
+}
+
+// A local app opened from a shell. Null when the command is a CLI, a script, or not Windows.
+export function commandDetachedForGui(shell: "Bash" | "PowerShell", command: string): string | null {
+  if (process.platform !== "win32") return null;
+  const launch = parseSimpleLaunch(command);
+  if (!launch) return null;
+  const file = resolveExecutable(launch.exe);
+  if (!file) return null;
+  const head = imageHead(file);
+  if (!head || !isGuiImage(head)) return null;
+  return detachGuiCommand(shell, file, launch.args);
 }
 
 // At most two threads, and always leave the app a core. More threads page the machine and the window stops answering.
@@ -121,9 +250,16 @@ export function llamaServerArgs(modelPath: string, alias: string, threads: numbe
   ];
 }
 
-// A result only ends the run when no background task can still wake the agent; older CLIs never report idle or tasks.
-export function turnIsOver(msg: { type?: unknown; subtype?: unknown; state?: unknown }, backgroundTasks: number): boolean {
-  if (msg.type === "result") return backgroundTasks === 0;
+// A result only ends the run when no background task can still wake the agent, and no message the user
+// just sent is waiting for the next turn. Older CLIs never report idle, tasks, or a queued count.
+export function turnIsOver(
+  msg: { type?: unknown; subtype?: unknown; state?: unknown; queued_turn_count?: unknown },
+  backgroundTasks: number,
+): boolean {
+  if (msg.type === "result") {
+    const queued = typeof msg.queued_turn_count === "number" ? msg.queued_turn_count : 0;
+    return backgroundTasks === 0 && queued === 0;
+  }
   return msg.type === "system" && msg.subtype === "session_state_changed" && msg.state === "idle";
 }
 

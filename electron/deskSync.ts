@@ -798,10 +798,10 @@ async function writeSnapshot(dir: string, projects: SyncProject[], chats: SyncCh
   await writeJsonAtomic(path.join(dir, "deleted.json"), Object.fromEntries(Object.entries(deleted).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
 }
 
-// A message commits as soon as it is entered. The short wait lets the chat row and its thread land in one commit.
-// Saves while a reply streams wait longer: each commit stores the whole thread again, so the repository would balloon.
-export const SYNC_WHILE_WORKING = 30_000;
-export function scheduleDeskSync(wait = 500) {
+// Chats are not committed as each message lands. Changes share one commit, at most this often.
+// Quit, startup, and Sync now still send immediately. A commit per message stored the whole thread again.
+export const SYNC_BATCH_MS = 3 * 60_000;
+export function scheduleDeskSync(wait = SYNC_BATCH_MS) {
   void config().then((url) => {
     if (!url) return;
     if (applying) {

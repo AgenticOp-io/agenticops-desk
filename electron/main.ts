@@ -111,7 +111,7 @@ import {
   refreshProjectRemotes,
   remoteOfPath,
   scheduleDeskSync,
-  SYNC_WHILE_WORKING,
+  SYNC_BATCH_MS,
   setCursorIntegration,
   setSyncUrl,
   createSyncRepo,
@@ -659,7 +659,7 @@ app.whenReady().then(async () => {
   }
   watchWorkspace();
   onLibraryFlush(() => {
-    if (!syncApplying()) scheduleDeskSync(SYNC_WHILE_WORKING);
+    if (!syncApplying()) scheduleDeskSync();
   });
   onNotificationClick(() => showWindow());
   createWindow();
@@ -670,7 +670,7 @@ app.whenReady().then(async () => {
   }
   setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
   void convertIfChosen().catch((err) => console.error("AgenticOps Desk could not convert from Cursor", err));
-  setInterval(() => void syncNow(), 3 * 60_000);
+  setInterval(() => void syncNow(), SYNC_BATCH_MS);
   setTimeout(() => void checkAndPatch(), 30_000);
   setInterval(() => void checkAndPatch(), 6 * 60 * 60_000);
   for (const run of pendingRuns()) resumePendingRun(win, run.chatId);
@@ -996,8 +996,8 @@ ipcMain.handle("cursor:chat", async (_e, slug: string, id: string) => {
 });
 ipcMain.handle("cursor:touch", (_e, chatId: string, projectPath?: string | null) => touchChat(chatId, projectPath));
 ipcMain.handle("cursor:upsert", (_e, chat: Parameters<typeof upsertChat>[0]) => upsertChat(chat));
-ipcMain.handle("thread:save", (_e, chatId: string, messages: unknown[], entered?: boolean) =>
-  saveThread(chatId, messages).then(() => scheduleDeskSync(entered ? undefined : SYNC_WHILE_WORKING)),
+ipcMain.handle("thread:save", (_e, chatId: string, messages: unknown[], _entered?: boolean) =>
+  saveThread(chatId, messages).then(() => scheduleDeskSync()),
 );
 ipcMain.handle("thread:load", (_e, chatId: string) => loadThread(chatId));
 ipcMain.handle(
