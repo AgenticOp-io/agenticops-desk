@@ -7,6 +7,7 @@ import { autoLive } from "./autoRoute";
 import { capsulesBrief } from "./capsules";
 import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setPlanAuthority, setToolServers } from "./claude";
 import { loadAgentSdk } from "./claudeBinary";
+import { fleetState, fleetSubmit } from "./fleet";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
 import { loadSettings } from "./settings";
@@ -285,6 +286,97 @@ export function initTeam(window: () => BrowserWindow | null) {
         },
       ),
       tool(
+        "submit_work",
+        "Submit work to either a local worker or a remote cloud agent. Local workers run here and appear in your sidebar; cloud agents run on remote machines and can handle bigger tasks. Asks you to pick, or use agent_type to skip the prompt.",
+        {
+          title: z.string().min(1).max(80).describe("Short title for this work"),
+          task: z.string().min(1).describe("The full task description. Cloud agents can't see your chat, so include everything needed."),
+          agent_type: z.enum(["local", "cloud"]).optional().describe("Pick 'local' for a worker in your sidebar, 'cloud' for a remote agent. Leave out to ask the user."),
+          cloud_agent_id: z.string().optional().describe("If agent_type is 'cloud', optionally specify which cloud agent to use by its id. Leave out to let any available agent take it."),
+          model: z.string().optional().describe(`Which model to use. Leave out for the default. Choose one of: ${menu}`),
+        },
+        async (args) => {
+          // Validate model if provided
+          if (args.model && !models.some((m) => m.value === args.model)) return fail(`Unknown model "${args.model}". Choose one of: ${menu}`);
+
+          // Determine if we should use local or cloud
+          let useCloud = args.agent_type === "cloud";
+          if (!args.agent_type) {
+            // Query available cloud agents to see if we have any
+            const f = await fleetState();
+            const available = f.agents.filter((a) => a.status === "approved" && a.online);
+            
+            if (!available.length) {
+              // No cloud agents, must use local
+              useCloud = false;
+            } else {
+              // Ask the user - return a formatted message describing the options
+              const cloudList = available.map((a) => `${a.id} (${a.name}, ${a.os})`).join(", ");
+              return ok(
+                `Available agents:\nLocal: Create a worker chat in this project (appears in sidebar).\n` +
+                `Cloud: Remote agent(s) available:\n${cloudList}\n\n` +
+                `Call submit_work again with agent_type set to "local" or "cloud". ` +
+                `If cloud, optionally set cloud_agent_id to pick a specific agent.`
+              );
+            }
+          }
+
+          if (useCloud) {
+            // Cloud agent path
+            const f = await fleetState();
+            const available = f.agents.filter((a) => a.status === "approved" && a.online);
+            
+            if (!available.length) return fail("No cloud agents are online. Try local workers instead.");
+            
+            // If a specific agent was requested, check it exists
+            if (args.cloud_agent_id) {
+              const requested = available.find((a) => a.id === args.cloud_agent_id);
+              if (!requested) return fail(`Cloud agent "${args.cloud_agent_id}" is not available. Available: ${available.map((a) => a.id).join(", ")}`);
+            }
+
+            // Submit the job to the cloud
+            const err = await fleetSubmit({
+              prompt: args.task,
+              model: args.model,
+              agentId: args.cloud_agent_id,
+            });
+            
+            if (err) return fail(`Cloud submission failed: ${err}`);
+            return ok(
+              `Submitted work to cloud agent${args.cloud_agent_id ? ` ${args.cloud_agent_id}` : ""}. ` +
+              `Check Settings > Cloud agents to monitor its progress.`
+            );
+          } else {
+            // Local worker path (similar to start_chat)
+            await prune();
+            const running = Object.keys(t.workers).filter((id) => mine(id) && busy(id)).length;
+            const limit = await maxRunning();
+            if (running >= limit) return fail(`${running} of your workers are still running and the limit is ${limit}. Call wait_for first.`);
+            
+            const me = await manager();
+            if (!me?.projectPath) return fail("This chat's project folder is not on this computer.");
+            
+            const model = args.model ?? me.model ?? "";
+            const id = randomUUID();
+            const made = await createWorktree(id, me.projectPath);
+            const where = typeof made === "string" ? `the project folder (no worktree: ${made})` : "its own worktree";
+            
+            t.workers[id] = managerId;
+            save();
+            runs.set(id, newRun());
+            
+            if (!post("team:start", { id, managerId, title: args.title, prompt: args.task, model })) {
+              runs.delete(id);
+              delete t.workers[id];
+              save();
+              return fail("The app window is closed.");
+            }
+            
+            return ok(`Started local worker ${id} ("${args.title}") on ${model || "the default model"} in ${where}. Call wait_for to get the result.`);
+          }
+        },
+      ),
+      tool(
         "close_worker",
         "Retire workers you are done with. A finished worker whose result you have already read is removed from your roster and its worktree is cleaned up; its chat history stays for review. Only returns after each worker is no longer running.",
         { chat_ids: z.array(z.string()).min(1).max(10) },
@@ -353,6 +445,26 @@ export function initTeam(window: () => BrowserWindow | null) {
               })
               .join("\n\n") +
               "\n\nIf a result is wrong, incomplete, or stuck, send_to_chat the same worker with a stronger model rather than starting over.",
+          );
+        },
+      ),
+      tool(
+        "check_cloud_jobs",
+        "Check the status of cloud jobs submitted via submit_work. Shows queued, running, and recently completed jobs.",
+        {},
+        async () => {
+          const f = await fleetState();
+          if (!f.jobs.length) return ok("No cloud jobs found.");
+          
+          const summary = f.jobs.slice(0, 20).map((j) => {
+            const statusIcon = j.status === "done" ? "✓" : j.status === "failed" ? "✗" : j.status === "running" ? "⟳" : "○";
+            const cost = j.costUsd ? ` · $${j.costUsd.toFixed(3)}` : "";
+            const agent = j.agent ? ` on ${j.agent}` : " (waiting for agent)";
+            return `${statusIcon} ${j.id.slice(0, 8)} · ${j.status} · ${j.prompt.slice(0, 60)}${cost}${agent}`;
+          }).join("\n");
+          
+          return ok(
+            `Recent cloud jobs:\n${summary}\n\nCheck Settings > Cloud agents for full details and results.`
           );
         },
       ),

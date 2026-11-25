@@ -10,6 +10,7 @@ import "./mobile.css";
 import { Conversation } from "../src/Conversation";
 import jsQR from "jsqr";
 import { credential, localModel, route, runAgent, type AgentMsg, type Route } from "./agent";
+import { CloudView } from "./cloud";
 import {
   CLIENT_ID,
   listFiles,
@@ -36,7 +37,7 @@ import {
 // Messages typed here are run by the desktop on its next sync (every few minutes) and their replies come back the same way.
 
 type Screen = { kind: "projects" } | { kind: "project"; repo: string } | { kind: "chat"; repo: string; chatId: string } | { kind: "new"; repo: string } | { kind: "agent"; repo: string } | { kind: "files"; repo: string };
-type Tab = "inbox" | "projects" | "agent" | "settings";
+type Tab = "inbox" | "projects" | "agent" | "cloud" | "settings";
 type Pending = { id: string; repo: string; chat?: string; title?: string; text: string; at: number };
 type Out = { chat?: string; title?: string; text?: string; image?: string; approve?: { request: string; allow: boolean }; stop?: boolean };
 
@@ -703,8 +704,9 @@ function App() {
   const list = Object.values(projects).sort((a, b) => (b.chats[0] ? Math.max(...b.chats.map((c) => c.updatedAt)) : 0) - (a.chats[0] ? Math.max(...a.chats.map((c) => c.updatedAt)) : 0));
   return (
     <div className="m-screen">
-      <Header title={{ inbox: "Inbox", projects: "Projects", agent: "Agent", settings: "Settings" }[tab]}>{reload}</Header>
+      <Header title={{ inbox: "Inbox", projects: "Projects", agent: "Agent", cloud: "Cloud agents", settings: "Settings" }[tab]}>{reload}</Header>
       {errorLine}
+      {tab === "cloud" && <CloudView />}
       {tab === "inbox" && <InboxView projects={projects} open={(repo, chatId) => go({ kind: "chat", repo, chatId })} act={act} />}
       {tab === "settings" && <SettingsView projects={projects} onSignOut={signOut} />}
       {tab === "agent" && (
@@ -738,7 +740,7 @@ function App() {
         )}
       </main>}
       <nav className="m-tabs">
-        {(["inbox", "projects", "agent", "settings"] as Tab[]).map((t) => (
+        {(["inbox", "projects", "agent", "cloud", "settings"] as Tab[]).map((t) => (
           <button key={t} className={t === tab ? "on" : ""} onClick={() => setTab(t)}>
             {t[0].toUpperCase() + t.slice(1)}
             {t === "inbox" && badge > 0 ? ` (${badge})` : ""}

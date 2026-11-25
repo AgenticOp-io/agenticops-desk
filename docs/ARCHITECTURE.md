@@ -14,8 +14,13 @@ Main process (electron/)          state, secrets, git, agent runs
    ├─ Claude Code engine ── agent SDK ── Claude Code binary
    ├─ Direct engine ─────── provider APIs (Claude API, OpenAI-compatible, Ollama)
    ├─ git and gh ────────── project repos, sync repository
+   ├─ Fleet server (fleet.ts) ──── [Enterprise] superadmin HTTP server for cloud agents
    └─ %APPDATA%\AgenticOps Desk   all app data
 ```
+
+**Local-first by default.** The desk runs locally on your machine. Claude Code and git tools work in your project folder. You work in this window; nothing happens in the cloud without you asking.
+
+**Enterprise: cloud agents (opt-in).** When enabled, this desk becomes a superadmin server where remote agents (Linux, Windows, macOS) connect, receive jobs, and use this desk's Claude API key. Agents run only AI jobs—they take prompts, run them via Claude, and send results back. The cloud has no human UI: you work in the desk window, and cloud agents just execute. The cloud system is off by default and requires explicit setup.
 
 Nothing is written into a project folder by the app itself. Chats, transcripts and briefings stay in app data or the prompt.
 
@@ -59,6 +64,7 @@ Nothing is written into a project folder by the app itself. Chats, transcripts a
 | `watch.ts`, `provenance.ts` | Log watches, and which chat changed which file |
 | `patcher.ts`, `tarMember.ts` | Signed code patches, and the full setup checked against the signed manifest |
 | `pureFeatures.ts` | Logic with no Electron dependency, so plain Node can unit test it. `staysInside` reads the disk to follow links |
+| `fleet.ts`, `fleetCore.ts` | **Cloud agents (enterprise feature, off by default).** This desk is the superadmin: it runs an HTTPS server (default port 7377) where remote agents (`agent/agentd.mjs` on Linux, Windows, or macOS) pair using a secure code and receive jobs. Agents run only AI jobs—they take prompts from the desk, run them via Claude API, and send results back. The cloud has no human UI; you work in the desk window. Users can pair phones or browsers by redeeming one-time codes to submit jobs to the cloud. Every agent model call uses this desk's Claude API key and is metered per job. `fleetCore.ts` is the testable state logic (no Electron). `agentd.mjs` is bundled into `main.js` with `?raw` and served at `/agent.mjs` |
 
 The renderer's main files: `App.tsx` (sidebar, chat pane, settings), `Composer.tsx`, `Conversation.tsx`, `Dock.tsx`, `Canvas.tsx` (the Canvas popup, this same page opened with `?canvas=<chatId>`; shows what the agent's `show_canvas` tool sent, sandboxed; the document lives in `canvas/<chatId>.json` through `electron/canvas.ts` and syncs with the chat in `deskSync.ts`; PDF and PNG via `canvas:export` in `main.ts`), `ActivityLog.tsx`, `CodePane.tsx`, `Windowed.tsx` (virtualized sidebar), `SyncSettings.tsx`, `SavedLogins.tsx`, `PrivacySettings.tsx`, `Plugins.tsx`, `Help.tsx`.
 
@@ -94,6 +100,7 @@ All under `%APPDATA%\AgenticOps Desk`, or `AGENTICOPS_DESK_DATA` when set.
 | `worktrees\`, `worktrees.json` | Chats' own worktrees, and which chat has which | No |
 | `mcp-approvals.json` | Project MCP servers the user allowed, by folder and exact entry | No |
 | `tools-import.json` | When Claude Code and VS Code chats were last imported | No |
+| `fleet.json` | Cloud agents: superadmin ID, paired agents, users, the last 2000 jobs. Tokens only as sha256 hashes | No |
 
 Project memory lives in Claude Code's folder: `~/.claude/projects/<encoded-path>/memory`. `memory.ts` also regenerates `chats-index.md` and `chats-train.jsonl` there from the newest 300 chats (`writeChatIndex`). A chat's memory addendum is built once and kept (`frozenMemory` in `claude.ts`) until the cache-expiry note at `RESUME_TTL_MS`, so it doesn't change the cached prompt prefix mid-chat. `settings.maxWorkers` (1–20) caps a manager's running workers (`team.ts`). Project folders on disk are per computer.
 

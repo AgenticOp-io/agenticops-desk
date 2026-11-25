@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { initTeam, setManager, setPlan, teamView } from "./team";
 import { initOpsTools } from "./opsTools";
+import { fleetAddUser, fleetApprove, fleetCancel, fleetExportCsv, fleetRemoveAgent, fleetReport, fleetSetup, fleetState, fleetSubmit, fleetUpdateUser, startFleetOnLaunch } from "./fleet";
 import { writeTextAtomicSync } from "./jsonStore";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
@@ -567,6 +568,7 @@ app.on("web-contents-created", (_e, contents) => {
 });
 
 app.whenReady().then(async () => {
+  void startFleetOnLaunch().catch((e) => console.error("cloud agents server:", e));
   onChatEvent((e) => noteJobEvent(e.chatId, e.kind, e.running));
   // A message from the phone runs like a manager's order to a worker: the window sends it in that chat.
   setApprovalSource(phoneApprovals);
@@ -1487,6 +1489,16 @@ ipcMain.handle("sync:create", () => createSyncRepo());
 ipcMain.handle("sync:cursor", (_e, mode: string) => setCursorIntegration(String(mode ?? "")));
 ipcMain.handle("sync:now", () => syncNow());
 ipcMain.handle("sync:phone-qr", () => phonePairQr());
+ipcMain.handle("fleet:state", () => fleetState());
+ipcMain.handle("fleet:setup", (_e, patch) => fleetSetup(patch ?? {}));
+ipcMain.handle("fleet:approve", (_e, code: string) => fleetApprove(String(code ?? "")));
+ipcMain.handle("fleet:remove-agent", (_e, id: string) => fleetRemoveAgent(String(id)));
+ipcMain.handle("fleet:add-user", (_e, name: string, max: number, agentIds: string[]) => fleetAddUser(String(name ?? ""), Number(max), agentIds ?? []));
+ipcMain.handle("fleet:update-user", (_e, id: string, patch) => fleetUpdateUser(String(id), patch ?? {}));
+ipcMain.handle("fleet:submit", (_e, input) => fleetSubmit(input ?? {}));
+ipcMain.handle("fleet:cancel", (_e, id: string) => fleetCancel(String(id)));
+ipcMain.handle("fleet:report", (_e, month: string) => fleetReport(String(month)));
+ipcMain.handle("fleet:export", (_e, month: string) => fleetExportCsv(String(month)));
 ipcMain.handle("sync:phone-repos", () => phoneRepoList());
 ipcMain.handle("sync:phone-repo-set", (_e, repo: string, action: "on" | "off" | "add" | "remove") =>
   setPhoneRepo(String(repo), ["on", "off", "add", "remove"].includes(action) ? action : "off"));

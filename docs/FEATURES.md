@@ -30,6 +30,7 @@ Stuck? **F1** opens Help, and **Ctrl+Shift+P** searches every action.
 - [Files and the editor](#files-and-the-editor)
 - [Around the chat](#around-the-chat)
 - [Manager chats](#manager-chats)
+- [Cloud agents](#cloud-agents)
 - [Canvas](#canvas)
 - [Activity log and recovery](#activity-log-and-recovery)
 - [Memory](#memory)
@@ -355,6 +356,20 @@ Right-click a chat and choose **Make manager**. A manager can start worker chats
 **Models.** The manager picks each worker's model to fit its task, from every AI that is ready in your model menu: the default engine's models and each Direct provider you've added a key for. Cheap, fast models get simple mechanical work, mid models ordinary coding, and the strongest hard design and debugging. With a follow-up it can move a finished worker to another model and keep its conversation: up a tier when the result is wrong or stuck, down for easy leftovers, or to another provider when one hits a usage limit. The worker's model menu shows the choice, and you can change it.
 
 **Watching.** The chat header shows **Manager · n running** on a manager and **Worker of …** on a worker, which opens its manager. Each running worker has a bubble next to the manager label: click it to watch that worker live in its own window, with its commands, their output and its replies as they arrive. Click **Manager · n running** to pick any of its workers, finished ones too. **Open chat** in that window opens the worker in the main window so you can reply.
+
+## Cloud agents
+
+Settings → **Cloud agents** makes this desk the superadmin for agents that run on other machines (Windows, macOS or Linux; not Android). Only this desk can pair agents, make user codes, and see the reports.
+
+**Server.** Turn on **Accept cloud agents and users** and pick a port (7377 by default). It answers HTTPS only, never plain HTTP, with a certificate the desk makes for itself the first time. Agents trust only that certificate: the download command pins it, and the script it downloads carries it. A phone or browser has to trust it too: open `/desk.crt` at the desk's address, check its SHA-256 fingerprint against the one on the page, and install it as a CA certificate (on Android: Settings → Security → Install a certificate). The certificate names the desk's addresses at the time it was made. Windows may ask whether to let the app through the firewall.
+
+**Pairing an agent.** On the other machine, with Node 18 or newer installed, run the command shown on the page. It downloads `agentd.mjs` from this desk and starts it. The agent prints a code like `ABCD-EFGH`. Type that code into **Pair**. The page sets how many agents this desk will pair. **Remove** stops an agent; it must pair again with a new code. An agent keeps its sign-in in `~/.agenticops-agent` on its machine.
+
+**What an agent does.** It takes one job at a time. If the job names a git repository, the agent clones it, works on a new `agent/<job>` branch, and pushes that branch when it finishes, using that machine's own git sign-in. It can list, read and write files and run commands, all inside its job folder. Every model call goes through this desk using its Claude API key, so the key never leaves this computer.
+
+**Users.** **Make code** creates a one-time access code for a person. They enter it with this desk's address in the phone app's **Cloud** tab, or open the address in any browser. **Agents at once** is how many agents they may keep busy. When more than one agent is paired, you can tick which agents each user may use. **New code** signs out their current device. **Revoke** signs them out and stops their jobs.
+
+**Jobs and reports.** You can start jobs from the page too. Each job shows its log, result and cost. **Report** totals jobs, failures, tokens, cost and minutes per user and per agent for a month. **Export CSV** saves the report as a CSV file.
 
 ## Canvas
 

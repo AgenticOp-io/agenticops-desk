@@ -599,7 +599,7 @@ const PRICES: Record<string, Price> = {
 // A run never reports $0 just because its model is missing from the table; the cap and meter stay active.
 const UNKNOWN_PRICE: Price = { input: 1, output: 5, read: 0.1 };
 
-function priceFor(model: string): Price {
+export function priceFor(model: string): Price {
   return PRICES[model] ?? UNKNOWN_PRICE;
 }
 

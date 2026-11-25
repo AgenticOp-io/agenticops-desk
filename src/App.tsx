@@ -22,6 +22,7 @@ import { CursorFolders } from "./CursorFolders";
 import { ProjectCleanup } from "./ProjectCleanup";
 import { isStale, olderChats, projectForChat, sidebarHidesChat } from "./sideChats";
 import { SyncSettings } from "./SyncSettings";
+import { FleetSettings } from "./FleetSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { UsageSettings } from "./UsageSettings";
 import { ActivityLog } from "./ActivityLog";
@@ -3045,6 +3046,8 @@ export function App() {
 
                 {settingsSection === "usage" && <UsageSettings />}
 
+                {settingsSection === "fleet" && <FleetSettings />}
+
                 {settingsSection === "logs" && (
                   <>
                     <div className="settings-label">Activity log</div>
@@ -3165,6 +3168,10 @@ export function App() {
                 <button className="settings-entry" onClick={() => setSettingsSection("usage")}>
                   <strong>Usage</strong>
                   <span>Plan limits, and tokens per engine, provider and model</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("fleet")}>
+                  <strong>Cloud agents</strong>
+                  <span>Pair remote agents, make user codes, set limits, reports</span>
                 </button>
                 <button className="settings-entry" onClick={() => setSettingsSection("logs")}>
                   <strong>Activity log</strong>

@@ -714,15 +714,12 @@ function spawnHidden(cmd: string, args: string[], cwd: string, env: NodeJS.Proce
 }
 
 // child.kill() only ends the direct child; with a cmd.exe or node wrapper the CLI would keep running.
+// Not execFileSync: a big tree (a test app, servers the agent started) takes seconds to end, and Windows closed the frozen window as hung.
 function killTree(child: ChildProcess) {
   if (!child.pid || child.exitCode !== null) return;
   if (process.platform === "win32") {
-    try {
-      execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      return;
-    } catch {
-      /* fall through */
-    }
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => child.kill());
+    return;
   }
   child.kill();
 }

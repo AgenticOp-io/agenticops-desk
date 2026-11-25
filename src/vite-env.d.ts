@@ -363,6 +363,16 @@ declare global {
       setPhoneRepo: (repo: string, action: "on" | "off" | "add" | "remove") => Promise<Array<{ repo: string; on: boolean; added: boolean }>>;
       phonePairQr: () => Promise<{ ok: boolean; image?: string; login?: string; code?: string; error?: string }>;
       findLocalRepos: () => Promise<{ ok: boolean; output: string }>;
+      fleetState: () => ReturnType<typeof import("../electron/fleet").fleetState>;
+      fleetSetup: (patch: { on?: boolean; port?: number; maxAgents?: number }) => ReturnType<typeof import("../electron/fleet").fleetState>;
+      fleetApprove: (code: string) => Promise<string | null>;
+      fleetRemoveAgent: (id: string) => Promise<void>;
+      fleetAddUser: (name: string, maxAgents: number, agentIds: string[]) => Promise<string>;
+      fleetUpdateUser: (id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean }) => Promise<void>;
+      fleetSubmit: (input: { prompt: string; repo?: string; agentId?: string; model?: string }) => Promise<string | null>;
+      fleetCancel: (id: string) => Promise<void>;
+      fleetReport: (month: string) => Promise<import("../electron/fleetCore").ReportRow[]>;
+      fleetExport: (month: string) => Promise<string | null>;
       storageStatus: () => Promise<{ mode: string; cursorChats: number }>;
       setChatStorage: (mode: string) => Promise<{ ok: boolean; note: string }>;
       reviewCursorRemoval: () => Promise<{
