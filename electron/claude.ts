@@ -1635,12 +1635,19 @@ function gitBashPath(): string | undefined {
 // The Microsoft Store execution alias is a 0-byte stub. Claude's PowerShell parser launches
 // it with a long EncodedCommand and Windows answers "The command line is too long."
 // The real pwsh.exe inside WindowsApps accepts that command line.
+// Cached: it ran a blocking fsutil on every terminal open and every run.
+let storePwsh: { value: string | undefined } | null = null;
 export function realStorePwsh(): string | undefined {
+  storePwsh ??= { value: readStorePwsh() };
+  return storePwsh.value;
+}
+
+function readStorePwsh(): string | undefined {
   const alias = path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe");
   if (!existsSync(alias)) return undefined;
   let out = "";
   try {
-    out = execFileSync("fsutil", ["reparsepoint", "query", alias], { encoding: "utf8", windowsHide: true });
+    out = execFileSync("fsutil", ["reparsepoint", "query", alias], { encoding: "utf8", windowsHide: true, timeout: 3_000 });
   } catch {
     return undefined;
   }
@@ -2239,7 +2246,7 @@ export function runClaude(opts: RunOptions) {
         outcome: failed ? "failed" : "ok",
         note: failed ? failed.slice(0, 240) : undefined,
       });
-      if (!opts.reviewRound && !opts.resume) noteLearned(chatId, opts.prompt, opts.model || session.modelName || "", session.spentUsd ?? 0);
+      if (!opts.reviewRound && !opts.resume) noteLearned(chatId, opts.prompt, opts.model || session.modelName || "", session.spentUsd ?? 0, !failed);
       if (!failed && !session.stopping) void reviewRun(opts, session, cwd).catch(() => {});
     }
   })();

@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import { affinityMask, modelBudget, parseProcessTable, pythonPidsInTree, shouldStopForMemory, type ModelBudget, type ResourceSample } from "./pureFeatures";
 
@@ -91,25 +91,14 @@ export function releasePythons() {
 }
 
 // End Python this app opened, so a frozen window or a quit is not left waiting on it.
+// Never synchronous: this runs from the window's "unresponsive" handler, and a blocking PowerShell scan (seconds on ARM) froze the main process too.
 export function stopPythons() {
   if (process.platform !== "win32") return;
-  try {
-    const text = execFileSync(winShell(), ["-NoProfile", "-NonInteractive", "-Command", PROCESS_LIST], {
-      windowsHide: true,
-      timeout: 8_000,
-      encoding: "utf8",
-      maxBuffer: 4_000_000,
-    });
+  void readProcessTable().then((text) => {
     for (const pid of pythonPidsInTree(parseProcessTable(text), process.pid)) {
-      try {
-        execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      } catch {
-        // Already gone.
-      }
+      execFile("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true }, () => {});
     }
-  } catch {
-    // Quitting must not fail because the process list could not be read.
-  }
+  });
 }
 
 export function watchPythons() {

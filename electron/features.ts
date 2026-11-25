@@ -318,9 +318,18 @@ export function openShell(cwd: string, onData: (chunk: string) => void): { id: s
     detached: process.platform !== "win32",
   });
   const entry: Shell = { child, backlog: "", onData, usedAt: Date.now() };
+  // One message per 50 ms, not one per chunk: a chatty command sent thousands a second and froze the window.
+  let pending = "";
+  let flush: ReturnType<typeof setTimeout> | null = null;
   const push = (text: string) => {
     entry.backlog = (entry.backlog + text).slice(-BACKLOG);
-    entry.onData(text);
+    pending = (pending + text).slice(-BACKLOG);
+    flush ??= setTimeout(() => {
+      flush = null;
+      const out = pending;
+      pending = "";
+      entry.onData(out);
+    }, 50);
   };
   child.stdout?.on("data", (buf: Buffer) => push(buf.toString("utf8")));
   child.stderr?.on("data", (buf: Buffer) => push(buf.toString("utf8")));
@@ -330,7 +339,8 @@ export function openShell(cwd: string, onData: (chunk: string) => void): { id: s
     if (shells.get(id) === entry) shells.delete(id);
   });
   shells.set(id, entry);
-  push(`Started ${path.basename(exe)} in ${cwd}\n`);
+  // Backlog only: the tab gets it with the id, and a batched send would arrive after and print it twice.
+  entry.backlog = `Started ${path.basename(exe)} in ${cwd}\n`;
   const extra = [...shells.entries()].sort((a, b) => a[1].usedAt - b[1].usedAt).slice(0, Math.max(0, shells.size - MAX_SHELLS));
   for (const [oldId] of extra) closeShell(oldId);
   return { id, backlog: entry.backlog };

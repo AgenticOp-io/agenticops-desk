@@ -1041,7 +1041,7 @@ export function runDirect(opts: {
       pruneChanges(session);
       sendChanges(win, chatId, session);
       if (failed) send(win, { kind: "error", text: failed, chatId, running: false });
-      noteLearned(chatId, opts.prompt, `direct:${opts.provider}:${opts.model}`, session.spentUsd ?? 0);
+      noteLearned(chatId, opts.prompt, `direct:${opts.provider}:${opts.model}`, session.spentUsd ?? 0, !failed && !stopped);
       send(win, { kind: "done", running: false, chatId, text: stopped || failed ? "Stopped." : "Done." });
     }
   })();

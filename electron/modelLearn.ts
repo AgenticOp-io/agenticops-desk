@@ -1,6 +1,6 @@
 import path from "node:path";
 import { app } from "electron";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { generateLocally } from "./localModel";
 import { privacyMode } from "./privacy";
@@ -86,7 +86,11 @@ export async function chooseLearned(chatId: string, prompt: string, requested: s
   const asked = requested.trim();
   const override = Boolean(row?.assigned) && asked !== "" && asked !== "default" && asked !== "auto" && asked !== row.assigned;
   let lesson = row ?? blank();
-  if (row?.assigned) lesson = applyVerdict(lesson, lessonVerdict(lesson, prompt, override ? asked : lesson.assigned));
+  if (row?.assigned) {
+    const verdict = lessonVerdict(lesson, prompt, override ? asked : lesson.assigned);
+    logRun({ chatId, verdict, of: lesson.assigned });
+    lesson = applyVerdict(lesson, verdict);
+  }
   let tier = nextTier(lesson);
   if (!override) {
     const heard = await askTier(lesson, prompt);
@@ -98,8 +102,18 @@ export async function chooseLearned(chatId: string, prompt: string, requested: s
   return { model, label: tierLabel(model) };
 }
 
+// One line per run and per verdict, for measuring which work a local model could take (see scripts/eval).
+function logRun(row: Record<string, unknown>) {
+  try {
+    appendFileSync(path.join(app.getPath("userData"), "runs.jsonl"), JSON.stringify({ at: Date.now(), ...row }) + "\n");
+  } catch {
+    /* the log is optional */
+  }
+}
+
 // After a run: what it cost, and the prompt a retry would repeat.
-export function noteLearned(chatId: string, prompt: string, model: string, costUsd: number) {
+export function noteLearned(chatId: string, prompt: string, model: string, costUsd: number, ok = true) {
+  logRun({ chatId, model, costUsd, ok, prompt: prompt.trim().slice(0, 300) });
   const all = load();
   const row = all[chatId] ?? blank();
   all[chatId] = {
