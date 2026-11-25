@@ -44,9 +44,13 @@ gguf)
   echo "gguf pid $!, log ~/train/gguf.log"
   ;;
 gguf-run)
-  . venv/bin/activate
+  # Own venv: the converter pins an old transformers and a CPU torch, which would break the training venv.
+  [ -d gguf-venv ] || python3 -m venv gguf-venv
+  . gguf-venv/bin/activate
   [ -d llama.cpp ] || git clone -q --depth 1 https://github.com/ggml-org/llama.cpp
   pip install -q -r llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
+  # Training leaves the tokenizer unchanged; the base's files are readable by the converter's older transformers.
+  cp base/tokenizer.json base/tokenizer_config.json base/vocab.json base/merges.txt merged/
   python llama.cpp/convert_hf_to_gguf.py merged --outtype q8_0 --outfile desk-coder.gguf
   printf 'FROM ./desk-coder.gguf\n' > Modelfile
   ollama create desk-coder -f Modelfile
