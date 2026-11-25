@@ -835,6 +835,7 @@ body.resizing iframe, body.resizing .editor-body { pointer-events: none; }
   font-size: 12px;
 }
 .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.settings-hint.error { color: var(--danger); white-space: pre-wrap; }
 .btn.danger { background: transparent; color: var(--danger); }
 .grow { flex: 1; }
 .hint { font-size: 11px; color: var(--muted); }

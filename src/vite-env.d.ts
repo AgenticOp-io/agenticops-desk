@@ -363,6 +363,11 @@ declare global {
       setPhoneRepo: (repo: string, action: "on" | "off" | "add" | "remove") => Promise<Array<{ repo: string; on: boolean; added: boolean }>>;
       phonePairQr: () => Promise<{ ok: boolean; image?: string; login?: string; code?: string; error?: string }>;
       findLocalRepos: () => Promise<{ ok: boolean; output: string }>;
+      trainState: () => Promise<import("../electron/trainModel").TrainState>;
+      trainSetup: (patch: { host?: string; leaveOut?: string[] }) => Promise<import("../electron/trainModel").TrainState>;
+      trainPreview: () => Promise<import("../electron/trainModel").TrainState>;
+      trainStart: () => Promise<import("../electron/trainModel").TrainState>;
+      trainCheck: () => Promise<import("../electron/trainModel").TrainState>;
       fleetState: () => ReturnType<typeof import("../electron/fleet").fleetState>;
       fleetSetup: (patch: { on?: boolean; port?: number; maxAgents?: number }) => ReturnType<typeof import("../electron/fleet").fleetState>;
       fleetApprove: (code: string) => Promise<string | null>;

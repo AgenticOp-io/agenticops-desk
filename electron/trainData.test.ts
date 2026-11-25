@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chunk, fold, scrub } from "./chats.mjs";
+import { chunk, fold, leftOut, scrub } from "./trainData.ts";
 
 test("scrub masks keys and keeps the label", () => {
   const key = "sk-ant-" + "x".repeat(30);
@@ -22,7 +22,15 @@ test("fold merges same-role turns, strips harness tags, starts on a user turn", 
 });
 
 test("chunk splits at exchanges and drops ones too long", () => {
-  const ex = (n) => [{ role: "user", content: "u".repeat(n) }, { role: "assistant", content: "a" }];
+  const ex = (n: number) => [{ role: "user", content: "u".repeat(n) }, { role: "assistant", content: "a" }];
   const pieces = chunk([...ex(5), ...ex(5), ...ex(50), ...ex(5)], 12);
   assert.deepEqual(pieces.map((p) => p.length), [4, 2]);
+});
+
+test("leftOut matches words in the path or any message, ignoring case", () => {
+  const msgs = [{ role: "user", content: "deploy the ACME portal" }];
+  assert.equal(leftOut("a/b.jsonl", msgs, ["acme"]), true);
+  assert.equal(leftOut("C:/work/Acme/x.jsonl", [], [" acme "]), true);
+  assert.equal(leftOut("a/b.jsonl", msgs, ["", "  "]), false);
+  assert.equal(leftOut("a/b.jsonl", msgs, []), false);
 });

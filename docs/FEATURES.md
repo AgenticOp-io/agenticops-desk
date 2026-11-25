@@ -135,6 +135,10 @@ If the local model is off or the summary isn't ready, the message carries a shor
 
 The local model is off until you install it: nothing downloads or runs by default. **Settings → AI models → Summaries → Set up local model** (or the box on the installer's last page, unchecked by default) downloads llama.cpp's small server and a 7B coding model (about 4.5 GB, the sizes are checked as they download), starts it on this computer, and turns Summaries on. No Ollama install is needed. Loading runs at low priority so the window keeps responding, and the server stops when you quit. Progress shows in Settings; if it fails, for example with no network, press the button again.
 
+### Your own model
+
+**Settings → Your own model** trains an open coding model (Qwen2.5-Coder 7B) on your own chats: the requests you made and the agent's replies, from this app, the agent's transcripts and Cursor. Only conversation text is used: tool output is dropped, and passwords, keys and tokens are masked. Words under **Leave out chats that mention**, such as a client's name, skip every chat whose folder or text contains them. **Count examples** reads your chats on this computer and shows how many examples they make, without sending anything. **Train** sends the examples over SSH to the GPU machine you name, an NVIDIA GPU with 24 GB or more plus Python 3 and Ollama, such as your Cloud GPU. On that machine it installs the training tools, fine-tunes the model, and loads the result into Ollama as `desk-coder`, which then appears under Cloud GPU in the model menu. That takes about two hours for 2,000 examples on one L4. If the machine stops partway, for example a spot VM being preempted, press **Train** again to resume with the same examples. Once a run is done, **Train** starts a new one on your latest chats. **Check progress** shows the current step. Training is unavailable in Local only mode, because it sends your chats off this computer.
+
 ### Working in a chat
 
 - A chat opens at its last message. If you scroll up, it stays where you are until you scroll back to the end.

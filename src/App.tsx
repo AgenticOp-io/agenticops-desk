@@ -16,6 +16,7 @@ import { Help } from "./Help";
 import { Briefing, Dashboard, Inbox, WatchChips, type DashRow } from "./Extras";
 import { AutoSettings, PluginsSettings } from "./Plugins";
 import { PrivacySettings } from "./PrivacySettings";
+import { TrainSettings } from "./TrainSettings";
 import { ChatStorage } from "./ChatStorage";
 import { SavedLogins } from "./SavedLogins";
 import { CursorFolders } from "./CursorFolders";
@@ -3048,6 +3049,8 @@ export function App() {
 
                 {settingsSection === "fleet" && <FleetSettings />}
 
+                {settingsSection === "train" && <TrainSettings />}
+
                 {settingsSection === "logs" && (
                   <>
                     <div className="settings-label">Activity log</div>
@@ -3168,6 +3171,10 @@ export function App() {
                 <button className="settings-entry" onClick={() => setSettingsSection("usage")}>
                   <strong>Usage</strong>
                   <span>Plan limits, and tokens per engine, provider and model</span>
+                </button>
+                <button className="settings-entry" onClick={() => setSettingsSection("train")}>
+                  <strong>Your own model</strong>
+                  <span>Train a model on your chats, on your GPU machine</span>
                 </button>
                 <button className="settings-entry" onClick={() => setSettingsSection("fleet")}>
                   <strong>Cloud agents</strong>

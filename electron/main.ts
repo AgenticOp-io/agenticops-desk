@@ -92,6 +92,7 @@ import {
   upsertChat,
 } from "./library";
 import { ensureClaudeBinary } from "./claudeBinary";
+import { trainCheck, trainPreview, trainSetup, trainStart, trainState } from "./trainModel";
 import { localModelStatus, pendingSetupFile, relievePressure, setupLocalModel, type LocalModelStatus } from "./localModel";
 import { stopPythons, watchPythons } from "./resourceGuard";
 import { carryProjectMemory, memoryDirs } from "./memory";
@@ -1489,6 +1490,11 @@ ipcMain.handle("sync:create", () => createSyncRepo());
 ipcMain.handle("sync:cursor", (_e, mode: string) => setCursorIntegration(String(mode ?? "")));
 ipcMain.handle("sync:now", () => syncNow());
 ipcMain.handle("sync:phone-qr", () => phonePairQr());
+ipcMain.handle("train:state", () => trainState());
+ipcMain.handle("train:setup", (_e, patch) => trainSetup(patch ?? {}));
+ipcMain.handle("train:preview", () => trainPreview());
+ipcMain.handle("train:start", () => trainStart());
+ipcMain.handle("train:check", () => trainCheck());
 ipcMain.handle("fleet:state", () => fleetState());
 ipcMain.handle("fleet:setup", (_e, patch) => fleetSetup(patch ?? {}));
 ipcMain.handle("fleet:approve", (_e, code: string) => fleetApprove(String(code ?? "")));
