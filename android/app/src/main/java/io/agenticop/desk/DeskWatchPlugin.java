@@ -40,6 +40,15 @@ public class DeskWatchPlugin extends Plugin {
         call.resolve();
     }
 
+    // External links go to the system browser; navigating the WebView would replace the app with a web page.
+    @PluginMethod
+    public void open(PluginCall call) {
+        String url = call.getString("url", "");
+        if (!url.startsWith("https://")) { call.reject("https only"); return; }
+        getActivity().startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+        call.resolve();
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
         getContext().getSharedPreferences(DeskWatchWorker.PREFS, Context.MODE_PRIVATE).edit().clear().apply();

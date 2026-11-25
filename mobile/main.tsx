@@ -35,7 +35,7 @@ import {
 } from "./github";
 
 // Native alerts while the app is closed (android/.../DeskWatchPlugin.java); the WebView has no Notification API.
-const DeskWatch = registerPlugin<{ setup(o: { token: string; repos: string }): Promise<void>; stop(): Promise<void>; ask(): Promise<void>; status(): Promise<{ enabled: boolean }> }>("DeskWatch");
+const DeskWatch = registerPlugin<{ setup(o: { token: string; repos: string }): Promise<void>; stop(): Promise<void>; ask(): Promise<void>; open(o: { url: string }): Promise<void>; status(): Promise<{ enabled: boolean }> }>("DeskWatch");
 const native = Capacitor.isNativePlatform();
 
 // The phone side of AgenticOps Remote: the same projects and chats as the desk, read from and sent through GitHub.
