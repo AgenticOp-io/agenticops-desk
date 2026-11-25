@@ -528,10 +528,11 @@ export function askPermission(
   const parentWs = managerWorkspace(chatId);
   if (gate.ask && (gate.kind === "trust" || gate.kind === "risk") && parentWs && !permissionGate(parentWs, toolName, input).ask) gate = { ask: false };
   // Saved logins still ask: every use goes through approveLogins.
-  if (gate.ask && gate.kind !== "login" && underPlan(chatId)) {
+  // A plan waives folder trust only. Risky (destructive) commands, saved logins and plan approvals still ask.
+  if (gate.ask && underPlan(chatId)) {
     if (toolName === "AskUserQuestion")
       return Promise.resolve({ behavior: "deny", message: "No one will answer: you are the authority on this plan. Decide yourself, following the plan, and continue." });
-    gate = { ask: false };
+    if (gate.kind === "trust") gate = { ask: false };
   }
   if (!gate.ask) return Promise.resolve({ behavior: "allow", updatedInput: input });
   const summary = gate.kind === "question" ? options.title || approvalSummary(toolName, input) : gate.summary;

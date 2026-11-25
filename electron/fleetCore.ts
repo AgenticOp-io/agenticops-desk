@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomBytes, sign, X509Certificate } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, X509Certificate } from "node:crypto";
 import { isIP } from "node:net";
 import { pairCode } from "../agent/wire.mjs";
 
@@ -90,8 +90,10 @@ const oid = (s: string) => {
 const utc = (d: Date) => tlv(0x17, Buffer.from(d.toISOString().replace(/[-:T]/g, "").slice(2, 14) + "Z"));
 const ipBytes = (ip: string) => Buffer.from(ip.split(".").map(Number));
 
-export function makeDeskCert(names: string[], now = new Date()) {
-  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+// keyPem reuses the desk's key: a re-issue for a new address keeps the pin agents already carry.
+export function makeDeskCert(names: string[], now = new Date(), keyPem?: string) {
+  const privateKey = keyPem ? createPrivateKey(keyPem) : generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey;
+  const publicKey = createPublicKey(privateKey);
   const spki = publicKey.export({ type: "spki", format: "der" });
   const sigAlg = seq(oid("1.2.840.10045.4.3.2")); // ecdsa-with-SHA256
   const name = seq(tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, Buffer.from("AgenticOps Desk")))));
@@ -114,6 +116,12 @@ export function makeDeskCert(names: string[], now = new Date()) {
   const der = seq(tbs, sigAlg, tlv(0x03, Buffer.from([0]), sign("sha256", tbs, privateKey)));
   const cert = `-----BEGIN CERTIFICATE-----\n${der.toString("base64").replace(/.{64}/g, "$&\n").replace(/\n?$/, "\n")}-----END CERTIFICATE-----\n`;
   return { cert, pkcs8: privateKey.export({ type: "pkcs8", format: "pem" }) as string };
+}
+
+// The host names and addresses a desk certificate covers.
+export function certNames(certPem: string): string[] {
+  const san = new X509Certificate(certPem).subjectAltName ?? "";
+  return san.split(/,\s*/).filter(Boolean).map((e) => e.replace(/^(DNS|IP Address):/, ""));
 }
 
 // What `curl --pinnedpubkey` wants: sha256 of the certificate's public key, base64.

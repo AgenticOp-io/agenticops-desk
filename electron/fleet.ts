@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { priceFor } from "./direct";
 import {
-  ADMIN_USER, addLog, addUser, approve, createDesktopSetup, emptyState, getDesktopApiKeyEnc, makeDeskCert, newId, pubkeyPin, online, pair, redeem, registerDesktop, report, reportCsv, serveAgent, submit, take, usableAgents, userFor, newCode,
+  ADMIN_USER, addLog, addUser, approve, certNames, createDesktopSetup, emptyState, getDesktopApiKeyEnc, makeDeskCert, newId, pubkeyPin, online, pair, redeem, registerDesktop, report, reportCsv, serveAgent, submit, take, usableAgents, userFor, newCode,
   type FleetAgent, type FleetJob, type FleetState, type FleetUser,
 } from "./fleetCore";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
@@ -67,6 +67,16 @@ async function load(): Promise<FleetState> {
     await save();
   }
   if (!tlsPrivPem) tlsPrivPem = safeStorage.decryptString(Buffer.from(state.tls.keyEnc, "base64"));
+  // A new network address would make phones and browsers reject the desk. Re-issue with the same key,
+  // so agent pins and an installed desk.crt (same name and key) still match. Old names stay covered.
+  const covered = certNames(state.tls.cert);
+  const wanted = ["localhost", "127.0.0.1", os.hostname(), ...ipv4s()];
+  if (wanted.some((n) => !covered.some((c) => c.toLowerCase() === n.toLowerCase()))) {
+    state.tls.cert = makeDeskCert([...covered, ...wanted], new Date(), tlsPrivPem).cert;
+    await save();
+    // Live swap: open agent streams are not dropped.
+    server?.setSecureContext({ cert: state.tls.cert, key: tlsPrivPem });
+  }
   return state;
 }
 

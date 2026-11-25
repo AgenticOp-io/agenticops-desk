@@ -8,7 +8,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { newKeyPair, pairCode } from "../agent/wire.mjs";
-import { ADMIN_USER, addUser, approve, createDesktopSetup, emptyState, getDesktopApiKeyEnc, makeDeskCert, pair, pubkeyPin, redeem, registerDesktop, report, serveAgent, submit, take, userFor } from "./fleetCore.ts";
+import { ADMIN_USER, addUser, approve, certNames, createDesktopSetup, emptyState, getDesktopApiKeyEnc, makeDeskCert, pair, pubkeyPin, redeem, registerDesktop, report, serveAgent, submit, take, userFor } from "./fleetCore.ts";
 
 const A = newKeyPair().pub;
 const B = newKeyPair().pub;
@@ -39,6 +39,10 @@ test("the desk certificate parses, names its addresses, and only it passes the a
   assert.ok(x.verify(x.publicKey));
   assert.ok(x.checkIP("10.1.2.3") && x.checkHost("localhost") && x.ca);
   assert.equal(pubkeyPin(made.cert).length, 44);
+  // A re-issue for a new address keeps the key, so the pin agents carry still matches.
+  const again = makeDeskCert([...certNames(made.cert), "10.9.9.9"], new Date(), made.pkcs8);
+  assert.equal(pubkeyPin(again.cert), pubkeyPin(made.cert));
+  assert.ok(new X509Certificate(again.cert).checkIP("10.9.9.9") && new X509Certificate(again.cert).checkIP("10.1.2.3"));
   const server = https.createServer({ cert: made.cert, key: made.pkcs8 }, (_q, r) => r.end("ok"));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;

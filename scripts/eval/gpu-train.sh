@@ -71,6 +71,8 @@ all)
   ;;
 all-run)
   sum=$(sha256sum chats.jsonl | cut -c1-64)
+  # A finished run from the manual train step has no data record. Hours of GPU time: adopt it, don't delete it.
+  [ -f out/.data ] || [ ! -d out/final ] || echo "$sum" > out/.data
   [ "$(cat out/.data 2>/dev/null)" = "$sum" ] || rm -rf out merged
   mkdir -p out && echo "$sum" > out/.data
   echo "STAGE setup"; bash $0 setup
