@@ -84,6 +84,26 @@ Removing a login leaves it on the Always hide list, because it may already appea
 - **Binary download:** the Claude Code binary is checked against npm's SHA-512 fingerprint.
 - **Installers are not code-signed**, so Windows and macOS can't vouch for who built them.
 
+## Cloud agents
+
+Details in [CLOUD-AGENTS.md](./CLOUD-AGENTS.md).
+
+- **Pinned TLS, not a certificate authority.** The superadmin desk uses a self-signed certificate. Agents, worker desks and phones trust only its public-key pin, which reaches them in the download command, the join key or the pairing QR. The pin survives an address change and a re-issue with the same key.
+- **Pairing approves a key.** The code you type is a hash of the agent's own key, so typing it approves exactly that agent. Nothing secret travels during pairing. The code is 40 bits: fine on a LAN, too short for pairing over the open internet.
+- **Session encryption** on top of TLS, with replay and tampering refused.
+- **An agent has no sandbox.** `run_command` is a real shell with that machine user's rights. Run agents under a dedicated account (the Linux package does) or in a VM.
+- **API keys stay on the superadmin desk.** Agents send model calls through it.
+
+## Phone app
+
+Details in [MOBILE.md](./MOBILE.md).
+
+- **The pairing QR is encrypted** (AES-256-GCM, key from PBKDF2 over an 8-digit code). The QR alone is useless, but a photo of the screen showing both the QR and the code defeats this.
+- **The phone holds the desk's GitHub CLI token**, with that token's full scope, plus the desk's Claude API key and cloud login if those were set up. On the phone they are sealed with an Android Keystore key. **Sign out** clears them; revoke the token on GitHub if the phone is lost.
+- **Only your own account's messages run.** The desk runs a phone message only if its commit was made by the desk's own GitHub login. A collaborator who can push to that private repo could forge the committer, but they can already change its code.
+- **Saved logins and MCP server approvals never go to the phone.** Other prompts, including plans, do, with secrets replaced by `[hidden]`.
+- **The APK is debug-signed**, for sideloading only.
+
 ## Folder deletion
 
 The only way the sidebar removes a project's folder is `project:trash` in `electron/main.ts`. It needs your confirmation in a system dialog with Cancel as the default, and it uses the Recycle Bin. That was tested on a local drive; a network or removable drive may have no bin, so treat a delete there as permanent. It refuses a drive, your home folder, the app's own folders, a folder holding other projects, and anything with a running chat.

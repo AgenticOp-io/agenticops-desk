@@ -58,7 +58,7 @@ try {
     Copy-Item android/app/build/outputs/apk/debug/AgenticOps-Remote-*-debug.apk "release/AgenticOps-Remote-$Tag.apk"
   }
 
-  $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|AppImage|deb|apk)$|^patch' } | ForEach-Object FullName
+  $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|AppImage|deb|rpm|apk)$|^patch' } | ForEach-Object FullName
   if (-not $files) { throw "Nothing was built" }
 
   try { gh release view $Tag --repo $repo *> $null }

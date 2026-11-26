@@ -16,6 +16,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 6. [`electron/autoRoute.ts`](./electron/autoRoute.ts) — the Auto model; it watches events through `setSendFilter` in `claude.ts`, so failover only ever swallows an `error` that `shouldFailOver` (`pureFeatures.ts`) matches, plus that run's `done`
 7. [`electron/credentials.ts`](./electron/credentials.ts) — saved logins; read [`docs/SECURITY.md`](./docs/SECURITY.md) before changing them
 8. [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — modules, data files, flows, testing and releasing. [`docs/FEATURES.md`](./docs/FEATURES.md) is the user-facing guide: update it when behavior changes
+9. [`docs/CLOUD-AGENTS.md`](./docs/CLOUD-AGENTS.md) and [`docs/MOBILE.md`](./docs/MOBILE.md) — before touching `fleet*.ts`, `pool.ts`, `agent/`, `mobile/` or `android/`
 
 ## Do
 

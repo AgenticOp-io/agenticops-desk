@@ -1,6 +1,6 @@
 # Architecture
 
-How AgenticOps Desk is built, for anyone changing it. Rules for agents working in this repo are in [`AGENTS.md`](../AGENTS.md). Security reasoning is in [SECURITY.md](./SECURITY.md).
+How AgenticOps Desk is built, for anyone changing it. Rules for agents working in this repo are in [`AGENTS.md`](../AGENTS.md). Security reasoning is in [SECURITY.md](./SECURITY.md). Cloud agents and the phone app have their own references: [CLOUD-AGENTS.md](./CLOUD-AGENTS.md) and [MOBILE.md](./MOBILE.md).
 
 ## Overview
 

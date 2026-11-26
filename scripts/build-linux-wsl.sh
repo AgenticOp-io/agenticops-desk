@@ -14,3 +14,5 @@ NODE_OPTIONS=--max-old-space-size=6144 npx vite build
 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --linux AppImage --x64 --arm64 --publish never
 mkdir -p "$out"
 cp release/*.AppImage "$out"/
+bash scripts/build-agent-packages.sh
+cp release/agenticops-agent* "$out"/
