@@ -1,6 +1,6 @@
 {
   "name": "agenticops-desk",
-  "version": "0.1.74",
+  "version": "0.1.75",
   "private": true,
   "author": "AgenticOp-io",
   "license": "Apache-2.0",
@@ -15,7 +15,7 @@
     "preview": "vite preview",
     "postinstall": "node scripts/patch-vite-electron.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "android": "vite build --config mobile/vite.config.ts && cap sync android && cd android && gradlew.bat assembleDebug"
+    "android": "vite build --config mobile/vite.config.ts && cap sync android && cd android && .\\gradlew.bat assembleDebug"
   },
   "build": {
     "appId": "io.agenticop.desk",

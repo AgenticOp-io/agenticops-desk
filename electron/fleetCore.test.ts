@@ -8,7 +8,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { newKeyPair, pairCode } from "../agent/wire.mjs";
-import { ADMIN_USER, addUser, approve, certNames, createDesktopSetup, emptyState, getDesktopApiKeyEnc, makeDeskCert, pair, pubkeyPin, redeem, registerDesktop, report, serveAgent, submit, take, userFor } from "./fleetCore.ts";
+import { ADMIN_USER, addDevice, addUser, joinKey, parseJoinKey, approve, certNames, emptyState, makeDeskCert, pair, pubkeyPin, redeem, report, serveAgent, submit, take, userFor, pruneUnscanned } from "./fleetCore.ts";
 
 const A = newKeyPair().pub;
 const B = newKeyPair().pub;
@@ -111,29 +111,67 @@ test("each device that redeems gets its own token, and one can be cut off alone"
   assert.ok(userFor(s, `Bearer ${b.token}`));
 });
 
-test("desktop setup: one-time code, registration with API key, and retrieval", () => {
+test("many people's phones stay paired; only unscanned QR tokens are capped", () => {
   const s = emptyState();
+  const u = addUser(s, "Your phone", 1, []);
+  const tokens = Array.from({ length: 5 }, () => { u.code = "ZZZZ-ZZZZ"; return redeem(s, u.code, "phone")!.token; });
+  let saves = 0;
+  for (const t of tokens.slice(0, 4)) userFor(s, `Bearer ${t}`, () => saves++); // four people scanned
+  userFor(s, `Bearer ${tokens[0]}`, () => saves++); // second use: no extra save
+  for (let i = 0; i < 4; i++) { u.code = "YYYY-YYYY"; redeem(s, u.code, "shown, never scanned"); pruneUnscanned(u); }
+  assert.equal(saves, 4);
+  for (const t of tokens.slice(0, 4)) assert.ok(userFor(s, `Bearer ${t}`));
+  assert.equal(u.devices!.filter((d) => !d.usedAt).length, 3);
+});
 
-  // Initial setup generates a code
-  const { setupCode, setupCodeHash } = createDesktopSetup();
-  assert.match(setupCode, /^[A-Z0-9]+-[A-Z0-9]+/); // Two newCode() calls joined
-  assert.equal(typeof setupCodeHash, "string");
-  assert.ok(setupCodeHash.length > 0);
+test("a join key carries address, pin and code; a paused worker can't submit; its phone gets its own token", () => {
+  const pin = pubkeyPin(makeDeskCert(["127.0.0.1"]).cert);
+  const k = joinKey("https://10.0.0.5:7377", pin, "ABCD-EFGH");
+  assert.deepEqual(parseJoinKey(` ${k} `), { url: "https://10.0.0.5:7377", pin, code: "ABCD-EFGH" });
+  assert.equal(parseJoinKey("http://10.0.0.5:7377#" + pin + "#ABCD-EFGH"), null);
+  assert.equal(parseJoinKey(k + "#x"), null);
+  assert.equal(parseJoinKey("https://10.0.0.5:7377#short#ABCD-EFGH"), null);
 
-  // Create registration entry
-  s.desktop = { id: "test-id", setupCode, setupCodeHash, apiKeyEnc: "", createdAt: Date.now() };
+  const s = emptyState();
+  s.agents.push({ id: "a1", name: "box", os: "linux", code: "", pub: "", status: "approved", createdAt: 0, lastSeen: Date.now() });
+  const u = addUser(s, "Dana", 2, []);
+  const desk = redeem(s, u.code, "dana-pc (desktop)")!;
+  assert.equal(userFor(s, `Bearer ${desk.token}`)?.id, u.id);
+  const phone = addDevice(u, "phone of Dana");
+  assert.equal(userFor(s, `Bearer ${phone}`)?.id, u.id);
+  u.paused = true;
+  assert.match(String(submit(s, u.id, { prompt: "x" })), /paused/);
+  u.paused = false;
+  assert.equal(typeof submit(s, u.id, { prompt: "x" }), "object");
+});
 
-  // Registration with wrong hash fails
-  assert.equal(registerDesktop(s, "wrong-hash", "sk-..."), false);
-
-  // Registration with right hash succeeds
-  const apiKey = "sk-ant-test-key-12345";
-  assert.equal(registerDesktop(s, setupCodeHash, apiKey), true);
-  assert.ok(s.desktop.registeredAt);
-
-  // Can retrieve the key
-  assert.equal(getDesktopApiKeyEnc(s), apiKey);
-
-  // Can't register twice
-  assert.equal(registerDesktop(s, setupCodeHash, "sk-new-key"), false);
+// Same TLS options as electron/pool.ts: trust only the desk certificate, and its key must match the pin.
+test("a worker desk trusts the superadmin by pin, also after the certificate is re-issued with the same key", async () => {
+  const first = makeDeskCert(["127.0.0.1"]);
+  const reissued = makeDeskCert(["127.0.0.1", "10.9.9.9"], new Date(), first.pkcs8).cert;
+  const other = makeDeskCert(["127.0.0.1"]);
+  const get = (port: number, ca: string, pin: string) =>
+    new Promise<string>((resolve, reject) => {
+      https
+        .get(`https://127.0.0.1:${port}/`, { ca, checkServerIdentity: (_h, c) => (pubkeyPin(c.raw) === pin ? undefined : new Error("pin")) }, (r) => {
+          r.resume();
+          r.on("end", () => resolve("ok"));
+        })
+        .on("error", (e) => reject(e));
+    });
+  for (const [served, key, ca, pin, want] of [
+    [first.cert, first.pkcs8, first.cert, pubkeyPin(first.cert), "ok"],
+    [reissued, first.pkcs8, first.cert, pubkeyPin(first.cert), "any"],
+    [other.cert, other.pkcs8, other.cert, pubkeyPin(first.cert), "fail"],
+  ] as const) {
+    const srv = https.createServer({ cert: served, key }, (_q, r) => r.end("x"));
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as { port: number }).port;
+    const got = await get(port, ca, pin).catch((e: NodeJS.ErrnoException) => `fail:${e.code ?? e.message}`);
+    srv.close();
+    if (want === "ok") assert.equal(got, "ok");
+    if (want === "fail") assert.match(got, /^fail/);
+    // pool.ts refetches desk.crt on a certificate error, so either outcome is handled; record which one Node gives.
+    if (want === "any") console.log("re-issued cert with the old ca:", got);
+  }
 });

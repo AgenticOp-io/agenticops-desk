@@ -55,7 +55,7 @@ try {
     npx cap sync android
     # --no-daemon: a Gradle daemon keeps the pipe open after the build and the script never returns.
     Push-Location android; try { ./gradlew.bat assembleDebug --no-daemon -q } finally { Pop-Location }
-    Copy-Item android/app/build/outputs/apk/debug/app-debug.apk "release/AgenticOps-Remote-$Tag.apk"
+    Copy-Item android/app/build/outputs/apk/debug/AgenticOps-Remote-*-debug.apk "release/AgenticOps-Remote-$Tag.apk"
   }
 
   $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|AppImage|deb|apk)$|^patch' } | ForEach-Object FullName

@@ -1,0 +1,26 @@
+name: agenticops-agent
+arch: all
+platform: linux
+version: ${VERSION}
+maintainer: AgenticOp-io <opensource@agenticop.io>
+description: AgenticOps cloud agent. Pairs with an AgenticOps Desk and runs the jobs it sends.
+homepage: https://agenticop.io
+license: Apache-2.0
+depends:
+  - curl
+recommends:
+  - nodejs
+contents:
+  - src: agenticops-agent
+    dst: /usr/bin/agenticops-agent
+    file_info: { mode: 0755 }
+  - src: agenticops-agent.service
+    dst: /usr/lib/systemd/system/agenticops-agent.service
+    file_info: { mode: 0644 }
+  - src: agent.env
+    dst: /etc/agenticops-agent/agent.env
+    type: config|noreplace
+    file_info: { mode: 0600 }
+scripts:
+  postinstall: postinstall.sh
+  preremove: preremove.sh

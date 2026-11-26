@@ -612,18 +612,32 @@ export function answerApproval(
   return true;
 }
 
-// Prompts a phone may answer: folder trust and risky commands only. Questions, plan approval and saved logins must be read at the desk.
+export type PhoneApproval = { chat: string; request: string; summary: string; detail: string; tool: string; questions?: ApprovalQuestion[] };
+// Prompts a phone may answer: everything the user reads themselves (trust, risky commands, questions, plan approval).
+// Saved logins stay at the desk: every use goes through approveLogins there.
 export function phoneApprovals(chatIds: Set<string>) {
-  const out: Array<{ chat: string; request: string; summary: string; detail: string }> = [];
+  const out: PhoneApproval[] = [];
   for (const [chat, s] of sessions)
     if (chatIds.has(chat))
-      for (const [request, a] of s.approvals) if (!a.settled && (a.gate === "trust" || a.gate === "risk")) out.push({ chat, request, summary: a.summary ?? a.toolName, detail: a.detail ?? "" });
+      for (const [request, a] of s.approvals) {
+        if (a.settled || a.gate === "login") continue;
+        const questions = a.toolName === "AskUserQuestion" && Array.isArray(a.input.questions) ? (a.input.questions as ApprovalQuestion[]) : undefined;
+        // A plan is read in full before it is approved; other details are a preview.
+        const detail = a.toolName === "ExitPlanMode" ? approvalDetail(a.toolName, a.input).slice(0, 20_000) : (a.detail ?? "");
+        out.push({ chat, request, summary: a.summary ?? a.toolName, detail, tool: a.toolName, ...(questions ? { questions } : {}) });
+      }
   return out;
 }
-export function answerPhoneApproval(win: BrowserWindow | null, chatId: string, requestId: string, allow: boolean) {
-  const gate = sessions.get(chatId)?.approvals.get(requestId)?.gate;
-  if (gate !== "trust" && gate !== "risk") return false;
-  return answerApproval(win, chatId, requestId, { allow, message: "Denied from the phone." });
+export function answerPhoneApproval(win: BrowserWindow | null, chatId: string, requestId: string, allow: boolean, answers?: Record<string, string>) {
+  const pending = sessions.get(chatId)?.approvals.get(requestId);
+  if (!pending || pending.gate === "login") return false;
+  if (pending.toolName === "AskUserQuestion" && allow) {
+    // Only answers to the questions asked, and every question answered; otherwise the card stays for the desk.
+    const asked = ((pending.input.questions as ApprovalQuestion[] | undefined) ?? []).map((q) => q.question);
+    if (!asked.every((q) => answers?.[q]?.trim())) return false;
+    answers = Object.fromEntries(asked.map((q) => [q, answers![q]]));
+  } else answers = undefined;
+  return answerApproval(win, chatId, requestId, { allow, answers, message: "Denied from the phone." });
 }
 
 export function dropApprovals(win: BrowserWindow | null, chatId: string, session: Session) {

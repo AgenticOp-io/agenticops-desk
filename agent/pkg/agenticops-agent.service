@@ -1,0 +1,16 @@
+[Unit]
+Description=AgenticOps cloud agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agenticops-agent
+WorkingDirectory=/var/lib/agenticops-agent
+EnvironmentFile=/etc/agenticops-agent/agent.env
+Environment=AGENTICOPS_AGENT_HOME=/var/lib/agenticops-agent
+ExecStart=/usr/bin/agenticops-agent
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs the cloud agent. It downloads agentd.mjs from the desk each start, pinned to the desk's key, so the copy
+# carries that desk's certificate and matches its version. Settings: /etc/agenticops-agent/agent.env.
+set -eu
+: "${DESK:?Set DESK in /etc/agenticops-agent/agent.env}" "${KEY:?Set KEY in /etc/agenticops-agent/agent.env}" "${PIN:?Set PIN in /etc/agenticops-agent/agent.env}"
+export AGENTICOPS_AGENT_HOME="${AGENTICOPS_AGENT_HOME:-$HOME/.agenticops-agent}"
+home="$AGENTICOPS_AGENT_HOME"
+mkdir -p "$home"
+node -e 'process.exit(+process.versions.node.split(".")[0] >= 18 ? 0 : 1)' || { echo "The agent needs Node.js 18 or newer as 'node'." >&2; exit 2; }
+if curl -fsS -k --pinnedpubkey "sha256//$PIN" -o "$home/agentd.mjs.new" "$DESK/agent.mjs"; then
+  mv "$home/agentd.mjs.new" "$home/agentd.mjs"
+elif [ -f "$home/agentd.mjs" ]; then
+  echo "Could not reach the desk; running the copy downloaded last time." >&2
+else
+  exit 1
+fi
+exec node "$home/agentd.mjs" --desk "$DESK" --key "$KEY" ${NAME:+--name "$NAME"}

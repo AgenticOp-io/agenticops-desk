@@ -384,7 +384,11 @@ export async function phonePairQr(): Promise<{ ok: boolean; image?: string; logi
   if (!token || !login || !id) return { ok: false, error: "Sign in to GitHub on this computer first (Settings → Accounts)." };
   const QR = await import("qrcode");
   const code = newPairCode();
-  const image = await QR.toDataURL(sealPairing(login, id, token, code, await (await import("./deskSync")).phoneRepos()), { errorCorrectionLevel: "L", margin: 2, width: 360 });
+  // The phone's whole setup comes from here: the API key for its AI chat and a cloud-agent login, when the desk has them.
+  const ai = (await import("./providers")).providerKey("anthropic");
+  const cloud = await (await import("./pool")).phoneCloudLogin().catch(() => undefined);
+  const setup = { ...(ai ? { ai } : {}), ...(cloud ? { cloud } : {}) };
+  const image = await QR.toDataURL(sealPairing(login, id, token, code, await (await import("./deskSync")).phoneRepos(), setup), { errorCorrectionLevel: "L", margin: 2, width: 360 });
   return { ok: true, image, login, code };
 }
 

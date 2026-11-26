@@ -9,6 +9,51 @@ const ago = (t: number) => {
   return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : new Date(t).toLocaleString();
 };
 
+// A desktop worker's side: join a superadmin's pool with the join key it was given.
+function JoinPool() {
+  const [p, setP] = useState<Awaited<ReturnType<typeof window.desk.poolState>> | null>(null);
+  const [key, setKey] = useState("");
+  const [msg, setMsg] = useState("");
+  const refresh = () => void window.desk.poolState().then(setP);
+  useEffect(refresh, []);
+  if (!p) return null;
+  return (
+    <>
+      <div className="settings-label">Join a pool</div>
+      {p.joined ? (
+        <div className="signin-row">
+          <span>
+            This desk is the worker <strong>{p.name}</strong> in the pool at {p.url}. Cloud work and your phone's cloud login (from the phone pairing QR) go there.
+          </span>
+          <span className="grow" />
+          <button className="btn" onClick={() => confirm("Leave the pool? Ask the superadmin to delete this worker too.") && void window.desk.poolLeave().then(refresh)}>Leave</button>
+        </div>
+      ) : (
+        <>
+          <p className="settings-hint">If another desk runs the cloud agents, paste the join key its superadmin gave you.</p>
+          <div className="provider-line">
+            <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="https://…#…#ABCD-EFGH" aria-label="Join key" spellCheck={false} />
+            <button
+              className="btn"
+              disabled={!key.trim()}
+              onClick={() =>
+                void window.desk.poolJoin(key).then((err) => {
+                  setMsg(err ?? "Joined.");
+                  if (!err) setKey("");
+                  refresh();
+                })
+              }
+            >
+              Join
+            </button>
+          </div>
+        </>
+      )}
+      {msg && <p className="settings-hint">{msg}</p>}
+    </>
+  );
+}
+
 // Superadmin page: this desk runs the control server, pairs cloud agents, hands out user codes, and reports use.
 export function FleetSettings() {
   const [f, setF] = useState<Fleet | null>(null);
@@ -36,6 +81,7 @@ export function FleetSettings() {
 
   return (
     <>
+      <JoinPool />
       <p className="settings-hint">
         This desk is the superadmin for its cloud agents (ID {f.adminId.slice(0, 8)}, since {new Date(f.createdAt).toLocaleDateString()}). Agents and users pair only with this desk.
         Model calls from every agent run through this desk with its Claude API key, so keys never leave this computer.
@@ -113,12 +159,13 @@ export function FleetSettings() {
         </div>
       ))}
 
-      <div className="settings-label">Users</div>
+      <div className="settings-label">Desktop workers</div>
       <p className="settings-hint">
-        Each user gets a one-time access code for the phone app (Settings → Cloud agents) or any browser at {url}. "Agents at once" is how many cloud agents they may keep busy.
+        Add each person's desktop here. They paste its join key into Settings → Cloud agents → Join a pool, and can then send work to the
+        cloud agents and pair their own phone from their desk. "Agents at once" is how many cloud agents that worker may keep busy, phones included.
       </p>
       <div className="provider-line">
-        <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="Name" aria-label="User name" />
+        <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="Worker name" aria-label="Worker name" />
         <input value={userMax} onChange={(e) => setUserMax(e.target.value.replace(/\D/g, ""))} aria-label="Agents at once" style={{ width: 60 }} inputMode="numeric" />
         <button
           className="btn"
@@ -131,15 +178,20 @@ export function FleetSettings() {
             })
           }
         >
-          Make code
+          Add worker
         </button>
       </div>
-      {newCode && <div className="settings-label">Code for {newCode.name}: {newCode.code}</div>}
+      {newCode && (
+        <p className="settings-hint">
+          Join key for {newCode.name} (works once): <code style={{ userSelect: "all" }}>{newCode.code}</code>
+        </p>
+      )}
       {f.users.map((u) => (
         <div key={u.id} className="settings-hidden">
           <div className="signin-row">
             <span>
-              <strong>{u.name}</strong>{u.code ? ` · code ${u.code}` : ""}{!u.redeemed && !u.code ? " · no device" : ""}
+              <strong>{u.name}</strong>{u.paused ? " · paused" : ""}{!u.redeemed && !u.code ? " · no device" : ""}
+              {u.joinKey && <> · join key <code style={{ userSelect: "all" }}>{u.joinKey}</code></>}
             </span>
             <span className="grow" />
             <label>
@@ -151,9 +203,10 @@ export function FleetSettings() {
                 onBlur={(e) => Number(e.target.value) !== u.maxAgents && void window.desk.fleetUpdateUser(u.id, { maxAgents: Number(e.target.value) || 0 }).then(refresh)}
               />
             </label>
-            <button className="btn" onClick={() => void window.desk.fleetUpdateUser(u.id, { newCode: true }).then(refresh)}>New code (another device)</button>
-            <button className="btn" onClick={() => confirm(`Revoke ${u.name}? Their device is signed out and their jobs stop.`) && void window.desk.fleetUpdateUser(u.id, { revoke: true }).then(refresh)}>
-              Revoke
+            <button className="btn" onClick={() => void window.desk.fleetUpdateUser(u.id, { newCode: true }).then(refresh)}>New join key</button>
+            <button className="btn" onClick={() => void window.desk.fleetUpdateUser(u.id, { paused: !u.paused }).then(refresh)}>{u.paused ? "Allow" : "Deny"}</button>
+            <button className="btn" onClick={() => confirm(`Delete ${u.name}? Their desktop and phones are signed out and their jobs stop.`) && void window.desk.fleetUpdateUser(u.id, { revoke: true }).then(refresh)}>
+              Delete
             </button>
           </div>
           {u.devices.map((d) => (
@@ -207,7 +260,7 @@ export function FleetSettings() {
       {f.jobs.slice(0, 20).map((j) => (
         <details key={j.id} className="settings-hidden">
           <summary>
-            <strong>{j.status}</strong> · {j.user} · {j.agent ?? "waiting for an agent"} · ${j.costUsd.toFixed(3)} · {j.prompt.slice(0, 80)}
+            <strong>{j.status}</strong> ·{j.agent ?? "waiting for an agent"} · ${j.costUsd.toFixed(3)} · {j.prompt.slice(0, 80)}
             {(j.status === "queued" || j.status === "running") && (
               <button className="more-link" onClick={(e) => (e.preventDefault(), void window.desk.fleetCancel(j.id).then(refresh))}>
                 Cancel

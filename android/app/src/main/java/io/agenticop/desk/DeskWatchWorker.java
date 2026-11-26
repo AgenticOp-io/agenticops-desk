@@ -39,7 +39,8 @@ public class DeskWatchWorker extends Worker {
     @Override
     public Result doWork() {
         SharedPreferences prefs = getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String token = prefs.getString("token", "");
+        // A plain token from a build before Vault does not open; the next app start re-seals it through setup.
+        String token = Vault.open(prefs.getString("token", ""));
         long now = System.currentTimeMillis();
         if (token.isEmpty()) return Result.success();
         if (MainActivity.visible) { // the open app shows its own cards and finished chats

@@ -8,16 +8,17 @@ import { pairCode } from "../agent/wire.mjs";
 // pub is the agent's long-term X25519 key (agent/wire.mjs); its code is derived from it.
 export type FleetAgent = { id: string; name: string; os: string; code: string; pub: string; status: "pending" | "approved" | "revoked"; createdAt: number; lastSeen: number };
 // One per phone or browser that redeemed a code: its own token, so the superadmin can cut off one device.
-export type FleetDevice = { id: string; name: string; tokenHash: string; createdAt: number };
-export type FleetUser = { id: string; name: string; maxAgents: number; agentIds: string[]; code?: string; tokenHash?: string; devices?: FleetDevice[]; revoked?: boolean; createdAt: number };
+export type FleetDevice = { id: string; name: string; tokenHash: string; createdAt: number; usedAt?: number };
+// A user is a desktop worker the superadmin added; its devices are that desktop and the phones it paired.
+// paused = the superadmin denied access for now; the user and its devices stay.
+export type FleetUser = { id: string; name: string; maxAgents: number; agentIds: string[]; code?: string; tokenHash?: string; devices?: FleetDevice[]; revoked?: boolean; paused?: boolean; createdAt: number };
 export type FleetJob = {
   id: string; userId: string; agentId?: string; wantAgent?: string; prompt: string; repo?: string; model: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled"; createdAt: number; startedAt?: number; endedAt?: number;
   log: string[]; result?: string; input: number; output: number; costUsd: number;
 };
 // deskPub/deskPrivEnc: the desk's long-term X25519 key; the private half is encrypted with the OS credential store.
-export type DesktopRegistration = { id: string; setupCode: string; setupCodeHash: string; apiKeyEnc: string; createdAt: number; registeredAt?: number };
-export type FleetState = { adminId: string; createdAt: number; on: boolean; port: number; maxAgents: number; deskPub?: string; deskPrivEnc?: string; tls?: { cert: string; keyEnc: string }; agents: FleetAgent[]; users: FleetUser[]; jobs: FleetJob[]; desktop?: DesktopRegistration };
+export type FleetState = { adminId: string; createdAt: number; on: boolean; port: number; maxAgents: number; deskPub?: string; deskPrivEnc?: string; tls?: { cert: string; keyEnc: string }; agents: FleetAgent[]; users: FleetUser[]; jobs: FleetJob[] };
 
 export const ADMIN_USER = "admin";
 export const MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
@@ -125,7 +126,7 @@ export function certNames(certPem: string): string[] {
 }
 
 // What `curl --pinnedpubkey` wants: sha256 of the certificate's public key, base64.
-export function pubkeyPin(certPem: string) {
+export function pubkeyPin(certPem: string | Buffer) {
   return createHash("sha256").update(new X509Certificate(certPem).publicKey.export({ type: "spki", format: "der" })).digest("base64");
 }
 
@@ -149,17 +150,52 @@ export function redeem(s: FleetState, codeIn: unknown, device?: unknown): { toke
   const code = normCode(codeIn);
   const u = s.users.find((x) => x.code === code && !x.revoked);
   if (!u) return null;
+  u.code = undefined;
+  return { token: addDevice(u, device), name: u.name };
+}
+
+// A new signed-in device for this user; the token is returned once and only its hash is kept.
+export function addDevice(u: FleetUser, device?: unknown): string {
   const token = newToken();
   (u.devices ??= []).push({ id: newId(), name: String(device ?? "device").slice(0, 60) || "device", tokenHash: hash(token), createdAt: Date.now() });
-  u.code = undefined;
-  return { token, name: u.name };
+  return token;
+}
+
+// Everything a desktop worker needs to join this desk's pool, in one string the superadmin hands over:
+// the address, the desk's public-key pin (so the worker trusts only this desk), and the one-time code.
+export const joinKey = (url: string, pin: string, code: string) => `${url}#${pin}#${code}`;
+export function parseJoinKey(key: unknown): { url: string; pin: string; code: string } | null {
+  const [url, pin, code, extra] = String(key ?? "").trim().split("#");
+  if (extra !== undefined || !/^https:\/\/[\w.-]+(:\d+)?$/.test(url ?? "") || !/^[A-Za-z0-9+/]{43}=$/.test(pin ?? "")) return null;
+  const c = normCode(code);
+  return /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(c) ? { url, pin, code: c } : null;
 }
 
 const bearer = (header: unknown) => /^Bearer (\w{64})$/.exec(String(header ?? ""))?.[1];
-export const userFor = (s: FleetState, header: unknown) => {
+// Marks the device's first use, so pruneUnscanned never drops a token a person is actually using.
+export const userFor = (s: FleetState, header: unknown, onFirstUse?: () => void) => {
   const t = bearer(header);
-  return t ? s.users.find((u) => !u.revoked && (u.tokenHash === hash(t) || u.devices?.some((d) => d.tokenHash === hash(t)))) : undefined;
+  if (!t) return undefined;
+  const h = hash(t);
+  for (const u of s.users) {
+    if (u.revoked) continue;
+    if (u.tokenHash === h) return u;
+    const d = u.devices?.find((x) => x.tokenHash === h);
+    if (d) {
+      if (!d.usedAt) (d.usedAt = Date.now()), onFirstUse?.();
+      return u;
+    }
+  }
+  return undefined;
 };
+
+// Many people can pair phones from the same desk QR, so keep every token in use and only cap
+// the ones minted for a QR that nobody has scanned yet.
+export function pruneUnscanned(u: FleetUser, keep = 3) {
+  const unused = (u.devices ?? []).filter((d) => !d.usedAt);
+  const drop = new Set(unused.slice(0, Math.max(0, unused.length - keep)));
+  u.devices = (u.devices ?? []).filter((d) => !drop.has(d));
+}
 
 export const usableAgents = (s: FleetState, userId: string) => {
   const u = s.users.find((x) => x.id === userId);
@@ -173,6 +209,7 @@ export function submit(s: FleetState, userId: string, input: { prompt: unknown; 
   const u = s.users.find((x) => x.id === userId);
   if (userId !== ADMIN_USER) {
     if (!u || u.revoked) return "This access code was revoked.";
+    if (u.paused) return "The superadmin has paused your access to the cloud agents.";
     const busy = s.jobs.filter((j) => j.userId === userId && (j.status === "queued" || j.status === "running")).length;
     if (busy >= u.maxAgents) return `You can use ${u.maxAgents} cloud agent${u.maxAgents === 1 ? "" : "s"} at a time. Wait for a job to finish.`;
   }
@@ -228,24 +265,4 @@ export function report(s: FleetState, from: number, to: number): ReportRow[] {
 export function reportCsv(rows: ReportRow[]): string {
   const q = (v: string) => `"${v.replace(/"/g, '""')}"`;
   return ["kind,name,jobs,failed,input_tokens,output_tokens,cost_usd,minutes", ...rows.map((r) => [r.kind, q(r.name), r.jobs, r.failed, r.input, r.output, r.costUsd.toFixed(4), r.minutes.toFixed(1)].join(","))].join("\n") + "\n";
-}
-
-// Desktop registration for cloud API key upload. One-time setup code sent with encrypted key.
-// The key stays encrypted; cloud code never reads it—only passes it to SDKs.
-export function createDesktopSetup(): { setupCode: string; setupCodeHash: string } {
-  const setupCode = newCode() + newCode(); // 8-char code like ABCD1234-EFGH5678
-  const setupCodeHash = hash(setupCode);
-  return { setupCode, setupCodeHash };
-}
-
-export function registerDesktop(s: FleetState, setupCodeHash: string, apiKeyEnc: string): boolean {
-  if (!s.desktop || s.desktop.setupCodeHash !== setupCodeHash) return false;
-  if (s.desktop.registeredAt) return false; // Already registered
-  s.desktop.registeredAt = Date.now();
-  s.desktop.apiKeyEnc = apiKeyEnc; // Stored encrypted; never decrypted in this code
-  return true;
-}
-
-export function getDesktopApiKeyEnc(s: FleetState): string | null {
-  return s.desktop?.registeredAt ? s.desktop.apiKeyEnc : null;
 }

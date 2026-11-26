@@ -554,7 +554,7 @@ async function flushJobs(projectId: string, dir: string) {
 // (team:send for a chat, team:start for a new one) and deletes the file, so the sync commit takes it out of the inbox.
 type PhoneOrder =
   | { channel: "team:send" | "team:start"; order: { id: string; text?: string; managerId?: string; title?: string; prompt?: string } }
-  | { channel: "approve"; order: { id: string; request: string; allow: boolean } }
+  | { channel: "approve"; order: { id: string; request: string; allow: boolean; answers?: Record<string, string> } }
   | { channel: "stop"; order: { id: string } };
 let phoneSink: ((o: PhoneOrder) => boolean) | null = null;
 export function onPhoneMessage(cb: (o: PhoneOrder) => boolean) {
@@ -563,7 +563,7 @@ export function onPhoneMessage(cb: (o: PhoneOrder) => boolean) {
 // shortcut: in memory only; a push that fails right before the app quits delivers that message again on the next start.
 const delivered = new Set<string>();
 // Set by main.ts: the permission prompts a phone may answer, for these chats.
-let approvalSource: (chatIds: Set<string>) => Array<{ chat: string; request: string; summary: string; detail: string }> = () => [];
+let approvalSource: (chatIds: Set<string>) => Array<{ chat: string; request: string; summary: string; detail: string; tool: string; questions?: unknown[] }> = () => [];
 export function setApprovalSource(fn: typeof approvalSource) {
   approvalSource = fn;
 }
@@ -573,7 +573,9 @@ async function flushApprovals(dir: string, chatIds: Set<string>) {
   const list = approvalSource(chatIds);
   if (!list.length) return void (await fs.rm(file, { force: true }));
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await writeJsonAtomic(file, list);
+  // Text scrubbed like the threads (a command preview or plan can carry a password); the IDs stay exact so the answer matches.
+  const pinned = privacyVault().pinnedValues();
+  await writeJsonAtomic(file, list.map(({ chat, request, tool, ...text }) => ({ chat, request, tool, ...hideThreadForSync(text, pinned) })));
 }
 // A photo from the phone is saved next to the app's data, and the message names the file so the agent can read it.
 async function savePhoto(id: string, image: string): Promise<string> {

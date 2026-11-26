@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { initTeam, setManager, setPlan, teamView } from "./team";
 import { initOpsTools } from "./opsTools";
 import { fleetAddUser, fleetApprove, fleetCancel, fleetExportCsv, fleetRemoveAgent, fleetReport, fleetSetup, fleetState, fleetSubmit, fleetUpdateUser, startFleetOnLaunch } from "./fleet";
+import { poolJoin, poolLeave, poolState } from "./pool";
 import { writeTextAtomicSync } from "./jsonStore";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
 import { deleteDirectHistory, runDirect } from "./direct";
@@ -575,7 +576,7 @@ app.whenReady().then(async () => {
   setApprovalSource(phoneApprovals);
   onPhoneMessage((o) => {
     if (!win || win.isDestroyed()) return false;
-    if (o.channel === "approve") return answerPhoneApproval(win, o.order.id, o.order.request, o.order.allow) || true; // already answered at the desk: drop it
+    if (o.channel === "approve") return answerPhoneApproval(win, o.order.id, o.order.request, o.order.allow, o.order.answers) || true; // already answered at the desk: drop it
     if (o.channel === "stop") return stopClaude(win, o.order.id), true;
     win.webContents.send(o.channel, o.order);
     return true;
@@ -1505,6 +1506,9 @@ ipcMain.handle("fleet:submit", (_e, input) => fleetSubmit(input ?? {}));
 ipcMain.handle("fleet:cancel", (_e, id: string) => fleetCancel(String(id)));
 ipcMain.handle("fleet:report", (_e, month: string) => fleetReport(String(month)));
 ipcMain.handle("fleet:export", (_e, month: string) => fleetExportCsv(String(month)));
+ipcMain.handle("pool:state", () => poolState());
+ipcMain.handle("pool:join", (_e, key: string) => poolJoin(String(key ?? "")));
+ipcMain.handle("pool:leave", () => poolLeave());
 ipcMain.handle("sync:phone-repos", () => phoneRepoList());
 ipcMain.handle("sync:phone-repo-set", (_e, repo: string, action: "on" | "off" | "add" | "remove") =>
   setPhoneRepo(String(repo), ["on", "off", "add", "remove"].includes(action) ? action : "off"));

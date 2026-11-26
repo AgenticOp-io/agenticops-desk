@@ -1806,7 +1806,8 @@ export function deviceGitIdentity(login: string, email: string, device: "desktop
 // A message typed on the phone (inbox/<id>.json on a project's desk-chats branch). It runs on this computer, so anything
 // malformed is refused. No chat = start a new chat with that title. host = the computer it is meant for; empty = any.
 // Also: approve = answer a permission prompt the desk published; stop = stop that chat's run; image = a photo (JPEG data URL).
-export type PhoneMessage = { chat?: string; title?: string; text: string; host?: string; approve?: { request: string; allow: boolean }; stop?: boolean; image?: string };
+// answers = the picks for a question card (question text -> chosen labels, ", "-joined, as the desk's own card sends them).
+export type PhoneMessage = { chat?: string; title?: string; text: string; host?: string; approve?: { request: string; allow: boolean; answers?: Record<string, string> }; stop?: boolean; image?: string };
 export function parsePhoneMessage(value: unknown): PhoneMessage | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
@@ -1814,8 +1815,13 @@ export function parsePhoneMessage(value: unknown): PhoneMessage | null {
   if (v.chat !== undefined && !chat) return null;
   const host = typeof v.host === "string" && /^[\w.-]{1,100}$/.test(v.host) ? v.host : undefined;
   // Actions on an existing chat carry no text.
-  const a = v.approve as { request?: unknown; allow?: unknown } | undefined;
-  if (a && chat && typeof a.request === "string" && /^[\w.-]{1,120}$/.test(a.request) && typeof a.allow === "boolean") return { chat, text: "", host, approve: { request: a.request, allow: a.allow } };
+  const a = v.approve as { request?: unknown; allow?: unknown; answers?: unknown } | undefined;
+  if (a && chat && typeof a.request === "string" && /^[\w.-]{1,120}$/.test(a.request) && typeof a.allow === "boolean") {
+    const raw = a.answers && typeof a.answers === "object" && !Array.isArray(a.answers) ? Object.entries(a.answers as Record<string, unknown>) : [];
+    const answers = raw.length <= 10 && raw.every(([q, x]) => q.length <= 2000 && typeof x === "string" && x.length <= 2000) ? Object.fromEntries(raw) as Record<string, string> : null;
+    if (!answers) return null;
+    return { chat, text: "", host, approve: { request: a.request, allow: a.allow, ...(raw.length ? { answers } : {}) } };
+  }
   if (v.stop === true && chat) return { chat, text: "", host, stop: true };
   const text = typeof v.text === "string" ? v.text.trim() : "";
   if (!text || text.length > 50_000) return null;
@@ -1828,13 +1834,15 @@ export function parsePhoneMessage(value: unknown): PhoneMessage | null {
 // so a photo of the QR alone is useless. Format: "ADPAIR2 <login> <id> <salt>.<iv>.<ciphertext+tag>" (base64url); opened in mobile/github.ts.
 // shortcut: the code is on the same screen as the QR, so a photo of both defeats it; upgrade to a TOTP the phone enrolls once.
 export const PAIR_KDF_ROUNDS = 300_000;
-// The sealed text is the token, then (if any) a newline and the space-separated owner/name repos the phone should show.
-export function sealPairing(login: string, id: string, token: string, code: string, repos: string[] = []): string {
+// The sealed text is the token, then (if any) a newline and the space-separated owner/name repos the phone should show,
+// then (if any) a newline and the phone's setup as JSON (API key, cloud desk login), so nothing is typed on the phone.
+export function sealPairing(login: string, id: string, token: string, code: string, repos: string[] = [], setup?: Record<string, unknown>): string {
   const salt = randomBytes(16);
   const iv = randomBytes(12);
   const key = pbkdf2Sync(code, salt, PAIR_KDF_ROUNDS, 32, "sha256");
   const c = createCipheriv("aes-256-gcm", key, iv);
-  const ct = Buffer.concat([c.update(repos.length ? `${token}\n${repos.join(" ")}` : token, "utf8"), c.final(), c.getAuthTag()]);
+  const text = setup ? `${token}\n${repos.join(" ")}\n${JSON.stringify(setup)}` : repos.length ? `${token}\n${repos.join(" ")}` : token;
+  const ct = Buffer.concat([c.update(text, "utf8"), c.final(), c.getAuthTag()]);
   return `ADPAIR2 ${login} ${id} ${[salt, iv, ct].map((b) => b.toString("base64url")).join(".")}`;
 }
 export function newPairCode(): string {

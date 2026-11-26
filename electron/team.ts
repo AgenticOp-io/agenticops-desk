@@ -7,7 +7,7 @@ import { autoLive } from "./autoRoute";
 import { capsulesBrief } from "./capsules";
 import { chatState, lastAnswer, listModels, onChatEvent, setManagerLookup, setPlanAuthority, setToolServers } from "./claude";
 import { loadAgentSdk } from "./claudeBinary";
-import { fleetState, fleetSubmit } from "./fleet";
+import { cloudPool, cloudSubmit } from "./pool";
 import { writeJsonAtomicSync } from "./jsonStore";
 import { rememberedChats } from "./library";
 import { loadSettings } from "./settings";
@@ -303,9 +303,8 @@ export function initTeam(window: () => BrowserWindow | null) {
           let useCloud = args.agent_type === "cloud";
           if (!args.agent_type) {
             // Query available cloud agents to see if we have any
-            const f = await fleetState();
-            const available = f.agents.filter((a) => a.status === "approved" && a.online);
-            
+            const available = (await cloudPool().catch(() => ({ agents: [] }))).agents.filter((a) => a.online);
+
             if (!available.length) {
               // No cloud agents, must use local
               useCloud = false;
@@ -323,9 +322,13 @@ export function initTeam(window: () => BrowserWindow | null) {
 
           if (useCloud) {
             // Cloud agent path
-            const f = await fleetState();
-            const available = f.agents.filter((a) => a.status === "approved" && a.online);
-            
+            let available;
+            try {
+              available = (await cloudPool()).agents.filter((a) => a.online);
+            } catch (e) {
+              return fail(`Could not reach the cloud agent pool: ${(e as Error).message}`);
+            }
+
             if (!available.length) return fail("No cloud agents are online. Try local workers instead.");
             
             // If a specific agent was requested, check it exists
@@ -335,7 +338,7 @@ export function initTeam(window: () => BrowserWindow | null) {
             }
 
             // Submit the job to the cloud
-            const err = await fleetSubmit({
+            const err = await cloudSubmit({
               prompt: args.task,
               model: args.model,
               agentId: args.cloud_agent_id,
@@ -453,7 +456,12 @@ export function initTeam(window: () => BrowserWindow | null) {
         "Check the status of cloud jobs submitted via submit_work. Shows queued, running, and recently completed jobs.",
         {},
         async () => {
-          const f = await fleetState();
+          let f;
+          try {
+            f = await cloudPool();
+          } catch (e) {
+            return fail(`Could not reach the cloud agent pool: ${(e as Error).message}`);
+          }
           if (!f.jobs.length) return ok("No cloud jobs found.");
           
           const summary = f.jobs.slice(0, 20).map((j) => {

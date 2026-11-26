@@ -1,5 +1,10 @@
 apply plugin: 'com.android.application'
 
+// The phone app carries the desk's version, and the APK is named after the product, not "app-debug".
+def deskVersion = new groovy.json.JsonSlurper().parse(file('../../package.json')).version
+def (vMajor, vMinor, vPatch) = deskVersion.tokenize('.-').take(3)*.toInteger()
+base { archivesName = "AgenticOps-Remote-${deskVersion}" }
+
 android {
     namespace = "io.agenticop.desk"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +12,8 @@ android {
         applicationId "io.agenticop.desk"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode vMajor * 1000000 + vMinor * 1000 + vPatch
+        versionName deskVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

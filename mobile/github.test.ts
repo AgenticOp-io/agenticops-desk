@@ -15,4 +15,9 @@ test("desk-sealed pairing QR opens only with the right code", async () => {
   assert.equal(parsePairCode("https://example.com"), null);
   const withRepos = parsePairCode(sealPairing("u", "1", token, "12345678", ["a/b", "c/d"]))!;
   assert.equal(await openPairCode(withRepos, "12345678"), `${token}\na/b c/d`);
+  // The phone's setup rides along as a third line; a key-sized setup must still fit the QR pattern.
+  const setup = { ai: "k".repeat(108), cloud: { url: "https://10.0.0.5:7377", token: "t".repeat(64), pin: "p".repeat(44) } };
+  const withSetup = parsePairCode(sealPairing("u", "1", token, "12345678", [], setup))!;
+  const [t, repos, conf] = (await openPairCode(withSetup, "12345678")).split("\n");
+  assert.deepEqual([t, repos, JSON.parse(conf)], [token, "", setup]);
 });

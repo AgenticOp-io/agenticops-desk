@@ -373,7 +373,10 @@ declare global {
       fleetApprove: (code: string) => Promise<string | null>;
       fleetRemoveAgent: (id: string) => Promise<void>;
       fleetAddUser: (name: string, maxAgents: number, agentIds: string[]) => Promise<string>;
-      fleetUpdateUser: (id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean }) => Promise<void>;
+      fleetUpdateUser: (id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean; paused?: boolean }) => Promise<void>;
+      poolState: () => ReturnType<typeof import("../electron/pool").poolState>;
+      poolJoin: (key: string) => Promise<string | null>;
+      poolLeave: () => Promise<void>;
       fleetSubmit: (input: { prompt: string; repo?: string; agentId?: string; model?: string }) => Promise<string | null>;
       fleetCancel: (id: string) => Promise<void>;
       fleetReport: (month: string) => Promise<import("../electron/fleetCore").ReportRow[]>;

@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { priceFor } from "./direct";
 import {
-  ADMIN_USER, addLog, addUser, approve, certNames, createDesktopSetup, emptyState, getDesktopApiKeyEnc, makeDeskCert, newId, pubkeyPin, online, pair, redeem, registerDesktop, report, reportCsv, serveAgent, submit, take, usableAgents, userFor, newCode,
+  ADMIN_USER, addDevice, addLog, addUser, approve, joinKey, certNames, emptyState, makeDeskCert, newId, pubkeyPin, online, pair, redeem, report, reportCsv, serveAgent, submit, take, usableAgents, userFor, newCode, pruneUnscanned,
   type FleetAgent, type FleetJob, type FleetState, type FleetUser,
 } from "./fleetCore";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
@@ -272,7 +272,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     return r ? send(res, 200, r) : send(res, 403, { error: "That code is wrong, already used, or revoked." });
   }
   if (url.pathname.startsWith("/user/")) {
-    const user = userFor(s, req.headers.authorization);
+    const user = userFor(s, req.headers.authorization, () => void save());
     if (!user) return send(res, 401, { error: "Access was revoked. Ask your admin for a new code." });
     sweep(s);
     if (route === "GET /user/me") {
@@ -289,68 +289,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
       kick.emit("job");
       return send(res, 200, publicJob(r, s));
     }
+    // A desktop worker pairing its phone: the phone gets its own token under that worker, so the
+    // superadmin sees and can revoke it, and the phone talks to this desk directly.
+    if (route === "POST /user/device") {
+      if (user.paused) return send(res, 403, { error: "The superadmin has paused your access to the cloud agents." });
+      const token = addDevice(user, `phone of ${user.name}`);
+      pruneUnscanned(user);
+      await save();
+      return send(res, 200, { token });
+    }
     const cancel = /^\/user\/jobs\/(\w+)\/cancel$/.exec(url.pathname);
     if (req.method === "POST" && cancel) {
       const j = s.jobs.find((x) => x.id === cancel[1] && x.userId === user.id);
       if (j) cancelJob(j);
       await save();
       return send(res, 200, { ok: true });
-    }
-  }
-
-  // ---- desktop setup (one-time cloud registration with API key) ----
-  if (route === "POST /desktop/setup") {
-    // Desktop requests a one-time setup code
-    if (s.desktop && s.desktop.registeredAt) return send(res, 403, { error: "Already registered" });
-    const { setupCode, setupCodeHash } = createDesktopSetup();
-    s.desktop = { id: newId(), setupCode, setupCodeHash, apiKeyEnc: "", createdAt: Date.now() };
-    await save();
-    // Return the setup code ONCE; it's shown to the user. Never again.
-    return send(res, 200, { setupCode });
-  }
-
-  if (route === "POST /desktop/register") {
-    // Desktop sends back setupCodeHash + encrypted API key
-    if (!s.desktop) return send(res, 403, { error: "No setup in progress" });
-    if (!registerDesktop(s, String(b.setupCodeHash), String(b.apiKeyEnc))) return send(res, 403, { error: "Invalid or already used code" });
-    await save();
-    return send(res, 200, { ok: true });
-  }
-
-  if (route === "GET /desktop/status") {
-    // Desktop checks if registration is complete
-    if (!s.desktop) return send(res, 404, { error: "Not registered" });
-    return send(res, 200, { registered: !!s.desktop.registeredAt });
-  }
-
-  if (route === "POST /desktop/model") {
-    // Desktop makes a model call using its uploaded API key
-    // The key is stored here in plaintext only in memory for the SDK call.
-    // This endpoint is HTTPS-only, so transit is encrypted.
-    // Cloud code doesn't log, display, or hard-code the key anywhere.
-    const keyEnc = getDesktopApiKeyEnc(s);
-    if (!keyEnc) return send(res, 403, { error: "No API key registered" });
-    
-    // Desktop sends request (model, messages, etc.)
-    const { model, messages, system, tools, max_tokens } = b;
-    if (!model || !Array.isArray(messages)) return send(res, 400, { error: "Missing model or messages" });
-
-    try {
-      // Use the stored key (which is in plaintext in memory but only for this operation).
-      // The SDK is instantiated fresh for each call, so the key is never held longer than needed.
-      // Note: keyEnc should be the plaintext key that desktop encrypted with its own Windows credential store
-      // and sent to this cloud server. Cloud server stores it as-is (not in git, not logged).
-      const client = new Anthropic({ apiKey: String(keyEnc) });
-      const response = await client.messages.create({
-        model: String(model),
-        max_tokens: Math.min(Number(max_tokens) || 8000, 16_000),
-        system: typeof system === "string" ? system : undefined,
-        tools: Array.isArray(tools) ? (tools as Anthropic.Tool[]) : undefined,
-        messages: messages as Anthropic.MessageParam[],
-      });
-      return send(res, 200, response);
-    } catch (e) {
-      return send(res, 400, { error: (e as Error).message });
     }
   }
 
@@ -384,9 +337,12 @@ export async function startFleetOnLaunch() {
 }
 
 function ipv4s() {
-  const out: string[] = [];
-  for (const list of Object.values(os.networkInterfaces())) for (const n of list ?? []) if (n.family === "IPv4" && !n.internal) out.push(n.address);
-  return out;
+  const real: string[] = [], virtual: string[] = [];
+  // The first address goes into the phone's QR, so the LAN one must come before WSL/Hyper-V/Docker/VM adapters.
+  for (const [name, list] of Object.entries(os.networkInterfaces()))
+    for (const n of list ?? [])
+      if (n.family === "IPv4" && !n.internal && !n.address.startsWith("169.254.")) (/vEthernet|WSL|Hyper-V|Docker|VirtualBox|VMware|vboxnet|docker|br-|virbr/.test(name) ? virtual : real).push(n.address);
+  return [...real, ...virtual];
 }
 
 function addresses(port: number) {
@@ -402,8 +358,10 @@ export async function fleetState() {
     adminId: s.adminId, createdAt: s.createdAt, on: s.on, port: s.port, maxAgents: s.maxAgents, listening: !!server?.listening, error: serverError,
     urls: addresses(s.port), hasKey: !!providerKey("anthropic"), deskKey: fingerprint(s.deskPub!), tlsPin: pubkeyPin(s.tls!.cert), tlsFingerprint: new X509Certificate(s.tls!.cert).fingerprint256,
     agents: s.agents.filter((a) => a.status !== "revoked").map((a) => ({ id: a.id, name: a.name, os: a.os, status: a.status, online: online(a), lastSeen: a.lastSeen, createdAt: a.createdAt, code: a.status === "pending" ? undefined : a.code })),
-    users: s.users.filter((u) => !u.revoked).map((u: FleetUser) => ({ id: u.id, name: u.name, maxAgents: u.maxAgents, agentIds: u.agentIds, code: u.code, redeemed: !!u.tokenHash || !!u.devices?.length, devices: [...(u.devices ?? []).map((d) => ({ id: d.id, name: d.name })), ...(u.tokenHash ? [{ id: "legacy", name: "earlier device" }] : [])], createdAt: u.createdAt })),
-    jobs: s.jobs.slice(-100).reverse().map((j) => ({ ...publicJob(j, s), user: j.userId === ADMIN_USER ? "Superadmin" : s.users.find((u) => u.id === j.userId)?.name ?? "removed user" })),
+    users: s.users.filter((u) => !u.revoked).map((u: FleetUser) => ({ id: u.id, name: u.name, maxAgents: u.maxAgents, agentIds: u.agentIds, code: u.code, paused: !!u.paused,
+      joinKey: u.code ? joinKey(addresses(s.port)[0], pubkeyPin(s.tls!.cert), u.code) : undefined, redeemed: !!u.tokenHash || !!u.devices?.length, devices: [...(u.devices ?? []).map((d) => ({ id: d.id, name: d.name })), ...(u.tokenHash ? [{ id: "legacy", name: "earlier device" }] : [])], createdAt: u.createdAt })),
+    // The superadmin only gates AI access: workers' prompts and results stay off this page; their use shows in the report.
+    jobs: s.jobs.filter((j) => j.userId === ADMIN_USER).slice(-100).reverse().map((j) => publicJob(j, s)),
   };
 }
 
@@ -442,13 +400,31 @@ export async function fleetAddUser(name: string, maxAgents: number, agentIds: st
   const s = await load();
   const u = addUser(s, name, maxAgents, Array.isArray(agentIds) ? agentIds.map(String) : []);
   await save();
-  return u.code!;
+  return joinKey(addresses(s.port)[0], pubkeyPin(s.tls!.cert), u.code!);
 }
 
-export async function fleetUpdateUser(id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean }) {
+// The phone pairing QR carries a ready cloud login, so the phone never types a desk address or access code.
+// One "Your phone" user (all agents); each pairing adds a device token to it. Nothing when cloud agents are off.
+// pin = the desk's public-key pin; the phone trusts only that key, so no certificate is installed on it.
+export async function fleetPhoneLogin(): Promise<{ url: string; token: string; pin: string } | undefined> {
+  const s = await load();
+  if (!s.on || !server?.listening) return undefined;
+  const u = s.users.find((x) => x.name === "Your phone" && !x.revoked) ?? addUser(s, "Your phone", s.maxAgents, []);
+  u.code = undefined;
+  const token = addDevice(u, "phone (paired from the desk)");
+  pruneUnscanned(u);
+  await save();
+  return { url: addresses(s.port)[0], token, pin: pubkeyPin(s.tls!.cert) };
+}
+
+export async function fleetUpdateUser(id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean; paused?: boolean }) {
   const s = await load();
   const u = s.users.find((x) => x.id === id);
   if (!u) return;
+  if (typeof patch.paused === "boolean") {
+    u.paused = patch.paused;
+    if (u.paused) for (const j of s.jobs) if (j.userId === id) cancelJob(j);
+  }
   if (typeof patch.maxAgents === "number" && patch.maxAgents >= 0) u.maxAgents = Math.floor(patch.maxAgents);
   if (Array.isArray(patch.agentIds)) u.agentIds = patch.agentIds.map(String);
   if (patch.revoke) {

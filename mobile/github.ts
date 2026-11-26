@@ -1,4 +1,5 @@
 import type { TranscriptMsg } from "../src/transcript";
+import { secret } from "./secrets.ts"; // .ts so node's test runner can load it (mobile/github.test.ts)
 
 // The phone's only link to the desk: GitHub. Sign-in is GitHub's device flow (the user approves on github.com; no token is
 // typed). Each project's desk-chats branch (written by syncProjectBranches in electron/deskSync.ts) holds chats.json,
@@ -10,19 +11,19 @@ export const CLIENT_ID: string = import.meta.env?.VITE_GITHUB_CLIENT_ID ?? "";
 const BRANCH = "desk-chats";
 const API = "https://api.github.com";
 
-// shortcut: the token sits in the WebView's localStorage (app-private, not encrypted); move it to the Android keystore
-// before the app goes to anyone else.
+// The token is in the Keystore vault (secrets.ts); login and id are public and stay in localStorage.
 export const session = {
-  token: () => localStorage.getItem("gh.token") ?? "",
+  token: () => secret.get("gh.token"),
   login: () => localStorage.getItem("gh.login") ?? "",
   id: () => localStorage.getItem("gh.id") ?? "",
   save(token: string, login: string, id: string) {
-    localStorage.setItem("gh.token", token);
+    secret.set("gh.token", token);
     localStorage.setItem("gh.login", login);
     localStorage.setItem("gh.id", id);
   },
   clear() {
-    for (const k of ["gh.token", "gh.login", "gh.id", "gh.repos"]) localStorage.removeItem(k);
+    secret.set("gh.token", "");
+    for (const k of ["gh.login", "gh.id", "gh.repos"]) localStorage.removeItem(k);
   },
 };
 
@@ -87,13 +88,18 @@ export async function openPairCode(p: PairCode, pin: string): Promise<string> {
 
 // Checks the opened token with GitHub before keeping it, so a stale or foreign code never signs the phone in.
 export async function signInWithPairCode(p: PairCode, pin: string): Promise<void> {
-  const [token, list = ""] = (await openPairCode(p, pin.trim())).split("\n");
+  const [token, list = "", conf = ""] = (await openPairCode(p, pin.trim())).split("\n");
   const me = await fetch(`${API}/user`, { headers: { Authorization: `Bearer ${token}` } });
   if (!me.ok) throw new Error(me.status === 401 ? "That code no longer works. Show a new one on the desk." : `GitHub said ${me.status}`);
   const user = (await me.json()) as { login: string; id: number };
   if (String(user.id) !== p.id) throw new Error("The code doesn't match its GitHub account.");
   session.save(token, user.login, String(user.id));
   localStorage.setItem("gh.repos", list);
+  // The desk's setup replaces the phone's: what the desk didn't send is removed, so re-pairing is how settings change.
+  const setup = (conf ? JSON.parse(conf) : {}) as { ai?: string; cloud?: { url: string; token: string; pin: string } };
+  secret.set("phone.ai", typeof setup.ai === "string" ? setup.ai : "");
+  const c = setup.cloud;
+  secret.set("cloud.desk", c?.url?.startsWith("https://") && c.token && c.pin ? JSON.stringify({ url: c.url, token: c.token, pin: c.pin }) : "");
 }
 
 export async function api(path: string, init: RequestInit = {}, accept = "application/vnd.github+json"): Promise<Response> {
@@ -143,7 +149,10 @@ export async function projectRepos(): Promise<Array<{ repo: string; head: string
 
 export type Chat = { id: string; title: string; updatedAt: number; projectId?: string; projectName?: string };
 export type Job = { chat: string; ev: "start" | "end"; at: number; host: string };
-export type Approval = { chat: string; request: string; summary: string; detail: string; host: string };
+// Written by phoneApprovals (electron/claude.ts). tool is absent from desks older than question support.
+export type Question = { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> };
+export type Approval = { chat: string; request: string; summary: string; detail: string; host: string; tool?: string; questions?: Question[] };
+export type Answer = { request: string; allow: boolean; answers?: Record<string, string> };
 export type Project = { repo: string; head: string; name: string; projectId?: string; chats: Chat[]; jobs: Job[]; inbox: string[]; approvals: Approval[] };
 
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/;
@@ -199,7 +208,7 @@ export async function loadThread(repo: string, chatId: string): Promise<Msg[]> {
 const base64 = (s: string) => btoa(Array.from(new TextEncoder().encode(s), (b) => String.fromCharCode(b)).join(""));
 
 // One file per message, so two phones (or a phone and the desk) never edit the same file. The desktop runs it and deletes it.
-export async function sendMessage(repo: string, msg: { chat?: string; title?: string; text?: string; host?: string; approve?: { request: string; allow: boolean }; stop?: boolean; image?: string }): Promise<string> {
+export async function sendMessage(repo: string, msg: { chat?: string; title?: string; text?: string; host?: string; approve?: Answer; stop?: boolean; image?: string }): Promise<string> {
   const id = crypto.randomUUID();
   const login = session.login().replace(/[^A-Za-z0-9._-]+/g, "-") || "user";
   const body = JSON.stringify({
