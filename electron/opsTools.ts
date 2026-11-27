@@ -5,6 +5,7 @@ import { opsTriage } from "./opsTriage";
 import { describeImage } from "./imageVision";
 import { generateImage } from "./imageGen";
 import { showCanvas } from "./canvas";
+import { recall, startRecall } from "./recall";
 
 // The ops desk tool, available to every chat. It runs ONE read-only git or gh status command and hands the
 // output to the local Ollama model for a short triage summary, so busywork (build status, repo state) is
@@ -15,6 +16,7 @@ let started = false;
 export function initOpsTools() {
   if (started) return;
   started = true;
+  startRecall();
   setToolServers(async (chatId, _signal, cwd) => {
     const { tool, createSdkMcpServer } = await loadAgentSdk();
     const op = tool(
@@ -75,9 +77,24 @@ export function initOpsTools() {
         return { content: [{ type: "text", text: `Shown in Canvas: ${args.title}` }] };
       },
     );
+    const mem = tool(
+      "recall",
+      "Search every past chat on this computer (all projects and worktrees, AgenticOps Desk/Claude Code and Cursor) for earlier requests, decisions, fixes, errors, commands and results. Returns the best-matching user/assistant exchanges with their date and transcript path. Use it FIRST whenever the user refers to earlier work you do not have in context ('that bug', 'like last time', 'continue', 'did we fix X'), after a restart, or before re-deriving something that was likely settled before; it is far cheaper than reading or grepping transcripts. Ask with specific words: file names, function names, error text, feature names.",
+      {
+        query: z.string().min(2).max(500).describe("What to look for, with the specific names or error text you expect to appear."),
+        limit: z.number().int().min(1).max(15).optional().describe("How many exchanges to return (default 6)."),
+      },
+      async (args) => {
+        try {
+          return { content: [{ type: "text", text: await recall(args.query, args.limit) }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Recall failed: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+        }
+      },
+    );
     return {
-      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img, gen, canvas] }) },
-      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image", "mcp__ops__generate_image", "mcp__ops__show_canvas"],
+      servers: { ops: createSdkMcpServer({ name: "ops", version: "1.0.0", tools: [op, img, gen, canvas, mem] }) },
+      allowed: ["mcp__ops__ops_triage", "mcp__ops__describe_image", "mcp__ops__generate_image", "mcp__ops__show_canvas", "mcp__ops__recall"],
     };
   });
 }

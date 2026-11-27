@@ -90,7 +90,17 @@ const lines = async (f: string): Promise<any[]> =>
     }
   });
 
-export type TrainingSet = { rows: string[]; chats: number; leftOut: number; claude: number; cursor: number };
+// One user message and the reply to it, for recall (recall.ts). `at` is the transcript's last change, 0 if unknown.
+export type Exchange = { src: "claude" | "cursor"; file: string; at: number; user: string; assistant: string };
+export type TrainingSet = { rows: string[]; chats: number; leftOut: number; claude: number; cursor: number; exchanges: Exchange[] };
+
+const mtime = (f: string) => {
+  try {
+    return statSync(f).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
 
 export async function collectChats(opts: { deskDir: string; appData?: string; home?: string; maxChars?: number; leaveOut?: string[] }): Promise<TrainingSet> {
   const home = opts.home ?? os.homedir();
@@ -155,13 +165,18 @@ export async function collectChats(opts: { deskDir: string; appData?: string; ho
       rmSync(tmp, { force: true });
     }
   }
-  const set: TrainingSet = { rows: [], chats: convs.length, leftOut: 0, claude: 0, cursor: 0 };
+  const set: TrainingSet = { rows: [], chats: convs.length, leftOut: 0, claude: 0, cursor: 0, exchanges: [] };
   for (const c of convs) {
     if (leftOut(c.file, c.msgs, opts.leaveOut ?? [])) {
       set.leftOut++;
       continue;
     }
-    for (const piece of chunk(c.msgs.map((m) => ({ ...m, content: scrub(m.content) })), maxChars)) {
+    const msgs = c.msgs.map((m) => ({ ...m, content: scrub(m.content) }));
+    const at = c.file.startsWith("cursor-db:") ? 0 : mtime(c.file);
+    for (let i = 0; i + 1 < msgs.length; i++)
+      if (msgs[i].role === "user" && msgs[i + 1].role === "assistant")
+        set.exchanges.push({ src: c.src, file: c.file, at, user: msgs[i].content, assistant: msgs[i + 1].content });
+    for (const piece of chunk(msgs, maxChars)) {
       set.rows.push(JSON.stringify({ src: c.src, messages: piece }));
       set[c.src]++;
     }

@@ -39,14 +39,14 @@ function load() {
 // Goes to ssh as an argument: a host alias, host name or user@host, never something ssh reads as an option.
 export const validHost = (h: string) => /^[A-Za-z0-9_][A-Za-z0-9_.@-]*$/.test(h);
 
-function run(cmd: string, args: string[], cwd?: string, timeout = 60_000): Promise<string> {
+export function run(cmd: string, args: string[], cwd?: string, timeout = 60_000): Promise<string> {
   return new Promise((resolve, reject) =>
     execFile(cmd, args, { cwd, timeout, windowsHide: true, maxBuffer: 1 << 20 }, (err, stdout, stderr) =>
       err ? reject(new Error((stderr || err.message).trim().split("\n").slice(-3).join("\n"))) : resolve(stdout),
     ),
   );
 }
-const sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"];
+export const sshArgs = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"];
 const ssh = (command: string, timeout?: number) => run("ssh", [...sshArgs, state.host, command], undefined, timeout);
 
 export function trainState(): TrainState {

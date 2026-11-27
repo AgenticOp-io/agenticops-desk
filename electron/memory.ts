@@ -237,7 +237,8 @@ exists before relying on it.
 
 Earlier chats: every past chat is a .jsonl transcript in a folder under ${path.join(os.homedir(), ".claude", "projects")}
 (this project's, plus one per worktree). When the user refers to earlier work you don't have ("fix all", "that bug"),
-grep those transcripts before asking. ${path.join(dirs.project, CHAT_INDEX)} lists every past chat of this project
+call the recall tool (mcp__ops__recall) first: it searches every past chat by meaning and keywords. Grep the
+transcripts only if recall is unavailable or comes back empty, and never ask before trying both. ${path.join(dirs.project, CHAT_INDEX)} lists every past chat of this project
 (date, first prompt, transcript path): search it first. At the end of a chat, save any list of open work as a memory.
 
 ## Global memory index
