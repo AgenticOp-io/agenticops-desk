@@ -1,105 +1,82 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { app, dialog, safeStorage } from "electron";
 import { X509Certificate } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 // Bundled into main.js, so local patches (which carry only the build) serve it too.
 import AGENT_SRC from "../agent/agentd.mjs?raw";
-import WIRE_SRC from "../agent/wire.mjs?raw";
-import { channel, deskSession, fingerprint, newKeyPair, type Channel } from "../agent/wire.mjs";
 import type http from "node:http";
 import https from "node:https";
+import type { TLSSocket } from "node:tls";
 import os from "node:os";
 import path from "node:path";
 import { priceFor } from "./direct";
+import { runGit } from "./features";
 import {
-  ADMIN_USER, addDevice, addLog, addUser, approve, joinKey, certNames, emptyState, makeDeskCert, newId, pubkeyPin, online, pair, redeem, report, reportCsv, serveAgent, submit, take, usableAgents, userFor, newCode, pruneUnscanned,
-  type FleetAgent, type FleetJob, type FleetState, type FleetUser,
+  ADMIN_USER, CHANNEL_BRANCH, addAgent, addDevice, addUser, applyReport, gitAddress, jobOrders, joinKey, certNames, emptyState, makeDeskCert, makeServerCert, newClientCert, opened, pubkeyPin, online, redeem, report, reportCsv, serveAgent, signed, stranded, submit, take, trimJobs, trustedCerts, usableAgents, userFor, newCode, pruneUnscanned,
+  type FleetJob, type FleetState, type FleetUser,
 } from "./fleetCore";
 import { readJson, serialized, writeJsonAtomic } from "./jsonStore";
-import { providerKey } from "./providers";
 
-// The superadmin control server. Cloud agents (agent/agentd.mjs on Windows, macOS or Linux) pair with a code,
-// keep an encrypted keepalive stream open to this desk (agent/wire.mjs), take jobs and cancels over it, and send
-// every model call through this desk, so API keys never leave it and every token is metered.
-// Users (the phone app, or any browser via the page at /) get one-time access codes made here.
-// It answers HTTPS only, with a self-signed certificate made once per desk. Agents pin it (it is built into the
-// script they download); phones and browsers must trust it (install /desk.crt) or click through the warning.
+// The superadmin desk. Cloud agents (agent/agentd.mjs on Windows, macOS or Linux) never connect to it, and it never
+// connects to them: jobs go through git. The desk writes each job, signed with its CA key, to the agent-jobs branch
+// of the job channel repository; agents check that branch every 15 s with git fetch and push signed progress and
+// results back (channelTick). Each agent calls the Claude API with its own key, so neither side needs an open port.
+// Worker desks and phones still reach the desk over HTTPS. The desk is its own certificate authority: its TLS key
+// signs the server certificate and a client certificate for every worker desk and phone, and the server completes no
+// handshake without one, then drops the connection unless it belongs to a device or unused join key still trusted.
 
 const file = () => path.join(app.getPath("userData"), "fleet.json");
+const chanDir = () => path.join(app.getPath("userData"), "fleet-channel");
 let state: FleetState | null = null;
-let deskPriv = "";
 let tlsPrivPem = "";
 let server: https.Server | null = null;
 let serverError = "";
-const kick = new EventEmitter();
-kick.setMaxListeners(200);
-
-// Keepalive sessions with agents. Keys exist only here, in memory, and die with the session.
-type Session = { agentId: string; ch: Channel; at: number; used: number; confirmed: boolean };
-const sessions = new Map<string, Session>();
-// Messages the desk pushes to an agent on its next keepalive reply.
-const outbox = new Map<string, unknown[]>();
-const push = (agentId: string, msg: unknown) => {
-  outbox.set(agentId, [...(outbox.get(agentId) ?? []), msg]);
-  kick.emit("job");
-};
-const dropSessions = (agentId: string) => {
-  for (const [sid, x] of sessions) if (x.agentId === agentId) sessions.delete(sid);
-};
+let channelNote = "";
+let channelTimer: ReturnType<typeof setInterval> | null = null;
 
 async function load(): Promise<FleetState> {
   if (!state) state = ((await readJson(file())) as FleetState | undefined) ?? emptyState();
-  if (!deskPriv) {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("This computer can't protect the desk's agent key, so cloud agents can't start.");
-    if (state.deskPub && state.deskPrivEnc) deskPriv = safeStorage.decryptString(Buffer.from(state.deskPrivEnc, "base64"));
-    else {
-      const k = newKeyPair();
-      deskPriv = k.priv;
-      state.deskPub = k.pub;
-      state.deskPrivEnc = safeStorage.encryptString(k.priv).toString("base64");
-      await save();
-    }
-  }
   if (!state.tls) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("This computer can't protect the desk's key, so cloud agents can't start.");
     const made = makeDeskCert(["localhost", "127.0.0.1", os.hostname(), ...ipv4s()]);
     state.tls = { cert: made.cert, keyEnc: safeStorage.encryptString(made.pkcs8).toString("base64") };
     await save();
   }
   if (!tlsPrivPem) tlsPrivPem = safeStorage.decryptString(Buffer.from(state.tls.keyEnc, "base64"));
-  // A new network address would make phones and browsers reject the desk. Re-issue with the same key,
-  // so agent pins and an installed desk.crt (same name and key) still match. Old names stay covered.
-  const covered = certNames(state.tls.cert);
+  // tls.cert is the desk CA: it signs every client certificate, the server certificate and every job, and never
+  // changes, so what clients and agents trust stays valid. tls.server carries the addresses; a new address re-issues
+  // only it, with the same key, so phone pins still match. Old names stay covered.
+  const covered = state.tls.server ? certNames(state.tls.server) : [];
   const wanted = ["localhost", "127.0.0.1", os.hostname(), ...ipv4s()];
-  if (wanted.some((n) => !covered.some((c) => c.toLowerCase() === n.toLowerCase()))) {
-    state.tls.cert = makeDeskCert([...covered, ...wanted], new Date(), tlsPrivPem).cert;
+  if (!state.tls.server || wanted.some((n) => !covered.some((c) => c.toLowerCase() === n.toLowerCase()))) {
+    state.tls.server = makeServerCert([...covered, ...wanted], tlsPrivPem);
     await save();
-    // Live swap: open agent streams are not dropped.
-    server?.setSecureContext({ cert: state.tls.cert, key: tlsPrivPem });
+    server?.setSecureContext({ cert: state.tls.server, key: tlsPrivPem, ca: state.tls.cert });
   }
   return state;
 }
 
 function save() {
   const s = state!;
-  if (s.jobs.length > 2000) s.jobs.splice(0, s.jobs.length - 2000);
+  trimJobs(s);
   return serialized(file(), () => writeJsonAtomic(file(), s));
 }
 
-// A running job whose agent went quiet for 10 minutes is failed, so it stops counting against the user's limit.
+// A running job whose agent sent nothing for 20 minutes is failed, so it stops counting against the user's limit.
 function sweep(s: FleetState, now = Date.now()) {
   for (const j of s.jobs) {
+    if (stranded(s, j)) finish(j, "failed", "No agent you may use is left to run this job.");
     if (j.status !== "running") continue;
     const a = s.agents.find((x) => x.id === j.agentId);
-    if (!a || a.status !== "approved" || now - a.lastSeen > 10 * 60_000) finish(j, "failed", "The agent stopped answering.");
+    if (!a || a.status !== "approved" || now - Math.max(a.lastSeen, j.startedAt ?? 0) > 20 * 60_000) finish(j, "failed", "The agent stopped answering.");
   }
 }
 
-// Cancelling a running job also tells its agent at once, over the keepalive stream, so it stops mid-command.
+// A cancelled job stays in the channel, marked cancelled, so its agent stops it mid-command on its next check.
 function cancelJob(j: FleetJob) {
   if (j.status !== "queued" && j.status !== "running") return;
-  if (j.status === "running" && j.agentId) push(j.agentId, { type: "cancel", jobId: j.id });
   finish(j, "cancelled");
+  syncChannel();
 }
 
 function finish(j: FleetJob, status: FleetJob["status"], result?: string) {
@@ -108,7 +85,86 @@ function finish(j: FleetJob, status: FleetJob["status"], result?: string) {
   if (result !== undefined) j.result = result.slice(0, 50_000);
 }
 
+// ---- the job channel ----
+// Both sides own separate folders (jobs/ is the desk's, agents/<id>/ each agent's) and rebuild them from memory on
+// every tick, on top of a fresh reset to origin. A rejected push is just retried on the next tick, so no merges.
+let ticking = false;
+let again = false;
+function syncChannel() {
+  if (ticking) return void (again = true);
+  ticking = true;
+  channelTick()
+    .then(() => (channelNote = ""), (e) => (channelNote = (e as Error).message))
+    .finally(() => {
+      ticking = false;
+      if (again) (again = false), syncChannel();
+    });
+}
 
+async function channelTick() {
+  const s = await load();
+  if (!s.on || !s.channel) return;
+  const dir = chanDir();
+  const git = async (args: string[], must = true) => {
+    const r = await runGit(dir, args, 120_000);
+    if (must && !r.ok) throw new Error(`Job channel: git ${args[0]} failed: ${r.output.slice(-300)}`);
+    return r;
+  };
+  if (!existsSync(path.join(dir, ".git"))) {
+    await fs.mkdir(dir, { recursive: true });
+    await git(["init", "-q"]);
+    await git(["remote", "add", "origin", s.channel]);
+    await git(["config", "core.symlinks", "false"]);
+  } else await git(["remote", "set-url", "origin", s.channel]);
+  const fetched = await git(["fetch", "-q", "origin", `+refs/heads/${CHANNEL_BRANCH}:refs/remotes/origin/${CHANNEL_BRANCH}`], false);
+  const hasRemote = fetched.ok && (await git(["rev-parse", "-q", "--verify", `origin/${CHANNEL_BRANCH}`], false)).ok;
+  if (!fetched.ok && !/couldn't find remote ref/i.test(fetched.output)) throw new Error(`Can't reach the job channel: ${fetched.output.slice(-300)}`);
+  if (hasRemote) await git(["checkout", "-qf", "-B", CHANNEL_BRANCH, `origin/${CHANNEL_BRANCH}`]);
+  else await git(["symbolic-ref", "HEAD", `refs/heads/${CHANNEL_BRANCH}`]);
+  await git(["clean", "-fdxq"]);
+
+  for (const a of s.agents) {
+    if (a.status !== "approved" || !a.cert) continue;
+    const folder = path.join(dir, "agents", a.id);
+    for (const name of await fs.readdir(folder).catch(() => [] as string[])) {
+      if (!name.endsWith(".json")) continue;
+      let raw: unknown = null;
+      try {
+        raw = JSON.parse(await fs.readFile(path.join(folder, name), "utf8"));
+      } catch {
+        continue;
+      }
+      const d = opened(raw, a.cert);
+      if (d) applyReport(s, a, d, priceFor);
+    }
+  }
+  sweep(s);
+  for (const a of s.agents) if (online(a) && !s.jobs.some((j) => j.agentId === a.id && j.status === "running")) take(s, a);
+  await save();
+
+  await fs.rm(path.join(dir, "jobs"), { recursive: true, force: true });
+  // The branch must exist before any job does, so agents can post the heartbeat that makes them eligible for one.
+  await fs.writeFile(path.join(dir, "README.md"), "Job channel of an AgenticOps Desk. Written by the desk and its cloud agents; don't edit.\n", "utf8");
+  for (const o of jobOrders(s)) {
+    const f = path.join(dir, o.path);
+    await fs.mkdir(path.dirname(f), { recursive: true });
+    await fs.writeFile(f, JSON.stringify(signed(o.data, tlsPrivPem)), "utf8");
+  }
+  await git(["add", "-A"]);
+  if ((await git(["diff", "--cached", "--quiet"], false)).ok) return;
+  await git(["-c", "user.name=AgenticOps Desk", "-c", "user.email=desk@localhost", "commit", "-qm", "Desk jobs"]);
+  const pushed = await git(["push", "-q", "origin", `HEAD:refs/heads/${CHANNEL_BRANCH}`], false);
+  // Rejected = an agent pushed first; the next tick resets onto theirs and writes the same files again.
+  if (!pushed.ok && !/rejected|fetch first|non-fast-forward/i.test(pushed.output)) throw new Error(`Can't push to the job channel: ${pushed.output.slice(-300)}`);
+}
+
+function startChannel() {
+  if (channelTimer) clearInterval(channelTimer);
+  channelTimer = setInterval(syncChannel, 15_000);
+  syncChannel();
+}
+
+// ---- HTTPS server for worker desks and phones ----
 const MAX_BODY = 8 * 1024 * 1024;
 function body(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -143,136 +199,23 @@ const publicJob = (j: FleetJob, s: FleetState) => ({
   agent: s.agents.find((a) => a.id === j.agentId)?.name, log: j.log.slice(-30), result: j.result, costUsd: j.costUsd,
 });
 
-async function modelCall(job: FleetJob, b: Record<string, unknown>) {
-  const key = providerKey("anthropic");
-  if (!key) throw new Error("The superadmin desk has no Claude API key. Add one in Settings → AI models.");
-  const client = new Anthropic({ apiKey: key });
-  const msg = await client.messages.create({
-    model: job.model,
-    max_tokens: Math.min(Number(b.max_tokens) || 8000, 16_000),
-    system: typeof b.system === "string" ? b.system : undefined,
-    tools: Array.isArray(b.tools) ? (b.tools as Anthropic.Tool[]) : undefined,
-    messages: b.messages as Anthropic.MessageParam[],
-  });
-  const p = priceFor(job.model);
-  const u = msg.usage;
-  const inTok = u.input_tokens + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-  job.input += inTok;
-  job.output += u.output_tokens;
-  job.costUsd += (u.input_tokens * p.input + (u.cache_creation_input_tokens ?? 0) * p.input * 1.25 + (u.cache_read_input_tokens ?? 0) * p.read + u.output_tokens * p.output) / 1e6;
-  return msg;
-}
-
-type Reply = { status: number; data: unknown };
-
-// One sealed call from an agent. "stream" is the keepalive: it waits up to 25 s and always answers with
-// at least a ping, plus any job or cancel the desk has for this agent.
-async function agentCall(s: FleetState, agent: FleetAgent, p: string, b: Record<string, unknown>, res: http.ServerResponse): Promise<Reply | null> {
-  if (p === "stream") {
-    const asked = Date.now();
-    const holding = typeof b.jobId === "string" ? b.jobId : undefined;
-    // A job this agent holds but doesn't report was lost: the agent restarted, or the reply that carried it dropped.
-    for (const j of s.jobs) if (j.agentId === agent.id && j.status === "running" && j.id !== holding && (j.startedAt ?? 0) < asked) finish(j, "failed", "The agent lost this job (it restarted or the connection dropped).");
-    let job = holding ? undefined : take(s, agent);
-    if (!job && !outbox.get(agent.id)?.length) {
-      await new Promise<void>((r) => {
-        const t = setTimeout(done, 25_000);
-        function done() {
-          clearTimeout(t);
-          kick.off("job", done);
-          r();
-        }
-        kick.on("job", done);
-        res.on("close", done); // req "close" fires as soon as the body is read, so watch the response
-      });
-      if (res.destroyed) return null;
-      if (!holding) job = take(s, agent);
-    }
-    const messages: unknown[] = outbox.get(agent.id) ?? [];
-    outbox.delete(agent.id);
-    if (job) messages.push({ type: "job", job: { id: job.id, prompt: job.prompt, repo: job.repo, model: job.model } });
-    messages.push({ type: "ping", t: Date.now() });
-    agent.lastSeen = Date.now();
-    await save();
-    return { status: 200, data: { messages } };
-  }
-  const job = s.jobs.find((j) => j.id === b.jobId && j.agentId === agent.id);
-  if (!job) return { status: 404, data: { error: "No such job." } };
-  if (job.status !== "running") return { status: 409, data: { error: `Job is ${job.status}.` } };
-  if (p === "model") {
-    try {
-      const msg = await modelCall(job, b);
-      await save();
-      return { status: 200, data: msg };
-    } catch (e) {
-      addLog(job, `Model error: ${(e as Error).message}`);
-      await save();
-      return { status: 502, data: { error: (e as Error).message } };
-    }
-  }
-  if (p === "event") {
-    if (typeof b.log === "string") addLog(job, b.log);
-    if (b.done === true) finish(job, b.failed === true ? "failed" : "done", String(b.result ?? ""));
-    await save();
-    return { status: 200, data: { ok: true } };
-  }
-  return { status: 404, data: { error: "Unknown call." } };
-}
-
 async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   const s = await load();
+  // Checked on every request too, so revoking a device also cuts a connection that is already open.
+  const sock = req.socket as TLSSocket;
+  const fp = sock.getPeerCertificate()?.fingerprint256 ?? "";
+  if (!sock.authorized || !trustedCerts(s).has(fp)) return void sock.destroy();
   const url = new URL(req.url ?? "/", "https://x");
   const route = `${req.method} ${url.pathname}`;
-  if (req.method === "OPTIONS") return send(res, 204, "", "text/plain");
-  if (route === "GET /") return send(res, 200, PAGE, "text/html; charset=utf-8");
-  if (route === "GET /agent.mjs") return send(res, 200, serveAgent(AGENT_SRC, WIRE_SRC, s.tls!.cert), "text/javascript; charset=utf-8");
-  if (route === "GET /desk.crt") return send(res, 200, s.tls!.cert, "application/x-x509-ca-cert");
-
   const b = req.method === "POST" ? await body(req) : {};
-  const now = Date.now();
 
-  // ---- agents ----
-  // Only pair and hello are plain: neither carries anything secret. Everything else is sealed in a session.
-  if (route === "POST /agent/pair") {
-    const r = pair(s, { pub: b.pub, name: b.name, os: b.os });
-    await save();
-    return send(res, 200, r);
-  }
-  if (route === "POST /agent/hello") {
-    const agent = s.agents.find((a) => a.id === b.agentId && a.status === "approved");
-    if (!agent) return send(res, 403, { error: "removed" });
-    for (const [sid, x] of sessions) if (now - x.used > (x.confirmed ? 15 * 60_000 : 60_000)) sessions.delete(sid);
-    if (sessions.size > 500) return send(res, 503, { error: "Too many sessions." });
-    const k = deskSession(deskPriv, agent.pub, String(b.e ?? ""));
-    const sid = newId();
-    sessions.set(sid, { agentId: agent.id, ch: channel(sid, k.down, k.up), at: now, used: now, confirmed: false });
-    return send(res, 200, { sid, e: k.eph });
-  }
-  if (route === "POST /agent/s") {
-    const sess = sessions.get(String(b.s ?? ""));
-    const agent = sess && s.agents.find((a) => a.id === sess.agentId && a.status === "approved");
-    if (!sess || !agent) return send(res, 401, { error: "session" });
-    const msg = sess.ch.open(b); // throws on tampering or replay → 400
-    sess.used = now;
-    if (!sess.confirmed) {
-      // The first sealed message proves the agent holds its key; it now replaces older sessions.
-      for (const [sid, x] of sessions) if (x.agentId === agent.id && x !== sess && x.at < sess.at) sessions.delete(sid);
-      sess.confirmed = true;
-    }
-    agent.lastSeen = now;
-    const r = await agentCall(s, agent, String(msg?.p ?? ""), msg?.b && typeof msg.b === "object" ? msg.b : {}, res);
-    if (!r) return; // the agent hung up while the stream waited
-    return send(res, 200, sess.ch.seal(r));
-  }
-
-  // ---- users ----
   if (route === "POST /user/redeem") {
-    const r = redeem(s, b.code, b.device);
+    const r = redeem(s, b.code, b.device, fp);
     await save();
     return r ? send(res, 200, r) : send(res, 403, { error: "That code is wrong, already used, or revoked." });
   }
   if (url.pathname.startsWith("/user/")) {
-    const user = userFor(s, req.headers.authorization, () => void save());
+    const user = userFor(s, req.headers.authorization, () => void save(), fp);
     if (!user) return send(res, 401, { error: "Access was revoked. Ask your admin for a new code." });
     sweep(s);
     if (route === "GET /user/me") {
@@ -286,17 +229,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
       const r = submit(s, user.id, { prompt: b.prompt, repo: b.repo, agentId: b.agentId, model: b.model });
       if (typeof r === "string") return send(res, 400, { error: r });
       await save();
-      kick.emit("job");
+      syncChannel();
       return send(res, 200, publicJob(r, s));
     }
     // A desktop worker pairing its phone: the phone gets its own token under that worker, so the
     // superadmin sees and can revoke it, and the phone talks to this desk directly.
     if (route === "POST /user/device") {
       if (user.paused) return send(res, 403, { error: "The superadmin has paused your access to the cloud agents." });
-      const token = addDevice(user, `phone of ${user.name}`);
+      const made = newClientCert(`phone of ${user.id}`, tlsPrivPem);
+      const token = addDevice(user, `phone of ${user.name}`, made.certPem);
       pruneUnscanned(user);
       await save();
-      return send(res, 200, { token });
+      return send(res, 200, { token, keyPem: made.keyPem, certPem: made.certPem });
     }
     const cancel = /^\/user\/jobs\/(\w+)\/cancel$/.exec(url.pathname);
     if (req.method === "POST" && cancel) {
@@ -313,22 +257,31 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
 function start(port: number) {
   stop();
   serverError = "";
-  server = https.createServer({ cert: state!.tls!.cert, key: tlsPrivPem }, (req, res) => {
+  // requestCert + rejectUnauthorized + ca: a client with no certificate, or one this desk didn't sign, fails the handshake.
+  server = https.createServer({ cert: state!.tls!.server, key: tlsPrivPem, ca: state!.tls!.cert, requestCert: true, rejectUnauthorized: true, minVersion: "TLSv1.2" }, (req, res) => {
     handle(req, res).catch((e) => {
       if (!res.headersSent) send(res, 400, { error: (e as Error).message });
     });
+  });
+  // Signed by this desk but revoked since: dropped before it can send a request. Prepended, so it runs before the
+  // HTTP server's own listener; otherwise a request in the same packet as the handshake gets parsed first.
+  server.prependListener("secureConnection", (sock: TLSSocket) => {
+    if (!state || !trustedCerts(state).has(sock.getPeerCertificate()?.fingerprint256 ?? "")) sock.destroy();
   });
   server.on("error", (e) => {
     serverError = `Could not listen on port ${port}: ${(e as Error).message}`;
     server = null;
   });
   server.listen(port, "0.0.0.0");
+  startChannel();
 }
 
 function stop() {
   server?.close();
   server?.closeAllConnections();
   server = null;
+  if (channelTimer) clearInterval(channelTimer);
+  channelTimer = null;
 }
 
 export async function startFleetOnLaunch() {
@@ -350,26 +303,34 @@ function addresses(port: number) {
   return (ips.length ? ips : ["localhost"]).map((ip) => `https://${ip}:${port}`);
 }
 
-// What the Settings page shows. Token hashes and agent secrets never leave the main process.
+// What the Settings page shows. Token hashes and agent keys never leave the main process.
 export async function fleetState() {
   const s = await load();
   sweep(s);
   return {
     adminId: s.adminId, createdAt: s.createdAt, on: s.on, port: s.port, maxAgents: s.maxAgents, listening: !!server?.listening, error: serverError,
-    urls: addresses(s.port), hasKey: !!providerKey("anthropic"), deskKey: fingerprint(s.deskPub!), tlsPin: pubkeyPin(s.tls!.cert), tlsFingerprint: new X509Certificate(s.tls!.cert).fingerprint256,
-    agents: s.agents.filter((a) => a.status !== "revoked").map((a) => ({ id: a.id, name: a.name, os: a.os, status: a.status, online: online(a), lastSeen: a.lastSeen, createdAt: a.createdAt, code: a.status === "pending" ? undefined : a.code })),
-    users: s.users.filter((u) => !u.revoked).map((u: FleetUser) => ({ id: u.id, name: u.name, maxAgents: u.maxAgents, agentIds: u.agentIds, code: u.code, paused: !!u.paused,
-      joinKey: u.code ? joinKey(addresses(s.port)[0], pubkeyPin(s.tls!.cert), u.code) : undefined, redeemed: !!u.tokenHash || !!u.devices?.length, devices: [...(u.devices ?? []).map((d) => ({ id: d.id, name: d.name })), ...(u.tokenHash ? [{ id: "legacy", name: "earlier device" }] : [])], createdAt: u.createdAt })),
+    channel: s.channel ?? "", channelError: channelNote,
+    urls: addresses(s.port), tlsFingerprint: new X509Certificate(s.tls!.cert).fingerprint256,
+    // oldFile: added before agents used the job channel. Its file can't read jobs; remove it and add it again.
+    agents: s.agents.filter((a) => a.status !== "revoked").map((a) => ({ id: a.id, name: a.name, os: a.os, status: a.status, online: online(a), lastSeen: a.lastSeen, createdAt: a.createdAt, oldFile: !a.cert || !!a.pub })),
+    users: await Promise.all(s.users.filter((u) => !u.revoked).map(async (u: FleetUser) => ({ id: u.id, name: u.name, maxAgents: u.maxAgents, agentIds: u.agentIds, code: u.code, paused: !!u.paused,
+      joinKey: u.code ? await userJoinKey(s, u) : undefined, redeemed: !!u.tokenHash || !!u.devices?.length, devices: [...(u.devices ?? []).map((d) => ({ id: d.id, name: d.name, noCert: !d.cert })), ...(u.tokenHash ? [{ id: "legacy", name: "earlier device", noCert: true }] : [])], createdAt: u.createdAt }))),
     // The superadmin only gates AI access: workers' prompts and results stay off this page; their use shows in the report.
     jobs: s.jobs.filter((j) => j.userId === ADMIN_USER).slice(-100).reverse().map((j) => publicJob(j, s)),
   };
 }
 
-export async function fleetSetup(patch: { on?: boolean; port?: number; maxAgents?: number }) {
+export async function fleetSetup(patch: { on?: boolean; port?: number; maxAgents?: number; channel?: string }) {
   const s = await load();
   if (typeof patch.port === "number" && patch.port >= 1024 && patch.port <= 65535) s.port = Math.floor(patch.port);
   if (typeof patch.maxAgents === "number" && patch.maxAgents >= 0) s.maxAgents = Math.floor(patch.maxAgents);
   if (typeof patch.on === "boolean") s.on = patch.on;
+  if (typeof patch.channel === "string") {
+    const c = patch.channel.trim();
+    if (c && !gitAddress(c)) channelNote = "The job channel must be an https or ssh git address.";
+    // Agents carry the address in their file, so a change means adding them again.
+    else s.channel = c || undefined;
+  }
   await save();
   if (s.on) start(s.port);
   else stop();
@@ -377,44 +338,63 @@ export async function fleetSetup(patch: { on?: boolean; port?: number; maxAgents
   return fleetState();
 }
 
-export async function fleetApprove(code: string) {
+// Adds an agent: the desk makes its signing key and certificate and saves them, with the job channel address and the
+// agent's own API key, inside the agent script as one file the superadmin copies to the agent's computer. The desk
+// keeps only the certificate. null = cancelled.
+export async function fleetAddAgent(name: string, apiKey: string): Promise<{ path?: string; error?: string } | null> {
   const s = await load();
-  const err = approve(s, code);
+  const out = await dialog.showSaveDialog({ defaultPath: path.join(app.getPath("downloads"), `agentd-${name.trim().replace(/[^\w.-]+/g, "-") || "agent"}.mjs`), filters: [{ name: "Agent", extensions: ["mjs"] }] });
+  if (out.canceled || !out.filePath) return null;
+  const bundle = addAgent(s, name, apiKey, tlsPrivPem);
+  if (typeof bundle === "string") return { error: bundle };
+  await fs.writeFile(out.filePath, serveAgent(AGENT_SRC, bundle), { encoding: "utf8", mode: 0o600 });
   await save();
-  return err;
+  return { path: out.filePath };
 }
 
+// The join key for a user's unused code, with the client certificate the worker desk must connect with.
+async function userJoinKey(s: FleetState, u: FleetUser) {
+  if (!u.enrolCert || !u.enrolKeyEnc) {
+    const made = newClientCert(`user ${u.id}`, tlsPrivPem);
+    u.enrolCert = made.certPem;
+    u.enrolKeyEnc = safeStorage.encryptString(made.keyPem).toString("base64");
+    await save();
+  }
+  return joinKey(addresses(s.port)[0], pubkeyPin(s.tls!.cert), u.code!, safeStorage.decryptString(Buffer.from(u.enrolKeyEnc!, "base64")), u.enrolCert!, s.tls!.cert);
+}
+
+// The desk stops trusting the agent's signature at once. Its API key lives on the agent, so the superadmin revokes
+// that in the Claude Console.
 export async function fleetRemoveAgent(id: string) {
   const s = await load();
   const a = s.agents.find((x) => x.id === id);
   if (a) {
     a.status = "revoked";
-    dropSessions(id);
-    kick.emit("job"); // its open stream answers, and the next call finds no session
     for (const j of s.jobs) if (j.agentId === id && j.status === "running") finish(j, "failed", "The superadmin removed this agent.");
   }
   await save();
+  syncChannel();
 }
 
 export async function fleetAddUser(name: string, maxAgents: number, agentIds: string[]) {
   const s = await load();
   const u = addUser(s, name, maxAgents, Array.isArray(agentIds) ? agentIds.map(String) : []);
-  await save();
-  return joinKey(addresses(s.port)[0], pubkeyPin(s.tls!.cert), u.code!);
+  return userJoinKey(s, u);
 }
 
 // The phone pairing QR carries a ready cloud login, so the phone never types a desk address or access code.
 // One "Your phone" user (all agents); each pairing adds a device token to it. Nothing when cloud agents are off.
 // pin = the desk's public-key pin; the phone trusts only that key, so no certificate is installed on it.
-export async function fleetPhoneLogin(): Promise<{ url: string; token: string; pin: string } | undefined> {
+export async function fleetPhoneLogin(): Promise<{ url: string; token: string; pin: string; keyPem: string; certPem: string } | undefined> {
   const s = await load();
   if (!s.on || !server?.listening) return undefined;
   const u = s.users.find((x) => x.name === "Your phone" && !x.revoked) ?? addUser(s, "Your phone", s.maxAgents, []);
   u.code = undefined;
-  const token = addDevice(u, "phone (paired from the desk)");
+  const made = newClientCert(`phone of ${u.id}`, tlsPrivPem);
+  const token = addDevice(u, "phone (paired from the desk)", made.certPem);
   pruneUnscanned(u);
   await save();
-  return { url: addresses(s.port)[0], token, pin: pubkeyPin(s.tls!.cert) };
+  return { url: addresses(s.port)[0], token, pin: pubkeyPin(s.tls!.cert), keyPem: made.keyPem, certPem: made.certPem };
 }
 
 export async function fleetUpdateUser(id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean; paused?: boolean }) {
@@ -434,7 +414,7 @@ export async function fleetUpdateUser(id: string, patch: { maxAgents?: number; a
     for (const j of s.jobs) if (j.userId === id) cancelJob(j);
   }
   // A new code is for one more device; the devices already signed in stay.
-  if (patch.newCode) u.code = newCode();
+  if (patch.newCode) (u.code = newCode()), (u.enrolCert = u.enrolKeyEnc = undefined);
   if (patch.revokeDevice) {
     u.devices = (u.devices ?? []).filter((d) => d.id !== patch.revokeDevice);
     if (!u.devices.length) u.tokenHash = undefined;
@@ -443,12 +423,13 @@ export async function fleetUpdateUser(id: string, patch: { maxAgents?: number; a
   await save();
 }
 
+// Also the manager's submit_work cloud path (pool.ts cloudSubmit): the job goes to git on the next channel tick, now.
 export async function fleetSubmit(input: { prompt: string; repo?: string; agentId?: string; model?: string }) {
   const s = await load();
   const r = submit(s, ADMIN_USER, input);
   if (typeof r === "string") return r;
   await save();
-  kick.emit("job");
+  syncChannel();
   return null;
 }
 
@@ -476,27 +457,3 @@ export async function fleetExportCsv(month: string) {
   await fs.writeFile(out.filePath, reportCsv(report(s, ...monthRange(month))), "utf8");
   return out.filePath;
 }
-
-// The page any browser gets at /: redeem a code, start jobs, watch them. Same calls the phone app makes.
-const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cloud agents</title>
-<style>body{font:15px system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;background:#16181d;color:#e6e6e6}input,textarea,select,button{font:inherit;padding:8px;border-radius:6px;border:1px solid #444;background:#22252c;color:inherit;box-sizing:border-box}textarea,input,select{width:100%;margin:4px 0}button{cursor:pointer}.job{border:1px solid #333;border-radius:8px;padding:10px;margin:10px 0}.m{color:#999;font-size:13px}pre{white-space:pre-wrap;font-size:13px}</style></head><body>
-<h1>Cloud agents</h1><div id="app"></div>
-<script>
-const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let token=localStorage.getItem('fleet.token')||'';
-async function api(p,b){const r=await fetch(p,{method:b?'POST':'GET',headers:{'content-type':'application/json',authorization:'Bearer '+token},body:b?JSON.stringify(b):undefined});const t=await r.text();const v=t?JSON.parse(t):{};if(r.status===401){token='';localStorage.removeItem('fleet.token')}if(!r.ok)throw new Error(v.error||r.status);return v}
-async function draw(){const app=document.getElementById('app');
- if(!token){app.innerHTML='<p>Enter the access code your admin gave you.</p><input id=c placeholder="ABCD-EFGH"><button id=go>Sign in</button><p id=e class=m></p>';
-  document.getElementById('go').onclick=async()=>{try{const r=await fetch('/user/redeem',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:document.getElementById('c').value})});const v=await r.json();if(!r.ok)throw new Error(v.error);token=v.token;localStorage.setItem('fleet.token',token);draw()}catch(x){document.getElementById('e').textContent=x.message}};return}
- let me;try{me=await api('/user/me')}catch(x){app.innerHTML='<p class=m>'+esc(x.message)+'</p>';if(!token)setTimeout(draw,50);return}
- const keep={p:document.getElementById('p')?.value||'',r:document.getElementById('r')?.value||''};
- app.innerHTML='<p class=m>Signed in as '+esc(me.name)+' · up to '+me.maxAgents+' agents at once</p>'+
- '<textarea id=p rows=4 placeholder="What should the agent do?"></textarea><input id=r placeholder="Git repository (optional, https or ssh)">'+
- '<select id=a><option value="">Any free agent</option>'+me.agents.map(a=>'<option value="'+a.id+'">'+esc(a.name)+' ('+esc(a.os)+(a.online?'':', offline')+')</option>').join('')+'</select>'+
- '<select id=mo><option value="claude-sonnet-5-5">Sonnet</option><option value="claude-haiku-5-5">Haiku</option><option value="claude-opus-5-5">Opus</option></select>'+
- '<button id=s>Start job</button> <span id=e class=m></span>'+me.jobs.map(j=>'<div class=job><b>'+esc(j.status)+'</b> <span class=m>'+esc(j.agent||'waiting for an agent')+' · $'+j.costUsd.toFixed(3)+'</span>'+((j.status==='queued'||j.status==='running')?' <button data-c="'+j.id+'">Cancel</button>':'')+'<pre>'+esc(j.prompt)+'</pre>'+(j.result?'<pre>'+esc(j.result)+'</pre>':'<pre class=m>'+esc(j.log.slice(-5).join('\\n'))+'</pre>')+'</div>').join('');
- document.getElementById('p').value=keep.p;document.getElementById('r').value=keep.r;
- document.getElementById('s').onclick=async()=>{try{await api('/user/jobs',{prompt:document.getElementById('p').value,repo:document.getElementById('r').value||undefined,agentId:document.getElementById('a').value||undefined,model:document.getElementById('mo').value});document.getElementById('p').value='';draw()}catch(x){document.getElementById('e').textContent=x.message}};
- app.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>api('/user/jobs/'+b.dataset.c+'/cancel',{}).then(draw));}
-draw();setInterval(()=>{if(token&&document.activeElement?.tagName!=='TEXTAREA'&&document.activeElement?.tagName!=='INPUT')draw()},5000);
-</script></body></html>`;

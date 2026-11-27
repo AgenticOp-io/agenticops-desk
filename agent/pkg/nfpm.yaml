@@ -3,11 +3,11 @@ arch: all
 platform: linux
 version: ${VERSION}
 maintainer: AgenticOp-io <opensource@agenticop.io>
-description: AgenticOps cloud agent. Pairs with an AgenticOps Desk and runs the jobs it sends.
+description: AgenticOps cloud agent. Runs the jobs an AgenticOps Desk sends, using the agent file that desk made for it.
 homepage: https://agenticop.io
 license: Apache-2.0
 depends:
-  - curl
+  - git
 recommends:
   - nodejs
 contents:

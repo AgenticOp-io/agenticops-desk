@@ -31,7 +31,7 @@ Make Claude Code comfortable to use all day on Windows: many chats at once, chat
 
 - Replace the Claude Code engine with the Direct one; Direct is an addition, and Claude Code stays the default
 - Add a way to read a saved login back into the renderer, put its value in command text, or let a placeholder fill it in. Every use goes through `approveLogins`
-- Sync `credentials.json`, `providers.json` or `privacy-vault.json`
+- Sync `credentials.json`, `providers.json`, `privacy-vault.json` or `phone-key.json`
 - Build a GitHub token or key into the app. Update checks use the GitHub CLI sign-in on that computer
 - Call the Claude API with anything but `@anthropic-ai/sdk`, or send provider API keys to the renderer (they stay encrypted in the main process)
 - Import values from `@anthropic-ai/claude-agent-sdk` (types are fine); get them from `loadAgentSdk()`, so installers never contain Anthropic's SDK

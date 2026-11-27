@@ -96,10 +96,12 @@ export async function signInWithPairCode(p: PairCode, pin: string): Promise<void
   session.save(token, user.login, String(user.id));
   localStorage.setItem("gh.repos", list);
   // The desk's setup replaces the phone's: what the desk didn't send is removed, so re-pairing is how settings change.
-  const setup = (conf ? JSON.parse(conf) : {}) as { ai?: string; cloud?: { url: string; token: string; pin: string } };
+  // cloud.key/cert: the phone's client certificate (base64 DER) made by the desk; the desk refuses connections without it.
+  const setup = (conf ? JSON.parse(conf) : {}) as { sign?: string; ai?: string; cloud?: { url: string; token: string; pin: string; key: string; cert: string } };
+  secret.set("phone.sign", typeof setup.sign === "string" && /^[\w-]{43}$/.test(setup.sign) ? setup.sign : "");
   secret.set("phone.ai", typeof setup.ai === "string" ? setup.ai : "");
   const c = setup.cloud;
-  secret.set("cloud.desk", c?.url?.startsWith("https://") && c.token && c.pin ? JSON.stringify({ url: c.url, token: c.token, pin: c.pin }) : "");
+  secret.set("cloud.desk", c?.url?.startsWith("https://") && c.token && c.pin && c.key && c.cert ? JSON.stringify({ url: c.url, token: c.token, pin: c.pin, key: c.key, cert: c.cert }) : "");
 }
 
 export async function api(path: string, init: RequestInit = {}, accept = "application/vnd.github+json"): Promise<Response> {
@@ -207,13 +209,27 @@ export async function loadThread(repo: string, chatId: string): Promise<Msg[]> {
 
 const base64 = (s: string) => btoa(Array.from(new TextEncoder().encode(s), (b) => String.fromCharCode(b)).join(""));
 
+// Seals a message for the desk (openPhoneEnvelope in electron/pureFeatures.ts): AES-256-GCM under the desk's phone key, with
+// the file ID as associated data, so nobody else with access to the repo can read, forge, edit or rename it.
+export async function sealForDesk(id: string, msg: Record<string, unknown>, sign: string): Promise<string> {
+  const raw = unb64(sign);
+  const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(id) }, key, new TextEncoder().encode(JSON.stringify(msg))));
+  const kid = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", raw)).slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
+  const b64u = (b: Uint8Array) => btoa(Array.from(b, (x) => String.fromCharCode(x)).join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return JSON.stringify({ v: 2, kid, iv: b64u(iv), ct: b64u(ct) });
+}
+
 // One file per message, so two phones (or a phone and the desk) never edit the same file. The desktop runs it and deletes it.
 export async function sendMessage(repo: string, msg: { chat?: string; title?: string; text?: string; host?: string; approve?: Answer; stop?: boolean; image?: string }): Promise<string> {
+  const sign = secret.get("phone.sign");
+  if (!sign) throw new Error("This phone has no key for the desk. Scan the desk's code again (Settings).");
   const id = crypto.randomUUID();
   const login = session.login().replace(/[^A-Za-z0-9._-]+/g, "-") || "user";
   const body = JSON.stringify({
-    message: msg.approve ? "Answer from phone" : msg.stop ? "Stop from phone" : msg.chat ? "Message from phone" : `New chat from phone: ${msg.title ?? ""}`.trim(),
-    content: base64(JSON.stringify({ ...msg, at: Date.now() })),
+    message: msg.approve ? "Answer from phone" : msg.stop ? "Stop from phone" : msg.chat ? "Message from phone" : "New chat from phone",
+    content: base64(await sealForDesk(id, { ...msg, at: Date.now() }, sign)),
     branch: BRANCH,
     // Same naming as the desktop's commits (deviceGitIdentity in electron/pureFeatures.ts): login-mobile, GitHub no-reply email.
     author: { name: `${login}-mobile`, email: `${session.id()}+${login}@users.noreply.github.com` },

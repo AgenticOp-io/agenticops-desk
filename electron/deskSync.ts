@@ -1,5 +1,5 @@
-import { app } from "electron";
-import { randomUUID } from "node:crypto";
+import { app, safeStorage } from "electron";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -32,7 +32,8 @@ import {
   mergeProjects,
   mergeThreads,
   oneAtATime,
-  parsePhoneMessage,
+  openPhoneEnvelope,
+  PHONE_MSG_MAX_AGE_MS,
   portablePrefs,
   remoteKey,
   type CursorMode,
@@ -560,8 +561,45 @@ let phoneSink: ((o: PhoneOrder) => boolean) | null = null;
 export function onPhoneMessage(cb: (o: PhoneOrder) => boolean) {
   phoneSink = cb;
 }
-// shortcut: in memory only; a push that fails right before the app quits delivers that message again on the next start.
-const delivered = new Set<string>();
+// IDs already handed to the window, kept on disk so a push that fails just before the app quits never runs a message twice.
+// Pruned past PHONE_MSG_MAX_AGE_MS: an older copy is refused by its age anyway.
+const deliveredFile = () => path.join(app.getPath("userData"), "phone-delivered.json");
+let delivered: Record<string, number> | null = null;
+async function loadDelivered(): Promise<Record<string, number>> {
+  if (!delivered) {
+    const raw = await readJson(deliveredFile(), {});
+    delivered = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, number>) : {};
+  }
+  return delivered;
+}
+async function markDelivered(id: string) {
+  const d = await loadDelivered();
+  const cutoff = Date.now() - PHONE_MSG_MAX_AGE_MS;
+  for (const [k, at] of Object.entries(d)) if (!(at > cutoff)) delete d[k];
+  d[id] = Date.now();
+  await writeJsonAtomic(deliveredFile(), d);
+}
+
+// The desk's phone key (32 random bytes): goes to the phone in the pairing QR, seals every inbox message (openPhoneEnvelope).
+// Stored with the OS credential protection and never synced; a new key would unpair every phone, so it is made once.
+const phoneKeyFile = () => path.join(app.getPath("userData"), "phone-key.json");
+let phoneKeyCache: Buffer | null = null;
+export async function phoneKey(create = false): Promise<Buffer | null> {
+  if (phoneKeyCache) return phoneKeyCache;
+  const saved = (await readJson(phoneKeyFile(), null)) as { enc?: string } | null;
+  if (saved?.enc && safeStorage.isEncryptionAvailable()) {
+    try {
+      return (phoneKeyCache = Buffer.from(safeStorage.decryptString(Buffer.from(saved.enc, "base64")), "base64"));
+    } catch {
+      if (!create) return null; // the OS key changed; only a new pairing replaces it
+    }
+  }
+  if (!create) return null;
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("This computer can't protect the phone key, so it can't pair a phone.");
+  const key = randomBytes(32);
+  await writeJsonAtomic(phoneKeyFile(), { enc: safeStorage.encryptString(key.toString("base64")).toString("base64") });
+  return (phoneKeyCache = key);
+}
 // Set by main.ts: the permission prompts a phone may answer, for these chats.
 let approvalSource: (chatIds: Set<string>) => Array<{ chat: string; request: string; summary: string; detail: string; tool: string; questions?: unknown[] }> = () => [];
 export function setApprovalSource(fn: typeof approvalSource) {
@@ -584,41 +622,28 @@ async function savePhoto(id: string, image: string): Promise<string> {
   await fs.writeFile(file, Buffer.from(image.slice("data:image/jpeg;base64,".length), "base64"));
   return file;
 }
-let myLogin: string | null = null;
-
-// Only a file the signed-in GitHub account committed runs here. shortcut: the committer comes from the commit itself, so a
-// collaborator who can push to this private repo could fake it; they can already change its code, so this is not a new hole.
-async function committedByMe(dir: string, remote: string, file: string): Promise<boolean> {
-  const m = /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(remote);
-  if (!m) return false;
-  if (myLogin === null) {
-    const me = await run("gh", ["api", "user", "--jq", ".login"], app.getPath("home"));
-    if (!me.ok) return false;
-    myLogin = me.output.trim();
-  }
-  const sha = (await runGit(dir, ["log", "-1", "--format=%H", "--", file])).output.trim();
-  if (!/^[0-9a-f]{40}$/.test(sha)) return false;
-  const who = await run("gh", ["api", `repos/${m[1]}/${m[2]}/commits/${sha}`, "--jq", ".committer.login"], app.getPath("home"));
-  return who.ok && who.output.trim() === myLogin;
-}
-
-async function takeInbox(dir: string, remote: string, known: CursorChat[]) {
+async function takeInbox(dir: string, known: CursorChat[]) {
   const inbox = path.join(dir, "inbox");
   const names = await fs.readdir(inbox).catch(() => [] as string[]);
+  if (!names.length) return;
+  const key = await phoneKey();
+  const done = await loadDelivered();
   for (const name of names) {
     const id = /^([\w-]{1,80})\.json$/.exec(name)?.[1];
     if (!id) continue;
     const file = path.join(inbox, name);
-    if (!delivered.has(id)) {
-      const msg = parsePhoneMessage(await readJson(file, null));
-      if (msg?.host && msg.host !== hostName()) continue; // meant for another computer
-      const chat = msg?.chat ? known.find((c) => c.id === msg.chat) : undefined;
-      // A chat not on this computer before this sync waits a round, so the window has it before the message arrives.
-      if (msg?.chat && !chat) continue;
-      if (!msg || !(await committedByMe(dir, remote, `inbox/${name}`))) {
-        await fs.rm(file, { force: true });
+    if (!done[id]) {
+      if (!key) continue; // no phone paired here; a desk that has one takes it
+      const opened = openPhoneEnvelope(id, await readJson(file, null), key);
+      if (opened.status !== "ok") {
+        if (opened.status === "bad") await fs.rm(file, { force: true }); // "other": sealed for another desk on this account
         continue;
       }
+      const { msg } = opened;
+      if (msg.host && msg.host !== hostName()) continue; // meant for another computer
+      const chat = msg.chat ? known.find((c) => c.id === msg.chat) : undefined;
+      // A chat not on this computer before this sync waits a round, so the window has it before the message arrives.
+      if (msg.chat && !chat) continue;
       const template = [...known].sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? 0) - (a.lastUsedAt ?? a.updatedAt ?? 0))[0];
       if (!chat && !template) continue;
       const text = msg.image ? `${msg.text}
@@ -632,7 +657,7 @@ async function takeInbox(dir: string, remote: string, known: CursorChat[]) {
             ? { channel: "team:send", order: { id: chat.id, text } }
             : { channel: "team:start", order: { id: randomUUID(), managerId: template.id, title: msg.title || "From phone", prompt: text } };
       if (!phoneSink?.(order)) continue; // window closed: try again next sync
-      delivered.add(id);
+      await markDelivered(id);
     }
     await fs.rm(file, { force: true });
   }
@@ -660,7 +685,7 @@ async function syncProjectBranches(): Promise<string> {
       await writeJsonAtomic(path.join(dir, "chats.json"), [...merged].sort((a, b) => (a.id < b.id ? -1 : 1)));
       await writeJsonAtomic(path.join(dir, "deleted.json"), deleted);
       await flushJobs(project.id, dir);
-      await takeInbox(dir, project.remotes.at(-1)!, mine);
+      await takeInbox(dir, mine);
       await flushApprovals(dir, new Set(mine.map((c) => c.id)));
       await runGit(dir, ["add", "-A"]);
       const committed = await runGit(dir, ["commit", "-m", "Sync chats"]);
@@ -824,6 +849,35 @@ export function scheduleDeskSync(wait = SYNC_BATCH_MS) {
 }
 
 export const syncNow = oneAtATime(doSync);
+
+// Phone messages land on each project's desk-chats branch. Waiting for the 3-minute batch made a reply take minutes,
+// so this asks the remote for the branch tip only (`git ls-remote`, a few hundred bytes, no API quota) and syncs
+// at once when it moved past what this desk last fetched or pushed. Our own push leaves the tips equal: no loop.
+export const INBOX_POLL_MS = 15_000;
+let inboxBusy = false;
+export function watchPhoneInbox() {
+  setInterval(() => {
+    if (inboxBusy || applying) return;
+    inboxBusy = true;
+    void (async () => {
+      const root = path.join(app.getPath("userData"), "project-sync");
+      const dirs = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+      for (const d of dirs) {
+        if (!d.isDirectory() || !THREAD_ID.test(d.name)) continue;
+        const dir = path.join(root, d.name);
+        if (!existsSync(path.join(dir, ".git"))) continue;
+        const remote = await runGit(dir, ["ls-remote", "origin", `refs/heads/${CHAT_BRANCH}`], 20_000);
+        const tip = remote.ok ? remote.output.trim().split(/\s+/)[0] : "";
+        if (!/^[0-9a-f]{40}$/.test(tip)) continue;
+        const known = (await runGit(dir, ["rev-parse", `refs/remotes/origin/${CHAT_BRANCH}`])).output.trim();
+        const head = (await runGit(dir, ["rev-parse", "HEAD"])).output.trim();
+        if (tip !== known && tip !== head) return void (await syncNow());
+      }
+    })()
+      .catch((err) => console.error("AgenticOps Desk could not check the phone inbox", err))
+      .finally(() => (inboxBusy = false));
+  }, INBOX_POLL_MS).unref();
+}
 
 export async function syncStatus(): Promise<SyncView> {
   const url = await config();

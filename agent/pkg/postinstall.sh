@@ -7,4 +7,4 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
   if systemctl is-enabled --quiet agenticops-agent 2>/dev/null; then systemctl restart agenticops-agent || true; fi
 fi
-echo "AgenticOps agent installed. Fill in /etc/agenticops-agent/agent.env, then: sudo systemctl enable --now agenticops-agent"
+echo "AgenticOps agent installed. Copy the agent file from the desk to /etc/agenticops-agent/agentd.mjs (see agent.env there), then: sudo systemctl enable --now agenticops-agent"

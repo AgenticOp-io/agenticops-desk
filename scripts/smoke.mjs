@@ -44,16 +44,19 @@ try {
   await page.waitForTimeout(400);
   await page.keyboard.type("demo.js");
   await page.waitForTimeout(800);
-  await page.keyboard.press("Enter");
-  await page
+  // Files open in the separate Code window.
+  const [code] = await Promise.all([app.waitForEvent("window"), page.keyboard.press("Enter")]);
+  code.on("pageerror", (e) => errors.push(e.message));
+  await code
     .locator(".monaco-editor .view-lines")
     .waitFor({ timeout: 30_000 })
     .catch(async (err) => {
-      await page.screenshot({ path: path.join(os.tmpdir(), "desk-smoke-fail.png") });
+      await code.screenshot({ path: path.join(os.tmpdir(), "desk-smoke-fail.png") });
       throw err;
     });
   // Monaco renders spaces as non-breaking spaces.
-  assert.ok((await page.locator(".monaco-editor .view-lines").innerText()).replaceAll(String.fromCharCode(160), " ").includes("return a + b"));
+  assert.ok((await code.locator(".monaco-editor .view-lines").innerText()).replaceAll(String.fromCharCode(160), " ").includes("return a + b"));
+  await page.bringToFront();
 
   const box = page.locator(".composer textarea");
   await box.fill("hello");

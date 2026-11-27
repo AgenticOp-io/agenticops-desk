@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openPairCode, parsePairCode } from "./github.ts";
-import { sealPairing } from "../electron/pureFeatures.ts";
+import { openPairCode, parsePairCode, sealForDesk } from "./github.ts";
+import { openPhoneEnvelope, sealPairing } from "../electron/pureFeatures.ts";
+import { randomBytes } from "node:crypto";
+
+test("a message the phone seals opens on the desk, and only under its own file ID", async () => {
+  const key = randomBytes(32);
+  const at = Date.now();
+  const sealed = JSON.parse(await sealForDesk("abc-1", { chat: "c1", text: "fix it", at }, key.toString("base64url")));
+  assert.deepEqual(openPhoneEnvelope("abc-1", sealed, key, at), { status: "ok", msg: { chat: "c1", title: undefined, text: "fix it", host: undefined }, at });
+  assert.equal(openPhoneEnvelope("abc-2", sealed, key, at).status, "bad");
+});
 
 test("desk-sealed pairing QR opens only with the right code", async () => {
   const token = "x".repeat(4) + "a".repeat(36);

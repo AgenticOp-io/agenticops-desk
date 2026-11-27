@@ -1,17 +1,13 @@
 #!/bin/sh
-# Runs the cloud agent. It downloads agentd.mjs from the desk each start, pinned to the desk's key, so the copy
-# carries that desk's certificate and matches its version. Settings: /etc/agenticops-agent/agent.env.
+# Runs the cloud agent from the agent file the superadmin desk saved (Settings > Cloud agents > Add agent).
+# That file holds this agent's keys and its desk-signed TLS client certificate, so it is installed root-owned,
+# readable only by the agent user. Settings: /etc/agenticops-agent/agent.env.
+# shortcut: no self-update; a new agent version means adding the agent again on the desk and replacing the file.
 set -eu
-: "${DESK:?Set DESK in /etc/agenticops-agent/agent.env}" "${KEY:?Set KEY in /etc/agenticops-agent/agent.env}" "${PIN:?Set PIN in /etc/agenticops-agent/agent.env}"
+AGENT_FILE="${AGENT_FILE:-/etc/agenticops-agent/agentd.mjs}"
 export AGENTICOPS_AGENT_HOME="${AGENTICOPS_AGENT_HOME:-$HOME/.agenticops-agent}"
-home="$AGENTICOPS_AGENT_HOME"
-mkdir -p "$home"
+mkdir -p "$AGENTICOPS_AGENT_HOME"
 node -e 'process.exit(+process.versions.node.split(".")[0] >= 18 ? 0 : 1)' || { echo "The agent needs Node.js 18 or newer as 'node'." >&2; exit 2; }
-if curl -fsS -k --pinnedpubkey "sha256//$PIN" -o "$home/agentd.mjs.new" "$DESK/agent.mjs"; then
-  mv "$home/agentd.mjs.new" "$home/agentd.mjs"
-elif [ -f "$home/agentd.mjs" ]; then
-  echo "Could not reach the desk; running the copy downloaded last time." >&2
-else
-  exit 1
-fi
-exec node "$home/agentd.mjs" --desk "$DESK" --key "$KEY" ${NAME:+--name "$NAME"}
+[ -r "$AGENT_FILE" ] || { echo "Copy the agent file from the desk to $AGENT_FILE (sudo install -o root -g agenticops-agent -m 0640 agentd-NAME.mjs $AGENT_FILE)." >&2; exit 2; }
+command -v git >/dev/null || { echo "The agent needs git." >&2; exit 2; }
+exec node "$AGENT_FILE"

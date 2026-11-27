@@ -386,9 +386,16 @@ export async function phonePairQr(): Promise<{ ok: boolean; image?: string; logi
   const code = newPairCode();
   // The phone's whole setup comes from here: the API key for its AI chat and a cloud-agent login, when the desk has them.
   const ai = (await import("./providers")).providerKey("anthropic");
-  const cloud = await (await import("./pool")).phoneCloudLogin().catch(() => undefined);
-  const setup = { ...(ai ? { ai } : {}), ...(cloud ? { cloud } : {}) };
-  const image = await QR.toDataURL(sealPairing(login, id, token, code, await (await import("./deskSync")).phoneRepos(), setup), { errorCorrectionLevel: "L", margin: 2, width: 360 });
+  const login2 = await (await import("./pool")).phoneCloudLogin().catch(() => undefined);
+  // The phone's client certificate and key go in as bare base64 DER (no PEM armour), to keep the QR small.
+  const der = (pem: string) => pem.replace(/-----[^-]+-----|\s/g, "");
+  const cloud = login2 && { url: login2.url, token: login2.token, pin: login2.pin, key: der(login2.keyPem), cert: der(login2.certPem) };
+  const sync = await import("./deskSync");
+  // sign: the key the phone seals its inbox messages with; without it the desk runs nothing the phone sends.
+  const sign = (await sync.phoneKey(true).catch((e: Error) => e)) as Buffer | Error;
+  if (sign instanceof Error) return { ok: false, error: sign.message };
+  const setup = { sign: sign!.toString("base64url"), ...(ai ? { ai } : {}), ...(cloud ? { cloud } : {}) };
+  const image = await QR.toDataURL(sealPairing(login, id, token, code, await sync.phoneRepos(), setup), { errorCorrectionLevel: "L", margin: 2, width: 480 });
   return { ok: true, image, login, code };
 }
 

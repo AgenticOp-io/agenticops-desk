@@ -32,7 +32,7 @@ function JoinPool() {
         <>
           <p className="settings-hint">If another desk runs the cloud agents, paste the join key its superadmin gave you.</p>
           <div className="provider-line">
-            <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="https://…#…#ABCD-EFGH" aria-label="Join key" spellCheck={false} />
+            <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="https://…#…#ABCD-EFGH#…" aria-label="Join key" spellCheck={false} />
             <button
               className="btn"
               disabled={!key.trim()}
@@ -59,6 +59,7 @@ export function FleetSettings() {
   const [f, setF] = useState<Fleet | null>(null);
   const [msg, setMsg] = useState("");
   const [code, setCode] = useState("");
+  const [agentKey, setAgentKey] = useState("");
   const [userName, setUserName] = useState("");
   const [userMax, setUserMax] = useState("1");
   const [newCode, setNewCode] = useState<{ name: string; code: string } | null>(null);
@@ -77,16 +78,32 @@ export function FleetSettings() {
 
   if (!f) return <p className="settings-hint">Loading…</p>;
   const approved = f.agents.filter((a) => a.status === "approved");
-  const url = f.urls[0];
 
   return (
     <>
       <JoinPool />
       <p className="settings-hint">
         This desk is the superadmin for its cloud agents (ID {f.adminId.slice(0, 8)}, since {new Date(f.createdAt).toLocaleDateString()}). Agents and users pair only with this desk.
-        Model calls from every agent run through this desk with its Claude API key, so keys never leave this computer.
+        This desk and its agents never connect: jobs, including the ones a manager chat sends, go to the job channel repository in git,
+        and agents check it every 15 seconds. Each agent calls the Claude API with its own key.
       </p>
-      {!f.hasKey && <p className="settings-hint">No Claude API key is saved. Add one in AI models first, or agents can't do any work.</p>}
+
+      <div className="settings-label">Job channel</div>
+      <p className="settings-hint">
+        A private git repository only this desk and its agents can push to (not one with your code or chats). Jobs live on its
+        agent-jobs branch, signed by this desk; agents sign what they write back.
+      </p>
+      <div className="provider-line">
+        <input
+          key={f.channel}
+          defaultValue={f.channel}
+          placeholder="git@github.com:you/desk-jobs.git"
+          aria-label="Job channel repository"
+          spellCheck={false}
+          onBlur={(e) => e.target.value.trim() !== f.channel && void window.desk.fleetSetup({ channel: e.target.value }).then(setF)}
+        />
+      </div>
+      {f.channelError && <p className="settings-hint">{f.channelError}</p>}
 
       <div className="settings-label">Server</div>
       <label className="settings-check">
@@ -102,8 +119,8 @@ export function FleetSettings() {
       {f.error && <p className="settings-hint">{f.error}</p>}
       {f.on && f.listening && (
         <p className="settings-hint">
-          Listening on {f.urls.join(", ")}, HTTPS only, with this desk's own certificate (SHA-256 {f.tlsFingerprint}). Phones and
-          browsers must trust it: download <code>{url}/desk.crt</code>, check the fingerprint matches, and install it as a CA certificate.
+          Listening on {f.urls.join(", ")}. This desk is its own certificate authority (SHA-256 {f.tlsFingerprint}). It accepts a
+          connection only from an agent, worker desk or phone holding a certificate it made, and drops it once you remove that agent or device.
         </p>
       )}
       <label className="settings-row">
@@ -118,42 +135,40 @@ export function FleetSettings() {
 
       <div className="settings-label">Cloud agents ({approved.length} of {f.maxAgents})</div>
       <p className="settings-hint">
-        On a Windows, macOS or Linux machine with Node 18 or newer, run:
-        <br />
-        <code>curl -k --pinnedpubkey "sha256//{f.tlsPin}" -o agentd.mjs {url}/agent.mjs && node agentd.mjs --desk {url} --key {f.deskKey}</code>
-        <br />
-        In Windows PowerShell: <code>curl.exe -k --pinnedpubkey "sha256//{f.tlsPin}" -o agentd.mjs {url}/agent.mjs; node agentd.mjs --desk {url} --key {f.deskKey}</code>
-        <br />
-        It prints a pairing code. Type it here. <code>--pinnedpubkey</code> makes the download accept only this desk's certificate, and the
-        script carries that certificate, so the agent talks to nothing else. <code>--key</code> checks the desk's agent key on top.
+        Make a Claude API key for each agent in the Claude Console, with a spend limit, and paste it here. This desk saves the agent
+        script with that key, the job channel address and the agent's signing key as one file. Copy it to a Windows, macOS or Linux
+        machine with Node 18 or newer and git that can push to the job channel, and run <code>node agentd-NAME.mjs</code> (Linux
+        packages: see /etc/agenticops-agent/agent.env). No ports or public addresses are needed. Keep the file private, like an SSH key.
       </p>
       <div className="provider-line">
-        <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Code from the agent, e.g. ABCD-EFGH" aria-label="Agent pairing code" spellCheck={false} />
+        <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Agent name, e.g. build-box-1" aria-label="Agent name" spellCheck={false} />
+        <input type="password" value={agentKey} onChange={(e) => setAgentKey(e.target.value)} placeholder="This agent's Claude API key" aria-label="Agent API key" spellCheck={false} autoComplete="off" />
         <button
           className="btn"
-          disabled={!code.trim()}
+          disabled={!code.trim() || !agentKey.trim() || !f.channel}
           onClick={() =>
-            void window.desk.fleetApprove(code).then((err) => {
-              setMsg(err ?? "Agent paired.");
-              if (!err) setCode("");
+            void window.desk.fleetAddAgent(code, agentKey).then((r) => {
+              if (!r) return;
+              setMsg(r.error ?? `Saved ${r.path}. Copy it to the agent's computer and run it there; it shows online after its first check of the job channel.`);
+              if (!r.error) {
+                setCode("");
+                setAgentKey("");
+              }
               refresh();
             })
           }
         >
-          Pair
+          Add agent
         </button>
       </div>
-      {f.agents.filter((a) => a.status === "pending").length > 0 && (
-        <p className="settings-hint">{f.agents.filter((a) => a.status === "pending").length} agent(s) waiting for their code to be typed here.</p>
-      )}
       {approved.map((a) => (
         <div key={a.id} className="signin-row">
           <span>
             {a.online ? "● " : "○ "}
-            <strong>{a.name}</strong> · {a.os} · {a.online ? "online" : `last seen ${ago(a.lastSeen)}`}
+            <strong>{a.name}</strong>{a.os ? ` · ${a.os}` : ""} · {a.oldFile ? "added before agents used the job channel; remove it and add it again" : a.online ? "online" : a.lastSeen ? `last seen ${ago(a.lastSeen)}` : "not seen yet"}
           </span>
           <span className="grow" />
-          <button className="btn" onClick={() => confirm(`Remove ${a.name}? It stops taking jobs and must pair again.`) && void window.desk.fleetRemoveAgent(a.id).then(refresh)}>
+          <button className="btn" onClick={() => confirm(`Remove ${a.name}? This desk ignores it from now on. Also revoke its API key in the Claude Console.`) && void window.desk.fleetRemoveAgent(a.id).then(refresh)}>
             Remove
           </button>
         </div>

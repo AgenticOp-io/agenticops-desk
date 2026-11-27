@@ -1,0 +1,65 @@
+name: iPhone app
+
+# Builds AgenticOps Remote for iOS on a Mac runner, since the desk is built on Windows. Started by hand only.
+# Without signing secrets it makes a Simulator build, which proves the app compiles. With an Apple Developer
+# team (IOS_TEAM_ID, and an App Store Connect API key in IOS_API_KEY_ID, IOS_API_ISSUER, IOS_API_KEY_P8) it also
+# exports a signed .ipa for the team's registered devices and attaches it to the release given in `tag`.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the .ipa to (signed builds only; empty = don't attach)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    env:
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Build the web app and copy it into the Xcode project
+        run: npm run ios
+      - name: Version from package.json
+        run: |
+          v=$(node -p "require('./package.json').version")
+          IFS=. read -r a b c <<< "$v"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "BUILD=$((a * 1000000 + b * 1000 + c))" >> "$GITHUB_ENV"
+      - name: Simulator build (no signing)
+        working-directory: ios/App
+        run: >
+          xcodebuild -project App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator' MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD"
+          CODE_SIGNING_ALLOWED=NO build
+      - name: Signed .ipa
+        if: env.IOS_TEAM_ID != ''
+        env:
+          IOS_API_KEY_ID: ${{ secrets.IOS_API_KEY_ID }}
+          IOS_API_ISSUER: ${{ secrets.IOS_API_ISSUER }}
+          IOS_API_KEY_P8: ${{ secrets.IOS_API_KEY_P8 }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        working-directory: ios/App
+        run: |
+          mkdir -p ~/.appstoreconnect && printf '%s' "$IOS_API_KEY_P8" > ~/.appstoreconnect/key.p8
+          auth=(-allowProvisioningUpdates -authenticationKeyPath ~/.appstoreconnect/key.p8 -authenticationKeyID "$IOS_API_KEY_ID" -authenticationKeyIssuerID "$IOS_API_ISSUER")
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive DEVELOPMENT_TEAM="$IOS_TEAM_ID" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" "${auth[@]}" archive
+          cat > build/export.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>method</key><string>debugging</string><key>teamID</key><string>$IOS_TEAM_ID</string></dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist build/export.plist -exportPath build/ipa "${auth[@]}"
+          rm -f ~/.appstoreconnect/key.p8
+          mv build/ipa/*.ipa "build/AgenticOps-Remote-v$VERSION.ipa"
+          if [ -n "$TAG" ]; then gh release upload "$TAG" "build/AgenticOps-Remote-v$VERSION.ipa" --repo "$GITHUB_REPOSITORY" --clobber; fi

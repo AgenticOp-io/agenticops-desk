@@ -88,21 +88,21 @@ Removing a login leaves it on the Always hide list, because it may already appea
 
 Details in [CLOUD-AGENTS.md](./CLOUD-AGENTS.md).
 
-- **Pinned TLS, not a certificate authority.** The superadmin desk uses a self-signed certificate. Agents, worker desks and phones trust only its public-key pin, which reaches them in the download command, the join key or the pairing QR. The pin survives an address change and a re-issue with the same key.
-- **Pairing approves a key.** The code you type is a hash of the agent's own key, so typing it approves exactly that agent. Nothing secret travels during pairing. The code is 40 bits: fine on a LAN, too short for pairing over the open internet.
-- **Session encryption** on top of TLS, with replay and tampering refused.
+- **The desk is its own certificate authority, and TLS is checked both ways.** The desk's CA certificate never changes. It signs the server certificate, which is re-issued with the same key when the address changes, and a client certificate for every agent, worker desk and phone. Clients trust only the desk CA and its public-key pin. The server completes no handshake without a client certificate the desk signed. It then drops the connection, at the handshake and again on every request, unless that certificate belongs to a device or unused join key that is still trusted (`trustedCerts`). A device's token is accepted only together with its own certificate.
+- **Agents and the desk never connect.** Jobs go through the agent-jobs branch of a git repository you choose. Every job is signed with the desk's key and every agent file with that agent's key, so someone who can push to the repository can stall jobs but can't make an agent run anything or fake a result. Files are not encrypted: anyone who can read the repository reads every prompt and result. Use a private repository for nothing else.
+- **Keys are made on the desk and travel once.** The desk makes each private key and hands it over out of band: in the agent file, the join key or the phone pairing QR. Anyone who copies one of those can act as that agent or device until you remove it. Treat them like SSH keys. The desk keeps no agent private keys. Join-key keys are stored encrypted with the OS credential store until the key is used.
+- **Each agent has its own Claude API key**, in its agent file and nowhere on the desk. Give each a spend limit in the Claude Console, and revoke it there when you remove the agent.
 - **An agent has no sandbox.** `run_command` is a real shell with that machine user's rights. Run agents under a dedicated account (the Linux package does) or in a VM.
-- **API keys stay on the superadmin desk.** Agents send model calls through it.
 
 ## Phone app
 
 Details in [MOBILE.md](./MOBILE.md).
 
 - **The pairing QR is encrypted** (AES-256-GCM, key from PBKDF2 over an 8-digit code). The QR alone is useless, but a photo of the screen showing both the QR and the code defeats this.
-- **The phone holds the desk's GitHub CLI token**, with that token's full scope, plus the desk's Claude API key and cloud login if those were set up. On the phone they are sealed with an Android Keystore key. **Sign out** clears them; revoke the token on GitHub if the phone is lost.
-- **Only your own account's messages run.** The desk runs a phone message only if its commit was made by the desk's own GitHub login. A collaborator who can push to that private repo could forge the committer, but they can already change its code.
+- **The phone holds the desk's GitHub CLI token**, with that token's full scope, plus the desk's phone key, Claude API key and cloud login if those were set up. On Android they are sealed with an Android Keystore key; on an iPhone they are in the keychain, for this device only. **Sign out** clears them; revoke the token on GitHub if the phone is lost.
+- **Only a paired phone's messages run.** Each phone message is encrypted and authenticated (AES-256-GCM) under the desk's phone key, which only the desk and the phones scanned from its QR hold, with the file name bound in. Someone else who can push to the repository can't read a message, forge one, edit one, or replay one older than 7 days; the desk also remembers delivered IDs on disk for 7 days. The key sits in `phone-key.json` under the OS credential protection and is never synced. What the desk writes back (chats, job lines, prompts) is not encrypted.
 - **Saved logins and MCP server approvals never go to the phone.** Other prompts, including plans, do, with secrets replaced by `[hidden]`.
-- **The APK is debug-signed**, for sideloading only.
+- **The APK is debug-signed**, for sideloading only. The iPhone app is signed only when you give the build your Apple Developer team.
 
 ## Folder deletion
 

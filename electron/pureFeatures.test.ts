@@ -1068,3 +1068,23 @@ test("phone messages: only well-formed ones run", async () => {
   assert.equal(parsePhoneMessage({ text: "x", image: "data:image/jpeg;base64,AAAA" })?.image, "data:image/jpeg;base64,AAAA");
   assert.equal(parsePhoneMessage({ text: "x", image: "data:text/html;base64,AAAA" })?.image, undefined);
 });
+
+test("only a message sealed with this desk's phone key runs here", async () => {
+  const { sealPhoneMessage, openPhoneEnvelope, PHONE_MSG_MAX_AGE_MS } = await import("./pureFeatures.ts");
+  const { randomBytes } = await import("node:crypto");
+  const key = randomBytes(32);
+  const now = Date.now();
+  const sealed = JSON.parse(sealPhoneMessage("m-1", { chat: "c1", text: "hi", at: now }, key));
+  assert.deepEqual(openPhoneEnvelope("m-1", sealed, key, now), { status: "ok", msg: { chat: "c1", title: undefined, text: "hi", host: undefined }, at: now });
+  assert.equal(JSON.stringify(sealed).includes("hi"), false); // the text is not readable in the repo
+  assert.equal(openPhoneEnvelope("m-2", sealed, key, now).status, "bad"); // renamed file
+  assert.equal(openPhoneEnvelope("m-1", { ...sealed, ct: sealed.ct.slice(0, -2) + "AA" }, key, now).status, "bad"); // edited
+  assert.equal(openPhoneEnvelope("m-1", sealed, randomBytes(32), now).status, "other"); // another desk's phone
+  assert.equal(openPhoneEnvelope("m-1", { ...sealed, kid: "../x" }, key, now).status, "bad");
+  assert.equal(openPhoneEnvelope("m-1", { chat: "c1", text: "unsealed" }, key, now).status, "bad"); // the old plain format
+  assert.equal(openPhoneEnvelope("m-1", sealed, key, now + PHONE_MSG_MAX_AGE_MS + 1).status, "bad"); // stale copy
+  const noAt = JSON.parse(sealPhoneMessage("m-3", { text: "x" }, key));
+  assert.equal(openPhoneEnvelope("m-3", noAt, key, now).status, "bad");
+  const junk = JSON.parse(sealPhoneMessage("m-4", { chat: "../x", text: "x", at: now }, key));
+  assert.equal(openPhoneEnvelope("m-4", junk, key, now).status, "bad");
+});

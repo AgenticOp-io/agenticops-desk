@@ -1,4 +1,4 @@
-import { createCipheriv, pbkdf2Sync, randomBytes, randomInt } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes, randomInt } from "node:crypto";
 import { closeSync, existsSync, openSync, readSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { RemoteHost } from "./gitHosts";
@@ -365,6 +365,41 @@ export const RESUME_TTL_MS = 45 * 60_000;
 // round, or resuming an interrupted run — keeps its session.
 export function shouldHandOff(historyMessages: number): boolean {
   return historyMessages > 0;
+}
+
+// The only gate between a file in the synced inbox and a prompt that runs on this desk. The phone seals each message with
+// AES-256-GCM under the desk's phone key (handed over in the pairing QR), with the file's ID as associated data, so a
+// collaborator who can push to the repo can neither read a message nor forge, edit or rename one.
+// File: {"v":2,"kid":<first 16 hex of sha256(key)>,"iv":<base64url 12 bytes>,"ct":<base64url ciphertext+tag>}.
+// "other" = sealed for another desk's key (leave it for that desk); "bad" = refuse and delete.
+export const PHONE_MSG_MAX_AGE_MS = 7 * 24 * 3600_000;
+export function phoneKeyId(key: Buffer): string {
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+export function sealPhoneMessage(id: string, msg: Record<string, unknown>, key: Buffer): string {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv).setAAD(Buffer.from(id));
+  const ct = Buffer.concat([c.update(JSON.stringify(msg), "utf8"), c.final(), c.getAuthTag()]);
+  return JSON.stringify({ v: 2, kid: phoneKeyId(key), iv: iv.toString("base64url"), ct: ct.toString("base64url") });
+}
+export function openPhoneEnvelope(id: string, raw: unknown, key: Buffer, now = Date.now()): { status: "ok"; msg: PhoneMessage; at: number } | { status: "other" | "bad" } {
+  const e = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  if (e.v !== 2 || typeof e.kid !== "string" || typeof e.iv !== "string" || typeof e.ct !== "string") return { status: "bad" };
+  if (e.kid !== phoneKeyId(key)) return /^[0-9a-f]{16}$/.test(e.kid) ? { status: "other" } : { status: "bad" };
+  let body: unknown;
+  try {
+    const ct = Buffer.from(e.ct, "base64url");
+    const d = createDecipheriv("aes-256-gcm", key, Buffer.from(e.iv, "base64url")).setAAD(Buffer.from(id));
+    d.setAuthTag(ct.subarray(ct.length - 16));
+    body = JSON.parse(Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString("utf8"));
+  } catch {
+    return { status: "bad" };
+  }
+  const at = (body as { at?: unknown })?.at;
+  // A stale copy pushed back into the inbox later is refused; the delivered list covers the window before this.
+  if (typeof at !== "number" || at < now - PHONE_MSG_MAX_AGE_MS || at > now + 10 * 60_000) return { status: "bad" };
+  const msg = parsePhoneMessage(body);
+  return msg ? { status: "ok", msg, at } : { status: "bad" };
 }
 
 // 0 local, 1 Sonnet-class, 2 Opus-class. A new chat starts at 0.

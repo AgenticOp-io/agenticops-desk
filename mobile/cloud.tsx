@@ -6,19 +6,17 @@ import { DeskWatch, native, secret } from "./secrets";
 type Job = { id: string; prompt: string; status: string; agent?: string; costUsd: number; log: string[]; result?: string };
 type Me = { jobs: Job[] };
 
-const login = () => JSON.parse(secret.get("cloud.desk") || "null") as { url: string; token: string; pin: string } | null;
-// A login from before the pin can't reach the desk on the phone; it shows as off until the next scan.
-export const hasCloud = () => !!login()?.pin;
+const login = () => JSON.parse(secret.get("cloud.desk") || "null") as { url: string; token: string; pin: string; key?: string; cert?: string } | null;
+// A login from before client certificates can't reach the desk; it shows as off until the next scan.
+export const hasCloud = () => native && !!login()?.cert;
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const d = login();
-  if (!d?.pin) throw new Error("No cloud agents. Turn them on at the desk, then scan its code again.");
+  if (!native || !d?.pin || !d.key || !d.cert) throw new Error("No cloud agents. Turn them on at the desk, then scan its code again.");
   const json = body ? JSON.stringify(body) : undefined;
-  // On the phone the request goes through DeskWatchPlugin.cloud, which trusts only the desk's pinned key (its
-  // certificate is self-signed). A browser preview can only use fetch, which needs desk.crt installed.
-  const r = native
-    ? await DeskWatch.cloud({ url: d.url + path, pin: d.pin, token: d.token, body: json })
-    : await fetch(d.url + path, { method: json ? "POST" : "GET", headers: { "content-type": "application/json", authorization: `Bearer ${d.token}` }, body: json }).then(async (x) => ({ status: x.status, body: await x.text() }));
+  // DeskWatchPlugin.cloud trusts only the desk's pinned key and presents the phone's client certificate; the desk
+  // hangs up on anything without one it signed. A browser preview can't do that, so it has no cloud agents.
+  const r = await DeskWatch.cloud({ url: d.url + path, pin: d.pin, token: d.token, key: d.key, cert: d.cert, body: json });
   const v = (() => { try { return JSON.parse(r.body); } catch { return {}; } })();
   if (r.status < 200 || r.status >= 300) throw new Error(v.error ?? `The desk said ${r.status}`);
   return v as T;

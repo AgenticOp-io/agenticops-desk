@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-// Native side: android/.../DeskWatchPlugin.java. Alerts while the app is closed, the system browser, and the Keystore vault.
+// Native side: android/.../DeskWatchPlugin.java and ios/App/App/DeskWatch.swift. Alerts while the app is closed, the system
+// browser, and the vault (Android Keystore / iOS keychain).
 export const DeskWatch = registerPlugin<{
   setup(o: { token: string; repos: string }): Promise<void>;
   stop(): Promise<void>;
@@ -9,13 +10,15 @@ export const DeskWatch = registerPlugin<{
   status(): Promise<{ enabled: boolean }>;
   secretGet(o: { key: string }): Promise<{ value: string }>;
   secretSet(o: { key: string; value: string }): Promise<void>;
-  cloud(o: { url: string; pin: string; token: string; body?: string }): Promise<{ status: number; body: string }>;
+  // key: PKCS#8, cert: X.509, both base64 DER: the phone's client certificate for the desk.
+  cloud(o: { url: string; pin: string; token: string; key: string; cert: string; body?: string }): Promise<{ status: number; body: string }>;
 }>("DeskWatch");
 export const native = Capacitor.isNativePlatform();
 
-// The GitHub token, the phone agent's API key and the cloud desk token. On the phone they live in the Keystore vault
-// (Vault.java); a browser preview has no vault and keeps them in localStorage. Read once at start so getters stay sync.
-const KEYS = ["gh.token", "phone.ai", "cloud.desk"] as const;
+// The GitHub token, the phone agent's API key, the cloud desk token and the desk's phone key (phone.sign, seals inbox
+// messages). On the phone they live in the Keystore vault (Vault.java); a browser preview has no vault and keeps them in
+// localStorage. Read once at start so getters stay sync.
+const KEYS = ["gh.token", "phone.ai", "cloud.desk", "phone.sign"] as const;
 type Key = (typeof KEYS)[number];
 const mem = new Map<Key, string>();
 

@@ -66,12 +66,22 @@ public class DeskWatchPlugin extends Plugin {
 
     // A cloud-agent call to the superadmin desk. Its certificate is self-signed, so the WebView's fetch would refuse it;
     // this trusts exactly one key: the sha256 public-key pin the desk put in the pairing QR (like curl --pinnedpubkey).
+    // It also presents the phone's client certificate from that QR (key: PKCS#8, cert: X.509, base64 DER); the desk
+    // hangs up on any connection without a certificate it signed.
     @PluginMethod
     public void cloud(PluginCall call) {
         String url = call.getString("url", ""), pin = call.getString("pin", ""), token = call.getString("token", ""), body = call.getString("body");
-        if (!url.startsWith("https://") || pin.isEmpty()) { call.reject("https and a pin only"); return; }
+        String keyB64 = call.getString("key", ""), certB64 = call.getString("cert", "");
+        if (!url.startsWith("https://") || pin.isEmpty() || keyB64.isEmpty() || certB64.isEmpty()) { call.reject("https, a pin and a client certificate only"); return; }
         new Thread(() -> {
             try {
+                java.security.PrivateKey pk = java.security.KeyFactory.getInstance("EC").generatePrivate(new java.security.spec.PKCS8EncodedKeySpec(android.util.Base64.decode(keyB64, android.util.Base64.NO_WRAP)));
+                java.security.cert.Certificate mine = java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(new java.io.ByteArrayInputStream(android.util.Base64.decode(certB64, android.util.Base64.NO_WRAP)));
+                java.security.KeyStore ks = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType());
+                ks.load(null, null);
+                ks.setKeyEntry("desk-client", pk, new char[0], new java.security.cert.Certificate[] { mine });
+                javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+                kmf.init(ks, new char[0]);
                 byte[] want = android.util.Base64.decode(pin, android.util.Base64.NO_WRAP);
                 javax.net.ssl.X509TrustManager tm = new javax.net.ssl.X509TrustManager() {
                     public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) throws java.security.cert.CertificateException { throw new java.security.cert.CertificateException("no client certs"); }
@@ -84,7 +94,7 @@ public class DeskWatchPlugin extends Plugin {
                     public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
                 };
                 javax.net.ssl.SSLContext ssl = javax.net.ssl.SSLContext.getInstance("TLS");
-                ssl.init(null, new javax.net.ssl.TrustManager[] { tm }, null);
+                ssl.init(kmf.getKeyManagers(), new javax.net.ssl.TrustManager[] { tm }, null);
                 javax.net.ssl.HttpsURLConnection c = (javax.net.ssl.HttpsURLConnection) new java.net.URL(url).openConnection();
                 c.setSSLSocketFactory(ssl.getSocketFactory());
                 c.setHostnameVerifier((h, s) -> true); // the pinned key identifies the desk; its address may change

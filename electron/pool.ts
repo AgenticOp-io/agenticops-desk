@@ -9,15 +9,18 @@ import { readJson, writeJsonAtomic } from "./jsonStore";
 
 // A desktop worker's link to a superadmin desk's pool of cloud agents. The superadmin adds the worker and
 // hands over a join key (fleetCore joinKey); this desk then sends jobs to the pool and pairs its own phone
-// under that worker. The desk's certificate is trusted only if its key matches the pin in the join key.
+// under that worker. TLS both ways: the desk must be signed by the desk CA in the join key and have the pinned key,
+// and this desk presents the client certificate from the join key, without which the superadmin hangs up.
 
-type Pool = { url: string; pin: string; cert: string; name: string; tokenEnc: string };
+// cert: the superadmin's CA. clientCert/clientKeyEnc: this desk's client certificate and its key, encrypted.
+type Pool = { url: string; pin: string; cert: string; clientCert?: string; clientKeyEnc?: string; name: string; tokenEnc: string };
 const file = () => path.join(app.getPath("userData"), "pool.json");
 let pool: Pool | null | undefined;
 const load = async () => (pool === undefined ? (pool = ((await readJson(file())) as Pool | undefined) ?? null) : pool);
 
 type Reply = { status: number; data: Record<string, unknown> };
-function request(url: string, method: string, opts: { pin: string; ca?: string; token?: string; body?: unknown }): Promise<Reply & { text: string }> {
+type Tls = { pin: string; ca: string; keyPem: string; certPem: string };
+function request(url: string, method: string, opts: Tls & { token?: string; body?: unknown }): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
     const req = https.request(
@@ -26,9 +29,10 @@ function request(url: string, method: string, opts: { pin: string; ca?: string; 
         method,
         timeout: 20_000,
         headers: { ...(payload ? { "content-type": "application/json" } : {}), ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}) },
-        // With a ca, only that exact desk certificate verifies, and the key must still match the pin.
-        // Without one (fetching the certificate itself) nothing secret is sent and the caller checks the pin.
-        ...(opts.ca ? { ca: opts.ca } : { rejectUnauthorized: false }),
+        ca: opts.ca,
+        key: opts.keyPem,
+        cert: opts.certPem,
+        minVersion: "TLSv1.3",
         checkServerIdentity: (_host, cert) => (pubkeyPin(cert.raw) === opts.pin ? undefined : new Error("The desk's key does not match the join key.")),
       },
       (res) => {
@@ -40,9 +44,9 @@ function request(url: string, method: string, opts: { pin: string; ca?: string; 
           try {
             data = text ? JSON.parse(text) : {};
           } catch {
-            /* not JSON: /desk.crt */
+            /* not JSON */
           }
-          resolve({ status: res.statusCode ?? 0, data, text });
+          resolve({ status: res.statusCode ?? 0, data });
         });
       },
     );
@@ -52,32 +56,12 @@ function request(url: string, method: string, opts: { pin: string; ca?: string; 
   });
 }
 
-async function deskCert(url: string, pin: string) {
-  const r = await request(`${url}/desk.crt`, "GET", { pin });
-  let ok = false;
-  try {
-    ok = pubkeyPin(r.text) === pin;
-  } catch {
-    /* not a certificate */
-  }
-  if (!ok) throw new Error("That address did not answer with the desk the join key names.");
-  return r.text;
-}
-
 async function call(method: string, p: string, body?: unknown): Promise<Record<string, unknown>> {
   const s = await load();
   if (!s) throw new Error("This desk has not joined a cloud agent pool.");
-  const token = safeStorage.decryptString(Buffer.from(s.tokenEnc, "base64"));
-  let r: Reply;
-  try {
-    r = await request(s.url + p, method, { pin: s.pin, ca: s.cert, token, body });
-  } catch (e) {
-    // The superadmin re-issues its certificate (same key) when its address changes: fetch it again and retry once.
-    if (!/CERT|SIGNATURE|ISSUER/.test(String((e as NodeJS.ErrnoException).code))) throw e;
-    s.cert = await deskCert(s.url, s.pin);
-    await writeJsonAtomic(file(), s);
-    r = await request(s.url + p, method, { pin: s.pin, ca: s.cert, token, body });
-  }
+  if (!s.clientCert || !s.clientKeyEnc) throw new Error("The superadmin desk now accepts only devices with its certificate. Ask the superadmin for a new join key and join again.");
+  const dec = (v: string) => safeStorage.decryptString(Buffer.from(v, "base64"));
+  const r = await request(s.url + p, method, { pin: s.pin, ca: s.cert, keyPem: dec(s.clientKeyEnc), certPem: s.clientCert, token: dec(s.tokenEnc), body });
   if (r.status >= 400) throw new Error(String(r.data.error ?? `The superadmin desk answered ${r.status}.`));
   return r.data;
 }
@@ -92,10 +76,10 @@ export async function poolJoin(key: string): Promise<string | null> {
   if (!k) return "That isn't a join key. Ask the superadmin to copy it again from Settings → Cloud agents.";
   if (!safeStorage.isEncryptionAvailable()) return "This computer can't protect the pool login, so it can't join.";
   try {
-    const cert = await deskCert(k.url, k.pin);
-    const r = await request(`${k.url}/user/redeem`, "POST", { pin: k.pin, ca: cert, body: { code: k.code, device: `${os.hostname()} (desktop)` } });
+    const r = await request(`${k.url}/user/redeem`, "POST", { pin: k.pin, ca: k.caPem, keyPem: k.keyPem, certPem: k.certPem, body: { code: k.code, device: `${os.hostname()} (desktop)` } });
     if (r.status !== 200 || typeof r.data.token !== "string") return String(r.data.error ?? "The superadmin desk refused the join key.");
-    pool = { url: k.url, pin: k.pin, cert, name: String(r.data.name ?? ""), tokenEnc: safeStorage.encryptString(r.data.token).toString("base64") };
+    const enc = (v: string) => safeStorage.encryptString(v).toString("base64");
+    pool = { url: k.url, pin: k.pin, cert: k.caPem, clientCert: k.certPem, clientKeyEnc: enc(k.keyPem), name: String(r.data.name ?? ""), tokenEnc: enc(r.data.token) };
     await writeJsonAtomic(file(), pool);
     return null;
   } catch (e) {
@@ -110,13 +94,14 @@ export async function poolLeave() {
 }
 
 // The phone's cloud login for this desk's QR: the superadmin's own phone user, or a phone under this worker.
-export async function phoneCloudLogin(): Promise<{ url: string; token: string; pin: string } | undefined> {
+// keyPem/certPem: the phone's own client certificate, which the superadmin made for it.
+export async function phoneCloudLogin(): Promise<{ url: string; token: string; pin: string; keyPem: string; certPem: string } | undefined> {
   const own = await fleetPhoneLogin().catch(() => undefined);
   if (own) return own;
   const s = await load();
   if (!s) return undefined;
   const r = await call("POST", "/user/device").catch(() => undefined);
-  return typeof r?.token === "string" ? { url: s.url, token: r.token, pin: s.pin } : undefined;
+  return typeof r?.token === "string" && typeof r.keyPem === "string" && typeof r.certPem === "string" ? { url: s.url, token: r.token, pin: s.pin, keyPem: r.keyPem, certPem: r.certPem } : undefined;
 }
 
 type Agent = { id: string; name: string; os: string; online: boolean };

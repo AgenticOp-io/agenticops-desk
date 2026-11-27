@@ -369,8 +369,8 @@ declare global {
       trainStart: () => Promise<import("../electron/trainModel").TrainState>;
       trainCheck: () => Promise<import("../electron/trainModel").TrainState>;
       fleetState: () => ReturnType<typeof import("../electron/fleet").fleetState>;
-      fleetSetup: (patch: { on?: boolean; port?: number; maxAgents?: number }) => ReturnType<typeof import("../electron/fleet").fleetState>;
-      fleetApprove: (code: string) => Promise<string | null>;
+      fleetSetup: (patch: { on?: boolean; port?: number; maxAgents?: number; channel?: string }) => ReturnType<typeof import("../electron/fleet").fleetState>;
+      fleetAddAgent: (name: string, apiKey: string) => ReturnType<typeof import("../electron/fleet").fleetAddAgent>;
       fleetRemoveAgent: (id: string) => Promise<void>;
       fleetAddUser: (name: string, maxAgents: number, agentIds: string[]) => Promise<string>;
       fleetUpdateUser: (id: string, patch: { maxAgents?: number; agentIds?: string[]; revoke?: boolean; newCode?: boolean; revokeDevice?: string; signOutAll?: boolean; paused?: boolean }) => Promise<void>;

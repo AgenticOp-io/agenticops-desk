@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { initTeam, setManager, setPlan, teamView } from "./team";
 import { initOpsTools } from "./opsTools";
-import { fleetAddUser, fleetApprove, fleetCancel, fleetExportCsv, fleetRemoveAgent, fleetReport, fleetSetup, fleetState, fleetSubmit, fleetUpdateUser, startFleetOnLaunch } from "./fleet";
+import { fleetAddAgent, fleetAddUser, fleetCancel, fleetExportCsv, fleetRemoveAgent, fleetReport, fleetSetup, fleetState, fleetSubmit, fleetUpdateUser, startFleetOnLaunch } from "./fleet";
 import { poolJoin, poolLeave, poolState } from "./pool";
 import { writeTextAtomicSync } from "./jsonStore";
 import { AUTO, autoStatus, cancelAuto, CLAUDE_DEFAULT, forgetAuto, initAuto, runAuto, wakeAuto, type AutoPayload } from "./autoRoute";
@@ -118,6 +118,7 @@ import {
   createSyncRepo,
   syncApplying,
   syncNow,
+  watchPhoneInbox,
   syncStatus,
   phoneRepoList,
   setPhoneRepo,
@@ -672,6 +673,7 @@ app.whenReady().then(async () => {
   setTimeout(() => void refreshProjectRemotes().then(() => syncNow()), 5000);
   void convertIfChosen().catch((err) => console.error("AgenticOps Desk could not convert from Cursor", err));
   setInterval(() => void syncNow(), SYNC_BATCH_MS);
+  watchPhoneInbox();
   setTimeout(() => void checkAndPatch(), 30_000);
   setInterval(() => void checkAndPatch(), 6 * 60 * 60_000);
   for (const run of pendingRuns()) resumePendingRun(win, run.chatId);
@@ -1498,7 +1500,7 @@ ipcMain.handle("train:start", () => trainStart());
 ipcMain.handle("train:check", () => trainCheck());
 ipcMain.handle("fleet:state", () => fleetState());
 ipcMain.handle("fleet:setup", (_e, patch) => fleetSetup(patch ?? {}));
-ipcMain.handle("fleet:approve", (_e, code: string) => fleetApprove(String(code ?? "")));
+ipcMain.handle("fleet:add-agent", (_e, name: string, apiKey: string) => fleetAddAgent(String(name ?? ""), String(apiKey ?? "")));
 ipcMain.handle("fleet:remove-agent", (_e, id: string) => fleetRemoveAgent(String(id)));
 ipcMain.handle("fleet:add-user", (_e, name: string, max: number, agentIds: string[]) => fleetAddUser(String(name ?? ""), Number(max), agentIds ?? []));
 ipcMain.handle("fleet:update-user", (_e, id: string, patch) => fleetUpdateUser(String(id), patch ?? {}));

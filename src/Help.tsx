@@ -79,6 +79,25 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "phone",
+    title: "Your phone",
+    body: [
+      "The phone app (AgenticOps Remote) is a remote control for this desk. Pair it from Settings › Sync › Phone › Show pairing code: scan the code in the app and type the 8 digits shown beside it. The code carries this computer's GitHub sign-in, so treat it like a password.",
+      "From the phone you can start a chat or send a message in one, answer what the desk is waiting on (folder trust, risky commands, the agent's questions and plans), and stop a run. A message reaches the desk within about 30 seconds while it is on, and the reply shows on the phone after the next sync.",
+      "It only works for projects in a private GitHub repository: their chats live on a desk-chats branch there. Every message from the phone is encrypted with a key only this desk and its paired phones have, so nobody else with access to the repository can read or fake one. Saved-login prompts never go to the phone.",
+      "To change what the phone has (projects, API key, cloud login), change it here and scan the code again. If messages stop arriving after an update, scan again.",
+    ],
+  },
+  {
+    id: "cloud",
+    title: "Cloud agents",
+    body: [
+      "Settings › Cloud agents makes this desk the superadmin for agents running on other machines. Add an agent with its own API key; the desk saves one file with everything it needs. Copy it to that machine and run it with Node, or install the Linux package.",
+      "The desk and its agents never connect to each other. Jobs and results go through a private git repository you pick as the job channel, each signed by whoever wrote it. Agents check it every 15 seconds.",
+      "Add worker gives another person's desktop a one-time join key so it can send jobs to your agents; its phone pairs through that desktop. Deny, Allow, Revoke device and Delete control who may use the pool. Report totals jobs and cost per user and agent for a month.",
+    ],
+  },
+  {
     id: "canvas",
     title: "Canvas",
     body: [
