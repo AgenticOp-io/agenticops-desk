@@ -12,9 +12,11 @@ export const RECORD = ID_BYTES + DIM * 4;
 // make every resumed turn look alike and crowd out real matches.
 export function ownWords(user: string): string {
   const i = user.toLowerCase().lastIndexOf("reply to the user's new message:");
-  if (i >= 0) return user.slice(i + 32).trim();
-  if (user.startsWith("This run was compacted")) return (user.match(/\nRequest:\n([\s\S]*?)(?:\n\n|$)/)?.[1] ?? user).trim();
-  return user.trim();
+  const words = i >= 0 ? user.slice(i + 32).trim()
+    : user.startsWith("This run was compacted") ? (user.match(/\nRequest:\n([\s\S]*?)(?:\n\n|$)/)?.[1] ?? user).trim()
+    : user.trim();
+  // The git-state packet (gather.ts; "Local findings" in older builds) sits before the message, ended by a blank line.
+  return /^(Git state \(|Local findings \()/.test(words) && words.includes("\n\n") ? words.slice(words.indexOf("\n\n") + 2).trim() : words;
 }
 
 export function toPiece(x: { src: string; file: string; at: number; user: string; assistant: string }): Piece {

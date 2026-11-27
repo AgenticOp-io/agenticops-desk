@@ -32,6 +32,8 @@ test("continue and compact prompts keep only the user's own words", async () => 
   assert.equal(ownWords("This continues an earlier session.\n<verified>lots</verified>\nTreat that as where the work stands. Reply to the user's new message:\n\nfix the tunnel"), "fix the tunnel");
   assert.equal(ownWords("This run was compacted so the earlier tool output is not sent again.\n\nRequest:\nadd recall\n\nSteps already taken:\nx"), "add recall");
   assert.equal(ownWords("  plain ask "), "plain ask");
+  assert.equal(ownWords("Git state (from the app, not a summary):\nstatus:\n## main\ndiff:\n a.ts | 2 +-\n\nship it"), "ship it");
+  assert.equal(ownWords("Reply to the user's new message:\n\nLocal findings (trust this):\nstatus:\n## x\n\nfix sync"), "fix sync");
 });
 
 test("no match returns nothing", () => {
